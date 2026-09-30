@@ -56,4 +56,11 @@ Gate Result: **PASS** (Milestone 2 fully verified and approved)
 ## Gate — Milestone 3 (GIS & Spatial Rules Engine with Buffer Screening) — Iteration 1
 | Agent | Role | Verdict | Source |
 |-------|------|---------|--------|
-| worker_m3_1 | teamwork_preview_worker | PENDING | pending |
+| worker_m3_1 | teamwork_preview_worker | DONE (340 tests pass, 0 typecheck, 0 build) | handoff.md |
+| reviewer_m3_1 | teamwork_preview_reviewer | APPROVE | handoff.md |
+| reviewer_m3_2 | teamwork_preview_reviewer | REQUEST_CHANGES (rate limiter test bypass + coordinate bounds validation) | handoff.md |
+| challenger_m3_1 | teamwork_preview_challenger | REQUEST_CHANGES (6 spatial engine defects: rounding, MultiPolygon, NaN validation) | handoff.md |
+| challenger_m3_2 | teamwork_preview_challenger | REQUEST_CHANGES (rate limiter test skip + premature rounding + bounds) | handoff.md |
+| auditor_m3_1 | teamwork_preview_auditor | CLEAN (all 6 checks pass, authentic math & raster) | handoff.md |
+
+Gate Result: **FAIL** (reviewer_m3_2, challenger_m3_1, challenger_m3_2: REQUEST_CHANGES — rate limiting in test mode, premature buffer rounding, MultiPolygon support, and coordinate validation)

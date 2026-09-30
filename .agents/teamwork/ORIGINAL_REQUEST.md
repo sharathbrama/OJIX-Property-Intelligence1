@@ -41,3 +41,40 @@ Implement a reporting engine that generates client-ready due-diligence PDF repor
 ### Discrepancy & Reporting
 - [ ] Discrepancy engine flags simulated mismatches between Sale Deed and RTC/Khata extent and party details.
 - [ ] Due-diligence report generates a downloadable, structured document containing an executive summary, findings register, and evidence appendix.
+
+## 2026-09-30T21:23:50Z
+
+Conduct a comprehensive multi-agent production audit, edge-case hardening, and end-to-end verification of the OJIX Property Intelligence platform across its Document OCR Extraction, Title DAG Analysis, PostGIS Spatial Screening, Cross-Document Discrepancy Matrix, Legal Research Engine, and Government Source Registry modules.
+
+Working directory: /Users/FOUDER/Downloads/ojix-property-intelligence
+Integrity mode: development
+
+## Requirements
+
+### R1. Title Chain & Complex Succession Stress Verification
+Perform deep adversarial testing and validation of the Title Engine's 30-year DAG resolution, covering complex Indian land tenure edge cases: ancestral coparcenary splits under Hindu Succession Act, partition deeds with fractional guntas, Power of Attorney (GPA/SPA) revocation risks, court attachment orders, and chronological inversion anomalies.
+
+### R2. Spatial & PostGIS Cadastral Clearance Verification
+Validate the spatial screening engine across irregular cadastral survey boundaries, multi-polygon parcels, overlapping Rajakaluve buffer zones (50m primary, 25m secondary, 15m tertiary), and lake wetland peripheries (30m buffer). Verify that arbitrary coordinate screening and parcel-to-property assignment maintain topological integrity.
+
+### R3. Document Intelligence & OCR Extraction Boundary Testing
+Verify document classification and field extraction across degraded, rotated, or noisy document uploads (Sale Deeds, RTC/Pahani, e-Khata, Encumbrance Certificates), ensuring SHA-256 cryptographic hashing, bounding box normalization, and side-by-side human review state transitions remain robust under concurrency.
+
+### R4. Government Source Registry & Resilience Verification
+Verify the resiliency of the Source Registry Engine (Bhoomi, Kaveri 2.0, Mojini, Dishaank, e-Aasthi, K-RERA) against network timeouts, HTTP 5xx failures, and unexpected portal response formats, confirming that fallback cache layers and operational status indicators accurately inform the legal reviewer.
+
+### R5. Cross-Document Discrepancy & Due-Diligence Report Generation
+Verify that the discrepancy comparison engine accurately catches cross-instrument mismatches in party names, aliases, survey numbers, and extent units (Acres, Guntas, Sq. Ft., Sq. Meters), and verify that generated Due Diligence PDF/JSON reports are immutable and audit-compliant.
+
+## Acceptance Criteria
+
+### Automated Verification & Code Quality
+- [ ] All automated test suites (349+ tests) pass cleanly without any regression (`npm test`).
+- [ ] Full monorepo passes TypeScript compilation with zero errors (`npm run typecheck`).
+- [ ] Production build compiles successfully (`npm run build`).
+
+### Resilience & Security Guardrails
+- [ ] Multi-tenant data isolation strictly enforced with tenant ID scoping across all SQL queries and API endpoints.
+- [ ] Prototype pollution guards and safe field path validation prevent unauthorized mutation of extracted document metadata.
+- [ ] Audit logs accurately record every document override, parcel geometry linkage, and property snapshot.
+
