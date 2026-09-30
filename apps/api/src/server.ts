@@ -109,8 +109,8 @@ if (process.env.FIREBASE_PROJECT_ID) {
 }
 
 app.disable('x-powered-by');
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(cors({ origin: corsOrigin.split(',').map(s => s.trim()), credentials: true }));
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', rateLimit({
   windowMs: 60_000,
@@ -1592,6 +1592,25 @@ app.post('/api/settings', authGuard, asyncRoute(async (req, res) => {
   res.json({ settings: result.rows[0], message: 'Workspace settings updated successfully.' });
 }));
 
+
+// Serve frontend web client bundle in production / sandbox mode
+const baseDir = (import.meta as any).dirname || process.cwd();
+const webDistCandidates = [
+  path.resolve(baseDir, '../../web/dist'),
+  path.resolve(baseDir, '../../../apps/web/dist'),
+  path.resolve(process.cwd(), '../web/dist'),
+  path.resolve(process.cwd(), 'apps/web/dist'),
+];
+const webDistPath = webDistCandidates.find(p => fs.existsSync(p));
+if (webDistPath) {
+  app.use(express.static(webDistPath));
+  app.get('*', (req: Request, res: Response, next: NextFunction) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+      return next();
+    }
+    res.sendFile(path.join(webDistPath, 'index.html'));
+  });
+}
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `File exceeds ${process.env.MAX_UPLOAD_MB || 25} MB limit.` : err.message });

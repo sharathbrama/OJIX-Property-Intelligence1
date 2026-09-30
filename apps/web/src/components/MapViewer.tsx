@@ -72,7 +72,7 @@ export interface MapViewerProps {
   onGeometryUpdated?: (geometry: any) => void;
 }
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const API = (typeof import.meta.env.VITE_API_URL !== 'undefined' ? import.meta.env.VITE_API_URL : (typeof window !== 'undefined' && window.location.port === '5173' ? 'http://localhost:4000' : ''));
 
 async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, init);

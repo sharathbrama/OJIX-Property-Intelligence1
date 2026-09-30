@@ -18,7 +18,7 @@ import type { PropertyDoc } from './types';
 type Property = { id: string; name: string; village: string; hobli: string; taluk: string; district: string; survey_number: string; subdivision: string; extent: string; address: string; latitude: number | null; longitude: number | null; notes: string; status: string; updated_at: string; document_count?: number };
 type Finding = { id?: string; code: string; title: string; severity: string; points: number; explanation: string; evidence_status: string; next_action: string };
 type Doc = { id: string; original_filename: string; mime_type: string; size_bytes: number; sha256?: string; doc_type?: string; processing_status: string; extracted_fields?: any; created_at: string };
-const API = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const API = (typeof import.meta.env.VITE_API_URL !== 'undefined' ? import.meta.env.VITE_API_URL : (typeof window !== 'undefined' && window.location.port === '5173' ? 'http://localhost:4000' : ''));
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, init);

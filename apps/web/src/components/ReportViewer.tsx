@@ -30,7 +30,7 @@ export interface ReportViewerProps {
 
 export const ReportViewer: React.FC<ReportViewerProps> = ({
   property,
-  apiUrl = 'http://localhost:4000',
+  apiUrl = '',
   onSnapshotCreated,
 }) => {
   const [loading, setLoading] = useState(false);
