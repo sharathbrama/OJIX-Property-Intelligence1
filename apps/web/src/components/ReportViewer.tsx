@@ -1,0 +1,171 @@
+import React, { useState } from 'react';
+import {
+  Download,
+  FileCheck2,
+  FileText,
+  Printer,
+  ShieldAlert,
+  ShieldCheck,
+  Compass,
+  ExternalLink,
+  Lock,
+} from 'lucide-react';
+
+export interface ReportViewerProps {
+  property: {
+    id: string;
+    name: string;
+    survey_number?: string;
+    village?: string;
+    taluk?: string;
+    district?: string;
+    extent?: string;
+    address?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+  };
+  apiUrl?: string;
+  onSnapshotCreated?: () => void;
+}
+
+export const ReportViewer: React.FC<ReportViewerProps> = ({
+  property,
+  apiUrl = 'http://localhost:4000',
+  onSnapshotCreated,
+}) => {
+  const [loading, setLoading] = useState(false);
+  const [snapshotSuccess, setSnapshotSuccess] = useState<string | null>(null);
+
+  const handleCreateSnapshot = async () => {
+    setLoading(true);
+    setSnapshotSuccess(null);
+    try {
+      const res = await fetch(`${apiUrl}/api/properties/${property.id}/due-diligence-snapshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) throw new Error(`Snapshot failed (${res.status})`);
+      const data = await res.json();
+      setSnapshotSuccess(data.reportId);
+      if (onSnapshotCreated) onSnapshotCreated();
+    } catch (err: any) {
+      alert(err.message || 'Error creating snapshot');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownloadPdf = () => {
+    window.open(`${apiUrl}/api/properties/${property.id}/due-diligence-report/pdf`, '_blank');
+  };
+
+  const handleOpenHtml = () => {
+    window.open(`${apiUrl}/api/properties/${property.id}/due-diligence-report/html`, '_blank');
+  };
+
+  return (
+    <div style={{ padding: '1.5rem', background: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: '#1a202c', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FileText style={{ color: '#3182ce' }} size={22} />
+            Due Diligence & Title Audit Report (R5)
+          </h2>
+          <p style={{ margin: '4px 0 0', color: '#718096', fontSize: '0.875rem' }}>
+            Official 7-section Karnataka land due-diligence report with immutable snapshots and evidence appendix.
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            onClick={handleCreateSnapshot}
+            disabled={loading}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              borderRadius: '8px',
+              border: '1px solid #cbd5e0',
+              background: '#fff',
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: '0.875rem',
+            }}
+          >
+            <Lock size={16} /> Freeze New Snapshot
+          </button>
+          <button
+            onClick={handleOpenHtml}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              borderRadius: '8px',
+              border: '1px solid #cbd5e0',
+              background: '#f7fafc',
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: '0.875rem',
+            }}
+          >
+            <Printer size={16} /> View Printable HTML
+          </button>
+          <button
+            onClick={handleDownloadPdf}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              borderRadius: '8px',
+              border: 'none',
+              background: '#2b6cb0',
+              color: '#fff',
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: '0.875rem',
+            }}
+          >
+            <Download size={16} /> Download Signed PDF
+          </button>
+        </div>
+      </div>
+
+      {snapshotSuccess && (
+        <div style={{ padding: '12px 16px', borderRadius: '8px', background: '#c6f6d5', color: '#22543d', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.875rem' }}>
+          <FileCheck2 size={20} />
+          <span>Immutable snapshot created successfully! Report ID: <strong>{snapshotSuccess}</strong></span>
+        </div>
+      )}
+
+      {/* 7 Mandatory Sections Checklist Card */}
+      <div style={{ background: '#f7fafc', padding: '1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
+        <h4 style={{ fontSize: '0.9375rem', fontWeight: 700, margin: '0 0 12px', color: '#2d3748' }}>Mandatory Report Specifications (Section 13 FRD)</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '8px', fontSize: '0.8125rem', color: '#4a5568' }}>
+          <div>✔ 1. Executive Summary & Risk Band</div>
+          <div>✔ 2. Property Identification Matrix</div>
+          <div>✔ 3. Title Chain & Gap Detection</div>
+          <div>✔ 4. Discrepancy Matrix (1% tolerance)</div>
+          <div>✔ 5. GIS Buffer Screening (SWD & Lakes)</div>
+          <div>✔ 6. Evidence Appendix with SHA-256</div>
+          <div>✔ 7. Statutory Disclaimers & Notice</div>
+          <div>✔ True North Arrow & Dynamic Metric Scale</div>
+        </div>
+      </div>
+
+      {/* Interactive Report Preview Box */}
+      <div style={{ border: '1px solid #cbd5e0', borderRadius: '8px', overflow: 'hidden' }}>
+        <div style={{ background: '#edf2f7', padding: '8px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', fontWeight: 600, color: '#4a5568' }}>
+          <span>LIVE REPORT PREVIEW CONTAINER</span>
+          <span>FORMAT: HTML5 / PLAYWRIGHT PDF</span>
+        </div>
+        <iframe
+          src={`${apiUrl}/api/properties/${property.id}/due-diligence-report/html`}
+          title="Due Diligence Report Preview"
+          style={{ width: '100%', height: '560px', border: 'none', background: '#fff' }}
+        />
+      </div>
+    </div>
+  );
+};
