@@ -24,7 +24,7 @@ export interface DiscrepancyFinding {
   statutoryCitation: string;
   severity: 'critical' | 'high' | 'medium' | 'low';
   points: number;
-  field: 'extent' | 'boundary' | 'party' | 'survey_number';
+  field: 'extent' | 'boundary' | 'party' | 'ownership' | 'survey_number';
   docA: { id: string; name: string; type: string; value: string };
   docB: { id: string; name: string; type: string; value: string };
   deltaText: string;

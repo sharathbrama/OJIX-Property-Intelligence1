@@ -3,6 +3,7 @@
  * Empirical Challenger Verification Harness for Milestone 2
  */
 
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildTitleDAG,
@@ -348,27 +349,10 @@ export function runAdversarialSuite(): StressTestReport[] {
   return reports;
 }
 
-// Direct execution
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const results = runAdversarialSuite();
-  console.log('=================================================================');
-  console.log('OJIX PROPERTY INTELLIGENCE — ADVERSARIAL STRESS TEST RESULTS');
-  console.log('=================================================================');
-  let passCount = 0;
-  let failCount = 0;
-  for (const r of results) {
-    const symbol = r.passed ? '✔ PASS' : '✖ FAIL';
-    console.log(`${symbol} [${r.category}] ${r.name}`);
-    if (!r.passed) {
-      failCount++;
-      console.log(`    Severity: ${r.severity?.toUpperCase()}`);
-      console.log(`    Expected: ${r.expected}`);
-      console.log(`    Actual:   ${r.actual}`);
-    } else {
-      passCount++;
-    }
-  }
-  console.log('-----------------------------------------------------------------');
-  console.log(`Summary: ${results.length} tests executed | ${passCount} passed | ${failCount} failed`);
-  console.log('=================================================================');
+// Register each adversarial stress test case with node:test
+const reports = runAdversarialSuite();
+for (const r of reports) {
+  test(`[${r.category}] ${r.name}`, () => {
+    assert.equal(r.passed, true, `Adversarial stress failure: expected "${r.expected}", got "${r.actual}"`);
+  });
 }

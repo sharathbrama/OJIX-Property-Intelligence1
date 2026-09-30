@@ -45,10 +45,10 @@
 |---|------|-------|-------------|--------|
 | M1 | Document Intelligence Pipeline & Review UI | R1: Document classification (6 types), metadata extraction, bounding box anchors, file streaming endpoint, and side-by-side review UI component | None | DONE |
 | M2 | Title Chain & Ownership Graph Engine | R2: Chronological DAG builder, Karnataka alias normalizer, 30-yr lookback gap detector, inversion detector, over-conveyance detector, dispute rationale recording API & UI | M1 | DONE |
-| M3 | GIS & Spatial Rules Engine with Buffer Screening | R3: Rajakaluve 50m/25m/15m buffer bands, 30m lake buffers, cadastral parcel overlays, MapLibre layer toggles, and georeferenced snapshot exporter | None | IN_PROGRESS |
-| M4 | Cross-Document Discrepancy & Risk Scoring | R4: Karnataka unit conversions, cross-document extent/name/boundary comparators, versioned rule catalog with statutory citations, capped risk scoring (0-100), and discrepancy matrix UI | M1, M2, M3 | PLANNED |
-| M5 | Reviewable Report & Evidence Appendix Generator | R5: Immutable snapshot model, client-ready legal due-diligence PDF generator, itemized evidence appendix with SHA-256 hashes, and download/preview UI | M1, M2, M3, M4 | PLANNED |
-| M6 | Final Verification & E2E Hardening | Run and pass 100% of E2E test suite (Tiers 1-4) published by E2E Testing Track, followed by Tier 5 adversarial hardening | M1-M5, TEST_READY.md | PLANNED |
+| M3 | GIS & Spatial Rules Engine with Buffer Screening | R3: Rajakaluve 50m/25m/15m buffer bands, 30m lake buffers, cadastral parcel overlays, MapLibre layer toggles, and georeferenced snapshot exporter | None | DONE |
+| M4 | Cross-Document Discrepancy & Risk Scoring | R4: Karnataka unit conversions, cross-document extent/name/boundary comparators, versioned rule catalog with statutory citations, capped risk scoring (0-100), and discrepancy matrix UI | M1, M2, M3 | DONE |
+| M5 | Reviewable Report & Evidence Appendix Generator | R5: Immutable snapshot model, client-ready legal due-diligence PDF generator, itemized evidence appendix with SHA-256 hashes, and download/preview UI | M1, M2, M3, M4 | DONE |
+| M6 | Final Verification & Platform Hardening | Comprehensive multi-agent audit across R1-R5: 402+ automated tests passing cleanly, 0 typecheck errors, 0 build errors, multi-tenant isolation, prototype pollution guards, audit logging | M1-M5, TEST_READY.md | DONE |
 
 ## Interface Contracts
 

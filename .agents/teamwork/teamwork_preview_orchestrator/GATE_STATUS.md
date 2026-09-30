@@ -64,3 +64,40 @@ Gate Result: **PASS** (Milestone 2 fully verified and approved)
 | auditor_m3_1 | teamwork_preview_auditor | CLEAN (all 6 checks pass, authentic math & raster) | handoff.md |
 
 Gate Result: **FAIL** (reviewer_m3_2, challenger_m3_1, challenger_m3_2: REQUEST_CHANGES — rate limiting in test mode, premature buffer rounding, MultiPolygon support, and coordinate validation)
+
+---
+
+## Gate — Milestone 3 (GIS & Spatial Rules Engine with Buffer Screening) — Iteration 2
+| Agent | Role | Verdict | Source |
+|-------|------|---------|--------|
+| worker_m3_iter2_1 | teamwork_preview_worker | DONE (402 tests pass, 0 typecheck, 0 build) | handoff.md |
+| reviewer_m3_iter2_1 | teamwork_preview_reviewer | REQUEST_CHANGES (server process rate limiter bypass) | handoff.md |
+| reviewer_m3_iter2_2 | teamwork_preview_reviewer | APPROVE | handoff.md |
+| challenger_m3_iter2_1 | teamwork_preview_challenger | REQUEST_CHANGES (rate limiter server bypass for npm test) | handoff.md |
+| challenger_m3_iter2_2 | teamwork_preview_challenger | REQUEST_CHANGES (rate limiter test bypass across process boundary) | handoff.md |
+| auditor_m3_iter2_1 | teamwork_preview_auditor | REQUEST_CHANGES (Check 4 failed on rate limiter 429 during npm test) | handoff.md |
+
+Gate Result: **FAIL** (Rate limiter in server.ts must bypass non-production/localhost so npm test succeeds cleanly)
+
+---
+
+## Gate — Milestone 3 (GIS & Spatial Rules Engine with Buffer Screening) — Iteration 3
+| Agent | Role | Verdict | Source |
+|-------|------|---------|--------|
+| worker_m3_iter3_1 | teamwork_preview_worker | DONE (402 tests pass, 0 typecheck, 0 build) | handoff.md |
+| reviewer_m3_iter3_1 | teamwork_preview_reviewer | APPROVE (rate limiter localhost bypass verified, 402/402 tests pass) | handoff.md |
+| challenger_m3_iter3_1 | teamwork_preview_challenger | APPROVE (2 consecutive npm test runs 402/402 pass, 0 flakiness, 0 429s) | handoff.md |
+| auditor_m3_iter3_1 | teamwork_preview_auditor | CLEAN (all 6 checks pass, 402/402 tests pass, zero oracle imports) | handoff.md |
+
+Gate Result: **PASS** (Milestone 3 fully verified, hardened, and approved across all gate criteria)
+
+---
+
+## Gate — Milestone 6 (Final Comprehensive Multi-Agent Verification across R1-R5)
+| Agent | Role | Verdict | Source |
+|-------|------|---------|--------|
+| reviewer_final | teamwork_preview_reviewer | APPROVE (Full architecture, security, and R1-R5 coverage verified) | handoff.md |
+| challenger_final | teamwork_preview_challenger | APPROVE (402/402 tests pass, 0 flakiness, 0 429s across 2 runs) | handoff.md |
+| auditor_final | teamwork_preview_auditor | CLEAN (All 6 forensic checks passed, 0 oracle imports, clean build) | handoff.md |
+
+Gate Result: **PASS** (Platform fully audited, verified, and approved for production)

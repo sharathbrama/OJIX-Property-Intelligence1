@@ -3,19 +3,29 @@ import assert from 'node:assert/strict';
 import {
   classifyDocument,
   extractDocumentMetadata,
+  computeSha256Checksum,
+} from '../src/document-extractor.js';
+import {
   parseKarnatakaLandExtent,
   compareExtents,
+  calculateRiskScore,
+} from '../src/discrepancy-engine.js';
+import {
   arePartyAliases,
   detectTitleGaps,
+} from '../src/title-engine.js';
+import {
   screenSpatialBuffers,
+} from '../src/spatial-rules-engine.js';
+import {
   createDueDiligenceSnapshot,
   generateDueDiligenceReport,
-  computeSha256Checksum,
-  calculateRiskScore,
-  type TitleEvent,
-  type EvidenceAnchor,
-  type DiscrepancyFinding,
-} from './contract-oracle.js';
+} from '../src/report-generator.js';
+import type {
+  TitleEvent,
+  EvidenceAnchor,
+  DiscrepancyFinding,
+} from '../src/types.js';
 
 // ============================================================================
 // SCENARIO 1: Clear Title Freehold Layout (Arakere Village)
@@ -36,27 +46,27 @@ test('Scenario 1: Clear Title Freehold Layout — Arakere Sy No 34/2 (Risk Score
     longitude: 77.5950,
   };
 
-  // 2. Documents Uploaded: 1994 Sale Deed -> 2008 Gift Deed -> 2018 Sale Deed + RTC + e-Khata + Nil EC
-  const rawSale1994 = 'Registered Absolute Sale Deed (Kraya Patra) dated 1994-04-10. Vendor: Anjanappa, Purchaser: Muniyappa. Sy No: 34/2 Extent: 1 Acre 20 Guntas. Consideration: Rs. 250000.';
+  // 2. Documents Uploaded: 1984 Sale Deed -> 2008 Gift Deed -> 2018 Sale Deed + RTC + e-Khata + Nil EC
+  const rawSale1984 = 'Registered Absolute Sale Deed (Kraya Patra) dated 1984-04-10. Vendor: Anjanappa, Purchaser: Muniyappa. Sy No: 34/2 Extent: 1 Acre 20 Guntas. Consideration: Rs. 250000.';
   const rawGift2008 = 'Registered Gift Deed (Dhana Patra) dated 2008-08-20. Donor: Muniyappa, Donee: Suresh M. Sy No: 34/2 Extent: 1 Acre 20 Guntas.';
   const rawSale2018 = 'Registered Absolute Sale Deed dated 2018-11-15. Vendor: Suresh M, Purchaser: Sri K. R. Ramesh (S/o Kadirappa). Sy No: 34/2 Extent: 1 Acre 20 Guntas. Consideration: Rs. 8500000.';
   const rawRTC = 'Bhoomi RTC Form No 16 Pahani Sy No 34/2. Kabzedar: Ramesh K R. Extent: 1 Acre 20 Guntas.';
-  const rawEC = 'Department of Stamps and Registration Kaveri Form 15 Encumbrance Certificate Nil Encumbrance from 1994 to 2024.';
+  const rawEC = 'Department of Stamps and Registration Kaveri Form 15 Encumbrance Certificate Nil Encumbrance from 1984 to 2024.';
 
   // 3. Document Classification & Extraction
-  assert.equal(classifyDocument(rawSale1994).documentType, 'sale_deed');
+  assert.equal(classifyDocument(rawSale1984).documentType, 'sale_deed');
   assert.equal(classifyDocument(rawGift2008).documentType, 'gift_deed');
   assert.equal(classifyDocument(rawSale2018).documentType, 'sale_deed');
   assert.equal(classifyDocument(rawRTC).documentType, 'rtc_pahani');
   assert.equal(classifyDocument(rawEC).documentType, 'encumbrance_certificate');
 
-  const meta1994 = extractDocumentMetadata(rawSale1994, 'sale_deed');
+  const meta1984 = extractDocumentMetadata(rawSale1984, 'sale_deed');
   const meta2008 = extractDocumentMetadata(rawGift2008, 'gift_deed');
   const meta2018 = extractDocumentMetadata(rawSale2018, 'sale_deed');
   const metaRTC = extractDocumentMetadata(rawRTC, 'rtc_pahani');
 
   // Verify all extents match exactly: 1 Acre 20 Guntas = 65,340 sq ft
-  assert.equal(meta1994.propertySchedule.extent.normalizedSqFt, 65340);
+  assert.equal(meta1984.propertySchedule.extent.normalizedSqFt, 65340);
   assert.equal(meta2008.propertySchedule.extent.normalizedSqFt, 65340);
   assert.equal(meta2018.propertySchedule.extent.normalizedSqFt, 65340);
   assert.equal(metaRTC.propertySchedule.extent.normalizedSqFt, 65340);
@@ -67,11 +77,11 @@ test('Scenario 1: Clear Title Freehold Layout — Arakere Sy No 34/2 (Risk Score
   // 5. Title Chain & 30-year Gap Detection
   const titleEvents: TitleEvent[] = [
     {
-      id: 'EV_1994',
+      id: 'EV_1984',
       propertyId: property.id,
-      documentId: 'DOC_1994',
+      documentId: 'DOC_1984',
       sequenceOrder: 1,
-      eventDate: '1994-04-10',
+      eventDate: '1984-04-10',
       deedType: 'Sale Deed',
       fromParties: [{ name: 'Anjanappa', normalizedName: 'ANJANAPPA' }],
       toParties: [{ name: 'Muniyappa', normalizedName: 'MUNIYAPPA' }],
@@ -129,7 +139,7 @@ test('Scenario 1: Clear Title Freehold Layout — Arakere Sy No 34/2 (Risk Score
   const snapshot = createDueDiligenceSnapshot({
     property,
     documents: [
-      { documentId: 'DOC_1994', originalFilename: 'SaleDeed_1994.pdf', sha256: computeSha256Checksum(rawSale1994) },
+      { documentId: 'DOC_1984', originalFilename: 'SaleDeed_1984.pdf', sha256: computeSha256Checksum(rawSale1984) },
       { documentId: 'DOC_2008', originalFilename: 'GiftDeed_2008.pdf', sha256: computeSha256Checksum(rawGift2008) },
       { documentId: 'DOC_2018', originalFilename: 'SaleDeed_2018.pdf', sha256: computeSha256Checksum(rawSale2018) },
       { documentId: 'DOC_RTC', originalFilename: 'RTC_2024.pdf', sha256: computeSha256Checksum(rawRTC) },
@@ -231,9 +241,9 @@ test('Scenario 3: Broken Title Chain & Extent Over-Conveyance — Whitefield Sy 
     {
       id: 'EV_ROOT_OLD',
       propertyId: property.id,
-      documentId: 'DOC_1990',
+      documentId: 'DOC_1984',
       sequenceOrder: 1,
-      eventDate: '1990-01-01',
+      eventDate: '1984-01-01',
       deedType: 'Sale Deed',
       fromParties: [{ name: 'Original Farmer', normalizedName: 'ORIGINAL FARMER' }],
       toParties: [{ name: 'Suresh Gowda', normalizedName: 'SURESH GOWDA' }],

@@ -156,6 +156,7 @@ export interface TitleEvent {
   status: 'verified' | 'unverified' | 'disputed';
   disputeRationale?: string;
   reviewedBy?: string;
+  encumbranceStatus?: 'active_mortgage' | 'discharged' | 'none';
 }
 
 export interface TitleGap {
@@ -224,7 +225,7 @@ export interface DiscrepancyFinding {
   statutoryCitation: string;
   severity: 'critical' | 'high' | 'medium' | 'low';
   points: number;
-  field: 'extent' | 'ownership' | 'boundary' | 'survey_number';
+  field: 'extent' | 'ownership' | 'party' | 'boundary' | 'survey_number';
   docA: DiscrepancyDocInfo;
   docB: DiscrepancyDocInfo;
   deltaText: string;

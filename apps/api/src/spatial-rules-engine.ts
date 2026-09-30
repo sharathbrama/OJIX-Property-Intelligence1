@@ -114,9 +114,10 @@ export function generateCartographicSnapshotMetadata(
 
 /**
  * Validates GeoJSON geometry or feature for cadastral parcel representation:
- * - Must be a valid object (Feature, FeatureCollection, or Polygon)
- * - Must have Polygon geometry with closed rings (first coord == last coord)
+ * - Must be a valid object (Feature, FeatureCollection, Polygon, or MultiPolygon)
+ * - Must have Polygon or MultiPolygon geometry with closed rings (first coord == last coord)
  * - Must have at least 4 coordinate pairs per linear ring
+ * - Every coordinate [lng, lat] must be a finite number within [-180, 180] and [-90, 90]
  */
 export function validateCadastralGeoJSON(geojson: any): boolean {
   if (!geojson || typeof geojson !== 'object') return false;
@@ -129,14 +130,24 @@ export function validateCadastralGeoJSON(geojson: any): boolean {
   }
 
   if (geojson.type === 'Feature') {
-    if (!geojson.geometry || geojson.geometry.type !== 'Polygon') {
+    if (!geojson.geometry || typeof geojson.geometry !== 'object') {
       return false;
     }
-    return validatePolygonCoordinates(geojson.geometry.coordinates);
+    if (geojson.geometry.type === 'Polygon') {
+      return validatePolygonCoordinates(geojson.geometry.coordinates);
+    }
+    if (geojson.geometry.type === 'MultiPolygon') {
+      return validateMultiPolygonCoordinates(geojson.geometry.coordinates);
+    }
+    return false;
   }
 
   if (geojson.type === 'Polygon') {
     return validatePolygonCoordinates(geojson.coordinates);
+  }
+
+  if (geojson.type === 'MultiPolygon') {
+    return validateMultiPolygonCoordinates(geojson.coordinates);
   }
 
   return false;
@@ -160,6 +171,34 @@ function validatePolygonCoordinates(coordinates: any): boolean {
       first[0] !== last[0] ||
       first[1] !== last[1]
     ) {
+      return false;
+    }
+    for (const pt of ring) {
+      if (!Array.isArray(pt) || pt.length < 2) return false;
+      const [lng, lat] = pt;
+      if (
+        typeof lng !== 'number' ||
+        typeof lat !== 'number' ||
+        !Number.isFinite(lng) ||
+        !Number.isFinite(lat) ||
+        lng < -180 ||
+        lng > 180 ||
+        lat < -90 ||
+        lat > 90
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function validateMultiPolygonCoordinates(coordinates: any): boolean {
+  if (!Array.isArray(coordinates) || coordinates.length === 0) {
+    return false;
+  }
+  for (const poly of coordinates) {
+    if (!validatePolygonCoordinates(poly)) {
       return false;
     }
   }
@@ -318,7 +357,8 @@ function createCartographicMapPng(
  */
 export function screenSpatialBuffers(
   propertyPoint: { latitude: number; longitude: number },
-  layers: SpatialScreeningLayerInput[]
+  layers: SpatialScreeningLayerInput[],
+  customParcelGeoJSON?: any
 ): SpatialScreeningResult {
   const findings: SpatialScreeningFinding[] = [];
   let minDrainDist = Infinity;
@@ -327,7 +367,7 @@ export function screenSpatialBuffers(
   let lakeStatus: SpatialScreeningResult['lakeClearanceStatus'] = 'clear';
 
   for (const layer of layers) {
-    let dist =
+    const rawDist =
       layer.distanceM !== undefined
         ? layer.distanceM
         : layer.coords
@@ -339,81 +379,95 @@ export function screenSpatialBuffers(
           )
         : 500;
 
-    dist = Math.round(dist * 10) / 10;
-
     let bufferM = 0;
     let severity: SpatialScreeningFinding['severity'] = 'low';
     let points = 5;
+    let hasFinding = false;
 
     if (layer.layerType === 'swd_primary') {
       bufferM = 50;
-      minDrainDist = Math.min(minDrainDist, dist);
-      if (dist === 0) {
+      minDrainDist = Math.min(minDrainDist, rawDist);
+      if (rawDist === 0) {
         drainStatus = 'encroached';
         severity = 'critical';
         points = 35;
-      } else if (dist <= bufferM) {
+        hasFinding = true;
+      } else if (rawDist <= bufferM) {
         if (drainStatus !== 'encroached') drainStatus = 'buffer_zone';
         severity = 'critical';
         points = 35;
-      } else if (dist <= 100) {
+        hasFinding = true;
+      } else if (rawDist <= 100) {
         severity = 'medium';
         points = 15;
+        hasFinding = true;
       }
     } else if (layer.layerType === 'swd_secondary') {
       bufferM = 25;
-      minDrainDist = Math.min(minDrainDist, dist);
-      if (dist === 0) {
+      minDrainDist = Math.min(minDrainDist, rawDist);
+      if (rawDist === 0) {
         drainStatus = 'encroached';
         severity = 'critical';
         points = 35;
-      } else if (dist <= bufferM) {
+        hasFinding = true;
+      } else if (rawDist <= bufferM) {
         if (drainStatus !== 'encroached') drainStatus = 'buffer_zone';
         severity = 'high';
         points = 25;
-      } else if (dist <= 75) {
+        hasFinding = true;
+      } else if (rawDist <= 75) {
         severity = 'medium';
         points = 15;
+        hasFinding = true;
       }
     } else if (layer.layerType === 'swd_tertiary') {
       bufferM = 15;
-      minDrainDist = Math.min(minDrainDist, dist);
-      if (dist === 0) {
+      minDrainDist = Math.min(minDrainDist, rawDist);
+      if (rawDist === 0) {
         drainStatus = 'encroached';
         severity = 'critical';
         points = 35;
-      } else if (dist <= bufferM) {
+        hasFinding = true;
+      } else if (rawDist <= bufferM) {
         if (drainStatus !== 'encroached') drainStatus = 'buffer_zone';
         severity = 'high';
         points = 25;
+        hasFinding = true;
+      } else if (rawDist <= 75) {
+        severity = 'medium';
+        points = 15;
+        hasFinding = true;
       }
     } else if (layer.layerType === 'waterbody') {
       bufferM = 30;
-      minLakeDist = Math.min(minLakeDist, dist);
-      if (dist === 0) {
+      minLakeDist = Math.min(minLakeDist, rawDist);
+      if (rawDist === 0) {
         lakeStatus = 'encroached';
         severity = 'critical';
         points = 35;
-      } else if (dist <= bufferM) {
+        hasFinding = true;
+      } else if (rawDist <= bufferM) {
         if (lakeStatus !== 'encroached') lakeStatus = 'buffer_zone';
         severity = 'critical';
         points = 35;
-      } else if (dist <= 100) {
+        hasFinding = true;
+      } else if (rawDist <= 100) {
         severity = 'medium';
         points = 15;
+        hasFinding = true;
       }
     }
 
-    const isEncroached = dist === 0;
-    const isInsideBuffer = dist <= bufferM;
+    const isEncroached = rawDist === 0;
+    const isInsideBuffer = rawDist <= bufferM;
 
-    if (isInsideBuffer || dist <= bufferM * 2) {
+    if (hasFinding) {
       findings.push({
         code: `SPATIAL_${layer.layerType.toUpperCase()}_${
           isEncroached ? 'ENCROACHMENT' : isInsideBuffer ? 'BUFFER' : 'PROXIMITY'
         }`,
         layerType: layer.layerType,
-        distanceM: dist,
+        distanceM: Math.round(rawDist * 10) / 10,
         bufferM,
         severity,
         isEncroached,
@@ -438,7 +492,7 @@ export function screenSpatialBuffers(
     drainClearanceStatus: drainStatus,
     lakeClearanceStatus: lakeStatus,
     findings,
-    cadastralParcelGeoJSON: {
+    cadastralParcelGeoJSON: customParcelGeoJSON || {
       type: 'Feature',
       geometry: {
         type: 'Polygon',
