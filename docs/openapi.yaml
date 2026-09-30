@@ -1,0 +1,121 @@
+openapi: 3.0.3
+info:
+  title: OJIX Property Intelligence API
+  version: 0.1.0
+  description: Starter API for evidence-led property due diligence. All findings are preliminary and must be professionally reviewed.
+servers:
+  - url: http://localhost:4000
+paths:
+  /health:
+    get:
+      summary: API and database health
+      responses:
+        '200': { description: API is available }
+        '503': { description: Database unavailable or not configured }
+  /api/overview:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Workspace overview counts
+      responses:
+        '200': { description: Counts and recent workspaces }
+        '401': { description: Missing or invalid identity token }
+  /api/properties:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Search properties in the caller's workspace
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 120 }
+      responses:
+        '200': { description: Property list }
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Create a property workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 2, maxLength: 160 }
+                village: { type: string }
+                hobli: { type: string }
+                taluk: { type: string }
+                district: { type: string }
+                surveyNumber: { type: string }
+                subdivision: { type: string }
+                extent: { type: string }
+                address: { type: string }
+                latitude: { type: number, minimum: -90, maximum: 90, nullable: true }
+                longitude: { type: number, minimum: -180, maximum: 180, nullable: true }
+                notes: { type: string }
+      responses:
+        '201': { description: Workspace created }
+        '400': { description: Validation error }
+  /api/properties/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Get property, document metadata and findings
+      responses:
+        '200': { description: Property workspace }
+        '404': { description: Not found in caller's workspace }
+    patch:
+      security: [{ bearerAuth: [] }]
+      summary: Update property fields
+      responses:
+        '200': { description: Updated workspace }
+        '400': { description: Validation error }
+  /api/properties/{id}/documents:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Upload source documents
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items: { type: string, format: binary }
+      responses:
+        '201': { description: Files stored and checksum recorded }
+        '400': { description: Unsupported type, no files or size limit exceeded }
+  /api/properties/{id}/analyze:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Run baseline completeness and imported-layer screening
+      responses:
+        '200': { description: Explainable preliminary findings and screening score }
+  /api/properties/{id}/report:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Download evidence report JSON
+      responses:
+        '200': { description: JSON report with data limitations }
+  /api/map/layers:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Get active imported spatial features as GeoJSON
+      responses:
+        '200': { description: FeatureCollection and source disclaimer }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Firebase ID token
