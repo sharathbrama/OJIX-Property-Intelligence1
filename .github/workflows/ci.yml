@@ -1,0 +1,133 @@
+name: OJIX Property Intelligence CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Stage 1: Quality Gate & Type Safety
+  lint-and-typecheck:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Monorepo Dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript Static Typecheck
+        run: npm run typecheck
+
+  # Stage 2: Automated Test Matrix with Live PostGIS Container
+  test:
+    name: Test Suite (with PostGIS 16)
+    needs: lint-and-typecheck
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: ojix_property
+          POSTGRES_USER: ojix
+          POSTGRES_PASSWORD: ojix_local_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ojix -d ojix_property"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run Schema Migrations
+        env:
+          PGPASSWORD: ojix_local_only
+        run: |
+          psql -h localhost -p 5432 -U ojix -d ojix_property -f infra/db/schema.sql
+          psql -h localhost -p 5432 -U ojix -d ojix_property -f infra/db/seed.sql
+
+      - name: Execute Full Automated Test Suite
+        env:
+          DATABASE_URL: postgres://ojix:ojix_local_only@localhost:5432/ojix_property
+          PORT: 4000
+          CORS_ORIGIN: http://localhost:5173
+        run: npm test
+
+  # Stage 3: Production Build Artifacts
+  build:
+    name: Build Production Assets
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Compile Backend & Build Frontend
+        run: npm run build
+
+  # Stage 4: Docker Container Build Verification
+  docker-build:
+    name: Docker Build & Verification
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/api
+          file: ./apps/api/Dockerfile
+          push: false
+          tags: ojix-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Web Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/web
+          file: ./apps/web/Dockerfile
+          push: false
+          tags: ojix-web:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
