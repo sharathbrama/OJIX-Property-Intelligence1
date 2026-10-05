@@ -254,6 +254,361 @@
 
 .form-select{width:100%;border:1px solid #dfe5ed;border-radius:6px;padding:10px 11px;outline:0;font-size:10px;color:#344258;background:#fcfdff}
 
+/* ==========================================================================
+   High-Readability, Large-Component & Enhanced UI/UX Design System
+   ========================================================================== */
+
+/* Typography & Visual Hierarchy */
+body, .app-shell {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+.page-heading h1, .property-title-row h1 {
+  font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 30px !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.8px !important;
+  color: #0f172a !important;
+  line-height: 1.25 !important;
+  margin-bottom: 8px !important;
+}
+
+.page-heading p, .property-title-row p {
+  font-size: 14px !important;
+  color: #475569 !important;
+  line-height: 1.6 !important;
+}
+
+.eyebrow {
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  letter-spacing: 1.6px !important;
+  color: #64748b !important;
+  margin-bottom: 8px !important;
+}
+
+/* Survey Highlight Badge in Title */
+.survey-badge-highlight {
+  display: inline-flex;
+  align-items: center;
+  background: #eff6ff !important;
+  color: #1e40af !important;
+  border: 1px solid #bfdbfe !important;
+  padding: 4px 12px !important;
+  border-radius: 6px !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+
+/* Big Interactive Buttons */
+.primary-btn, .secondary-btn {
+  height: 42px !important;
+  padding: 0 20px !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  border-radius: 8px !important;
+  gap: 8px !important;
+  transition: all 0.15s ease !important;
+}
+
+.primary-btn {
+  background: #2563eb !important;
+  border-color: #2563eb !important;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25) !important;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: #1d4ed8 !important;
+  border-color: #1d4ed8 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35) !important;
+}
+
+.secondary-btn {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #334155 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+}
+
+.secondary-btn:hover:not(:disabled) {
+  background: #f8fafc !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+  transform: translateY(-1px);
+}
+
+.text-btn {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  padding: 8px 4px !important;
+  color: #2563eb !important;
+}
+
+/* Big Property Summary Strip */
+.property-summary-strip {
+  padding: 22px 28px !important;
+  border-radius: 12px !important;
+  border: 1px solid #e2e8f0 !important;
+  background: #ffffff !important;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05) !important;
+  gap: 28px !important;
+  margin-bottom: 24px !important;
+}
+
+.summary-avatar {
+  width: 52px !important;
+  height: 52px !important;
+  border-radius: 12px !important;
+  background: #eff6ff !important;
+  border: 1.5px solid #bfdbfe !important;
+  color: #1d4ed8 !important;
+  font-size: 18px !important;
+  font-weight: 800 !important;
+}
+
+.summary-meta span {
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.9px !important;
+  color: #64748b !important;
+  margin-bottom: 3px !important;
+}
+
+.summary-meta strong {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+}
+
+/* Large Readable Tabs */
+.tabs {
+  gap: 28px !important;
+  border-bottom: 2px solid #e2e8f0 !important;
+  margin-bottom: 24px !important;
+}
+
+.tabs button {
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  padding: 14px 4px !important;
+  gap: 8px !important;
+  color: #64748b !important;
+  border-bottom: 3px solid transparent !important;
+  transition: all 0.15s ease !important;
+}
+
+.tabs button:hover {
+  color: #1e293b !important;
+}
+
+.tabs button.selected {
+  color: #2563eb !important;
+  border-bottom-color: #2563eb !important;
+}
+
+.tabs button span {
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  padding: 3px 8px !important;
+  border-radius: 10px !important;
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+}
+
+.tabs button.selected span {
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+}
+
+/* Large Identity Grid & Info Fields */
+.panel {
+  border-radius: 12px !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05) !important;
+  background: #ffffff !important;
+}
+
+.panel-head {
+  padding: 22px 24px !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+
+.panel-head h3 {
+  font-size: 16px !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+  margin-bottom: 4px !important;
+}
+
+.panel-head p {
+  font-size: 13px !important;
+  color: #64748b !important;
+}
+
+.identity-grid {
+  padding: 12px 24px 24px !important;
+  gap: 8px 32px !important;
+}
+
+.info-field {
+  padding: 14px 0 !important;
+}
+
+.info-field span {
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  color: #64748b !important;
+  margin-bottom: 4px !important;
+}
+
+.info-field strong {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #0f172a !important;
+}
+
+/* Large Customer-Friendly Upload & Drag Area */
+.upload-drop {
+  margin: 16px 24px 24px !important;
+  padding: 48px 32px !important;
+  border: 2px dashed #93c5fd !important;
+  background: #f8faff !important;
+  border-radius: 14px !important;
+  transition: all 0.2s ease !important;
+}
+
+.upload-drop:hover {
+  border-color: #3b82f6 !important;
+  background: #eff6ff !important;
+}
+
+.upload-drop > svg {
+  width: 44px !important;
+  height: 44px !important;
+  color: #2563eb !important;
+  margin-bottom: 14px !important;
+}
+
+.upload-drop > strong {
+  font-size: 17px !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+}
+
+.upload-drop > p {
+  font-size: 13px !important;
+  color: #64748b !important;
+  margin: 8px 0 20px !important;
+}
+
+.upload-drop .secondary-btn {
+  height: 42px !important;
+  padding: 0 28px !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+}
+
+/* Big Document Rows */
+.document-row {
+  padding: 18px 24px !important;
+  gap: 16px !important;
+}
+
+.doc-icon {
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 10px !important;
+  background: #eff6ff !important;
+  color: #2563eb !important;
+}
+
+.doc-main strong {
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+}
+
+.doc-main span {
+  font-size: 12px !important;
+  color: #64748b !important;
+}
+
+/* Metric Cards */
+.metric-grid {
+  gap: 18px !important;
+  margin-bottom: 28px !important;
+}
+
+.metric-card {
+  padding: 22px 24px !important;
+  border-radius: 12px !important;
+}
+
+.metric-value {
+  font-size: 32px !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+  letter-spacing: -0.8px !important;
+}
+
+.metric-label {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: #64748b !important;
+}
+
+.metric-change {
+  font-size: 12px !important;
+  color: #64748b !important;
+}
+
+/* Large Status Pills */
+.status-pill {
+  padding: 6px 12px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  border-radius: 6px !important;
+  letter-spacing: 0.3px !important;
+}
+
+/* Form inputs & search fields */
+.search-field {
+  height: 44px !important;
+  border-radius: 8px !important;
+  padding: 0 14px !important;
+}
+
+.search-field input {
+  font-size: 13px !important;
+  color: #0f172a !important;
+}
+
+.property-list-item {
+  padding: 18px 24px !important;
+}
+
+.property-list-main > strong {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+}
+
+.property-list-main > span {
+  font-size: 13px !important;
+  color: #64748b !important;
+}
+
+.property-tags span {
+  font-size: 11px !important;
+  padding: 4px 8px !important;
+  border-radius: 5px !important;
+}
+
 
 
 

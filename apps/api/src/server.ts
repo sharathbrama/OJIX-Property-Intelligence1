@@ -44,7 +44,7 @@ import {
   type DueDiligenceReportSnapshot,
 } from './report-generator.js';
 import { legalResearchEngine, type StatutoryProvision } from './legal-research-engine.js';
-import { sourceRegistryEngine, type RegistryName, type RegistryVerificationResult } from './source-registry-engine.js';
+import { sourceRegistryEngine, type RegistryName, type RegistryVerificationResult, type DirectRegistryQueryParams } from './source-registry-engine.js';
 
 
 const { Pool } = pg;
@@ -127,39 +127,172 @@ app.use('/api', rateLimit({
   legacyHeaders: false,
 }));
 
-interface AuthenticatedRequest extends Request { user?: { uid: string; email?: string; tenantId?: string; role?: string }; }
+export const DUMMY_ACCOUNTS = [
+  {
+    uid: 'user-owner',
+    email: 'owner@ojix.local',
+    name: 'Rajesh Sharma',
+    designation: 'Managing Partner',
+    role: 'owner',
+    avatar: 'RS',
+    description: 'Workspace Owner — full tenant and governance administration, deletion, and system authorization.'
+  },
+  {
+    uid: 'user-admin',
+    email: 'admin@ojix.local',
+    name: 'Priya Nair',
+    designation: 'Firm Administrator',
+    role: 'admin',
+    avatar: 'PN',
+    description: 'Firm Administrator — workspace settings, GIS configurations, member governance, and data export.'
+  },
+  {
+    uid: 'user-lawyer',
+    email: 'lawyer@ojix.local',
+    name: 'Adv. Anand Rao',
+    designation: 'Senior Legal Reviewer',
+    role: 'lawyer',
+    avatar: 'AR',
+    description: 'Senior Legal Counsel — dispute/verify title chain events, override OCR extractions, and sign off reports.'
+  },
+  {
+    uid: 'user-analyst',
+    email: 'analyst@ojix.local',
+    name: 'Kavita Reddy',
+    designation: 'Due Diligence Analyst',
+    role: 'analyst',
+    avatar: 'KR',
+    description: 'Due Diligence Analyst — case intake, document upload, trigger preliminary analyses, and run registry sync.'
+  },
+  {
+    uid: 'user-viewer',
+    email: 'viewer@ojix.local',
+    name: 'Vikram Mehta',
+    designation: 'Client / Audit Inspector',
+    role: 'viewer',
+    avatar: 'VM',
+    description: 'External Auditor / Read-Only Client — inspect evidence, view map layers and reports (all mutations blocked).'
+  }
+];
+
+export interface AuthenticatedRequest extends Request {
+  user?: {
+    uid: string;
+    email?: string;
+    name?: string;
+    tenantId?: string;
+    role?: string;
+  };
+}
+
 async function authGuard(req: Request, res: Response, next: NextFunction) {
   const authReq = req as AuthenticatedRequest;
-  let identity: { uid: string; email?: string };
-  if (!firebaseAuth) {
-    if (process.env.NODE_ENV === 'production') return res.status(503).json({ error: 'Authentication is not configured.' });
-    identity = { uid: 'local-developer', email: 'developer@localhost' };
-  } else {
-    const token = authReq.header('authorization')?.replace(/^Bearer\s+/i, '');
-    if (!token) return res.status(401).json({ error: 'Bearer token required.' });
-    try { const decoded = await firebaseAuth.verifyIdToken(token); identity = { uid: decoded.uid, email: decoded.email }; }
-    catch { return res.status(401).json({ error: 'Invalid or expired identity token.' }); }
+  let identity: { uid: string; email?: string; name?: string } | null = null;
+  const authHeader = authReq.header('authorization') || '';
+  const xUserUid = authReq.header('x-user-uid');
+
+  if (xUserUid) {
+    const matched = DUMMY_ACCOUNTS.find(a => a.uid === xUserUid);
+    identity = {
+      uid: xUserUid,
+      email: matched?.email || `${xUserUid}@ojix.local`,
+      name: matched?.name
+    };
+  } else if (authHeader.startsWith('Bearer ') || authHeader.startsWith('bearer ')) {
+    const rawToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const tokenUid = rawToken.replace(/^dummy-token-/i, '');
+    const matched = DUMMY_ACCOUNTS.find(a => a.uid === tokenUid || a.email.toLowerCase() === tokenUid.toLowerCase());
+    
+    if (matched) {
+      identity = { uid: matched.uid, email: matched.email, name: matched.name };
+    } else if (rawToken === 'local-developer' || tokenUid === 'local-developer') {
+      identity = { uid: 'local-developer', email: 'developer@localhost', name: 'Demo Professional' };
+    } else if (firebaseAuth) {
+      try {
+        const decoded = await firebaseAuth.verifyIdToken(rawToken);
+        identity = { uid: decoded.uid, email: decoded.email, name: decoded.name };
+      } catch {
+        return res.status(401).json({ error: 'Invalid or expired identity token.' });
+      }
+    } else {
+      identity = { uid: tokenUid, email: `${tokenUid}@ojix.local` };
+    }
   }
+
+  if (!identity) {
+    if (firebaseAuth) {
+      return res.status(401).json({ error: 'Bearer token required.' });
+    }
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ error: 'Authentication is not configured.' });
+    }
+    identity = { uid: 'local-developer', email: 'developer@localhost', name: 'Demo Professional' };
+  }
+
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const membership = await pool.query('SELECT organization_id, role FROM org_memberships WHERE user_uid=$1 ORDER BY created_at LIMIT 1', [identity.uid]);
-  if (!membership.rowCount) return res.status(403).json({ error: 'No workspace membership exists for this account.' });
-  authReq.user = { ...identity, tenantId: membership.rows[0].organization_id, role: membership.rows[0].role };
+  const membership = await pool.query(
+    'SELECT organization_id, role, email FROM org_memberships WHERE user_uid=$1 ORDER BY created_at LIMIT 1',
+    [identity.uid]
+  );
+  if (!membership.rowCount) {
+    return res.status(403).json({ error: `No workspace membership exists for account '${identity.uid}'.` });
+  }
+
+  authReq.user = {
+    ...identity,
+    email: membership.rows[0].email || identity.email,
+    tenantId: membership.rows[0].organization_id,
+    role: membership.rows[0].role
+  };
   next();
 }
+
 function writeGuard(req: Request, res: Response, next: NextFunction) {
   const user = (req as AuthenticatedRequest).user;
-  if (!user || !['owner','admin','lawyer','analyst'].includes(user.role || '')) return res.status(403).json({ error: 'This workspace role is read-only or lacks write permission.' });
+  if (!user || !['owner', 'admin', 'lawyer', 'analyst'].includes(user.role || '')) {
+    return res.status(403).json({
+      error: 'This workspace role is read-only or lacks write permission.',
+      requiredRoles: ['owner', 'admin', 'lawyer', 'analyst'],
+      currentRole: user?.role || 'viewer'
+    });
+  }
   next();
 }
+
+function legalReviewerGuard(req: Request, res: Response, next: NextFunction) {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user || !['owner', 'admin', 'lawyer'].includes(user.role || '')) {
+    return res.status(403).json({
+      error: 'Senior Legal Reviewer role (lawyer, admin, owner) required to verify or dispute title chain events.',
+      requiredRoles: ['owner', 'admin', 'lawyer'],
+      currentRole: user?.role || 'viewer'
+    });
+  }
+  next();
+}
+
+function adminGuard(req: Request, res: Response, next: NextFunction) {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user || !['owner', 'admin'].includes(user.role || '')) {
+    return res.status(403).json({
+      error: 'Administrator or Owner privileges required to modify workspace settings.',
+      requiredRoles: ['owner', 'admin'],
+      currentRole: user?.role || 'viewer'
+    });
+  }
+  next();
+}
+
 const asyncRoute = (fn: (req: AuthenticatedRequest, res: Response, next: NextFunction) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req as AuthenticatedRequest, res, next)).catch(next);
 
-const propertySchema = z.object({
+const basePropertySchema = z.object({
   name: z.string().trim().min(2).max(160),
   village: z.string().trim().max(120).optional().default(''),
   hobli: z.string().trim().max(120).optional().default(''),
   taluk: z.string().trim().max(120).optional().default(''),
   district: z.string().trim().max(120).optional().default('Bengaluru Urban'),
   surveyNumber: z.string().trim().max(80).optional().default(''),
+  survey_number: z.string().trim().max(80).optional(),
   subdivision: z.string().trim().max(80).optional().default(''),
   extent: z.string().trim().max(80).optional().default(''),
   address: z.string().trim().max(500).optional().default(''),
@@ -167,6 +300,11 @@ const propertySchema = z.object({
   longitude: z.number().min(-180).max(180).nullable().optional(),
   notes: z.string().max(4000).optional().default('')
 });
+
+const propertySchema = basePropertySchema.transform(d => ({
+  ...d,
+  surveyNumber: d.surveyNumber || d.survey_number || ''
+}));
 
 async function audit(userId: string, tenantId: string | undefined, action: string, entityType: string, entityId: string | null, details: unknown = {}) {
   if (!pool) return;
@@ -200,6 +338,82 @@ app.get('/readyz', asyncRoute(async (_req, res) => {
   }
 }));
 
+
+/* ==========================================================================
+   Authentication & RBAC Endpoints
+   ========================================================================== */
+app.get('/api/auth/dummy-accounts', (_req, res) => {
+  res.json({ accounts: DUMMY_ACCOUNTS });
+});
+
+app.post('/api/auth/login', asyncRoute(async (req, res) => {
+  const { email, uid, userUid } = req.body || {};
+  const queryUid = userUid || uid;
+  let target = DUMMY_ACCOUNTS.find(a => 
+    (email && a.email.toLowerCase() === String(email).toLowerCase()) ||
+    (queryUid && a.uid === queryUid)
+  );
+  if (!target && (email === 'developer@localhost' || queryUid === 'local-developer')) {
+    target = {
+      uid: 'local-developer',
+      email: 'developer@localhost',
+      name: 'Demo Professional',
+      designation: 'System Superuser',
+      role: 'owner',
+      avatar: 'DP',
+      description: 'Default local development workspace owner'
+    };
+  }
+  if (!target) {
+    return res.status(401).json({ error: 'Invalid credentials. Please select one of the valid dummy RBAC accounts.' });
+  }
+
+  // Verify membership in DB
+  let role = target.role;
+  let tenantId = '11111111-1111-4111-8111-111111111111';
+  if (pool) {
+    const mem = await pool.query('SELECT organization_id, role, email FROM org_memberships WHERE user_uid=$1 LIMIT 1', [target.uid]);
+    if (mem.rowCount) {
+      role = mem.rows[0].role;
+      tenantId = mem.rows[0].organization_id;
+    }
+  }
+
+  const token = `dummy-token-${target.uid}`;
+  res.json({
+    token,
+    user: {
+      ...target,
+      role,
+      tenantId
+    },
+    message: `Signed in successfully as ${target.name} (${role.toUpperCase()})`
+  });
+}));
+
+app.get('/api/auth/me', authGuard, asyncRoute(async (req, res) => {
+  const u = (req as AuthenticatedRequest).user;
+  const meta = DUMMY_ACCOUNTS.find(a => a.uid === u?.uid) || {
+    uid: u?.uid || 'unknown',
+    email: u?.email || '',
+    name: u?.name || (u?.uid === 'local-developer' ? 'Demo Professional' : u?.uid || 'User'),
+    designation: u?.role ? u.role.toUpperCase() : 'Member',
+    role: u?.role || 'viewer',
+    avatar: (u?.email || 'U').slice(0, 2).toUpperCase(),
+    description: 'Active session'
+  };
+  res.json({
+    user: {
+      ...meta,
+      role: u?.role || meta.role,
+      tenantId: u?.tenantId
+    }
+  });
+}));
+
+app.post('/api/auth/logout', (_req, res) => {
+  res.json({ success: true, message: 'Logged out successfully.' });
+});
 
 app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured. Start PostgreSQL and set DATABASE_URL.' });
@@ -238,7 +452,7 @@ app.get('/api/properties/:id', authGuard, asyncRoute(async (req, res) => {
 
 app.patch('/api/properties/:id', authGuard, writeGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const parsed = propertySchema.partial().safeParse(req.body);
+  const parsed = basePropertySchema.partial().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid property payload.', issues: parsed.error.flatten() });
   const allowed: Record<string,string> = { name:'name', village:'village', hobli:'hobli', taluk:'taluk', district:'district', surveyNumber:'survey_number', subdivision:'subdivision', extent:'extent', address:'address', latitude:'latitude', longitude:'longitude', notes:'notes' };
   const entries = Object.entries(parsed.data).filter(([key]) => allowed[key]);
@@ -790,7 +1004,7 @@ app.post('/api/properties/:id/title-events', authGuard, writeGuard, asyncRoute(a
   res.status(201).json({ item: insertResult.rows[0] });
 }));
 
-app.post('/api/properties/:id/title-events/:eventId/review', authGuard, writeGuard, asyncRoute(async (req, res) => {
+app.post('/api/properties/:id/title-events/:eventId/review', authGuard, legalReviewerGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const eventRes = await pool.query(
     'SELECT * FROM title_events WHERE id=$1 AND property_id=$2 AND tenant_id=$3',
@@ -1345,7 +1559,7 @@ app.get('/api/legal-research/bookmarks', authGuard, asyncRoute(async (req, res) 
   res.json({ items: result.rows });
 }));
 
-app.post('/api/legal-research/bookmarks', authGuard, asyncRoute(async (req, res) => {
+app.post('/api/legal-research/bookmarks', authGuard, writeGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const { actId, sectionNumber, title, notes, propertyId } = req.body;
   if (!actId || !sectionNumber || !title) return res.status(400).json({ error: 'actId, sectionNumber, and title are required.' });
@@ -1358,7 +1572,7 @@ app.post('/api/legal-research/bookmarks', authGuard, asyncRoute(async (req, res)
   res.status(201).json({ item: result.rows[0] });
 }));
 
-app.delete('/api/legal-research/bookmarks/:id', authGuard, asyncRoute(async (req, res) => {
+app.delete('/api/legal-research/bookmarks/:id', authGuard, writeGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   await pool.query('DELETE FROM legal_bookmarks WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user?.tenantId]);
   res.json({ success: true });
@@ -1391,7 +1605,7 @@ app.get('/api/source-registry/properties/:id', authGuard, asyncRoute(async (req,
   res.json({ items: verifications.rows });
 }));
 
-app.post('/api/source-registry/properties/:id/verify', authGuard, asyncRoute(async (req, res) => {
+app.post('/api/source-registry/properties/:id/verify', authGuard, writeGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user?.tenantId]);
   if (!p.rows.length) return res.status(404).json({ error: 'Property not found.' });
@@ -1439,7 +1653,7 @@ app.post('/api/source-registry/properties/:id/verify', authGuard, asyncRoute(asy
   res.json(results);
 }));
 
-app.post('/api/source-registry/properties/:id/verify/:registryName', authGuard, asyncRoute(async (req, res) => {
+app.post('/api/source-registry/properties/:id/verify/:registryName', authGuard, writeGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const regName = req.params.registryName as RegistryName;
   const p = await pool.query('SELECT * FROM properties WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user?.tenantId]);
@@ -1490,6 +1704,55 @@ app.post('/api/source-registry/properties/:id/verify/:registryName', authGuard, 
   );
 
   res.json({ verification: vResult });
+}));
+
+app.post('/api/source-registry/query', authGuard, asyncRoute(async (req, res) => {
+  const {
+    registry = 'all',
+    district = 'Bengaluru Urban',
+    taluk = 'Bengaluru South',
+    hobli = 'Begur',
+    village = 'Arakere',
+    surveyNumber = '34',
+    subdivision = 'A',
+    sroOffice = 'Jayanagar',
+    pidNumber,
+    reraNumber,
+    latitude,
+    longitude,
+    ownerNameQuery
+  } = req.body || {};
+
+  const queryParams: DirectRegistryQueryParams = {
+    registry,
+    district: String(district).trim(),
+    taluk: String(taluk).trim(),
+    hobli: String(hobli).trim(),
+    village: String(village).trim(),
+    surveyNumber: String(surveyNumber).trim() || '34',
+    subdivision: String(subdivision).trim() || 'A',
+    sroOffice: sroOffice ? String(sroOffice).trim() : undefined,
+    pidNumber: pidNumber ? String(pidNumber).trim() : undefined,
+    reraNumber: reraNumber ? String(reraNumber).trim() : undefined,
+    latitude: typeof latitude === 'number' ? latitude : undefined,
+    longitude: typeof longitude === 'number' ? longitude : undefined,
+    ownerNameQuery: ownerNameQuery ? String(ownerNameQuery).trim() : undefined,
+  };
+
+  const results = await sourceRegistryEngine.queryDirect(queryParams);
+
+  await audit(req.user?.uid || 'anon', req.user?.tenantId, 'query_registries', 'system', 'search-engine', {
+    registry,
+    surveyNumber: queryParams.surveyNumber,
+    village: queryParams.village,
+    verificationsCount: results.verifications.length,
+    overallTrustScore: results.overallTrustScorePct
+  });
+
+  res.json({
+    success: true,
+    ...results
+  });
 }));
 
 /* ==========================================================================
@@ -1549,7 +1812,7 @@ app.get('/api/settings', authGuard, asyncRoute(async (req, res) => {
   res.json({ settings: result.rows[0] });
 }));
 
-app.post('/api/settings', authGuard, asyncRoute(async (req, res) => {
+app.post('/api/settings', authGuard, adminGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const s = req.body || {};
   const result = await pool.query(

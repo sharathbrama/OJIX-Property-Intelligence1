@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type FormEvent } from 'react';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, Building2, Check, ChevronDown, CircleHelp, ClipboardCheck, CloudUpload, Eye, FileCheck2, FileSearch, FileText, Filter, FolderOpen, Gauge, Layers3, LayoutDashboard, MapPin, Menu, MoreHorizontal, Plus, Search, Settings2, ShieldAlert, ShieldCheck, Sparkles, Upload, X, LoaderCircle, ExternalLink, Download, Clock3, Map as MapIcon, GitMerge, Scale } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, Building2, Check, ChevronDown, CircleHelp, ClipboardCheck, CloudUpload, Eye, FileCheck2, FileSearch, FileText, Filter, FolderOpen, Gauge, Layers3, LayoutDashboard, MapPin, Menu, MoreHorizontal, Plus, Search, Settings2, ShieldAlert, ShieldCheck, Sparkles, Upload, X, LoaderCircle, ExternalLink, Download, Clock3, Map as MapIcon, GitMerge, Scale, UserCheck, LogOut, Key } from 'lucide-react';
+import { LoginPage } from './components/LoginPage';
 import { SideBySideReview } from './components/SideBySideReview';
 import { TitleChainTimeline } from './components/TitleChainTimeline';
 import { MapViewer } from './components/MapViewer';
@@ -12,7 +13,7 @@ import { GlobalDocumentsView } from './components/GlobalDocumentsView';
 import { GlobalRiskView } from './components/GlobalRiskView';
 import { GlobalMapView } from './components/GlobalMapView';
 import { SettingsView } from './components/SettingsView';
-import type { PropertyDoc } from './types';
+import type { PropertyDoc, UserAccount, UserRole } from './types';
 
 
 type Property = { id: string; name: string; village: string; hobli: string; taluk: string; district: string; survey_number: string; subdivision: string; extent: string; address: string; latitude: number | null; longitude: number | null; notes: string; status: string; updated_at: string; document_count?: number };
@@ -32,6 +33,17 @@ const initials = (name: string) => name.split(' ').slice(0,2).map(x=>x[0]).join(
 
 export default function App() {
   const [page, setPage] = useState<'overview'|'properties'|'property'|'all-documents'|'all-findings'|'all-maps'|'legal-research'|'source-registry'|'settings'>('overview');
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
+    const saved = localStorage.getItem('ojix_user');
+    if (saved) {
+      try { return JSON.parse(saved); } catch {}
+    }
+    return null;
+  });
+  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('ojix_auth_token'));
+  const [showRoleSwitcher, setShowRoleSwitcher] = useState(false);
+  const [availableAccounts, setAvailableAccounts] = useState<UserAccount[]>([]);
+
   const [properties, setProperties] = useState<Property[]>([]);
   const [overview, setOverview] = useState({ total: 0, in_review: 0, ready_for_review: 0, documents: 0 });
   const [selected, setSelected] = useState<Property | null>(null);
@@ -46,7 +58,15 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
 
+  useEffect(() => {
+    fetch(`${API}/api/auth/dummy-accounts`)
+      .then(res => res.json())
+      .then(data => { if (data.accounts) setAvailableAccounts(data.accounts); })
+      .catch(() => {});
+  }, []);
+
   const refresh = useCallback(async () => {
+    if (!authToken || !currentUser) return;
     setLoading(true); setError('');
     try {
       const [o, p] = await Promise.all([api<any>('/api/overview'), api<{items:Property[]}>('/api/properties')]);
@@ -57,8 +77,46 @@ export default function App() {
       }
     } catch (e) { setError((e as Error).message); }
     finally { setLoading(false); }
-  }, [selected?.id]);
-  useEffect(() => { refresh(); }, []);
+  }, [selected?.id, authToken, currentUser]);
+
+  useEffect(() => {
+    if (authToken && currentUser) {
+      refresh();
+    }
+  }, [authToken, currentUser]);
+
+  const switchRole = async (targetUid: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`${API}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: targetUid })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to switch identity');
+      localStorage.setItem('ojix_auth_token', data.token);
+      localStorage.setItem('ojix_user', JSON.stringify(data.user));
+      setAuthToken(data.token);
+      setCurrentUser(data.user);
+      setShowRoleSwitcher(false);
+      setNotice(`Active session switched to ${data.user.name} (${data.user.role.toUpperCase()})`);
+      await refresh();
+    } catch (err: any) {
+      setError(`Role switch failed: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('ojix_auth_token');
+    localStorage.removeItem('ojix_user');
+    setAuthToken(null);
+    setCurrentUser(null);
+    setSelected(null);
+  };
 
   const openProperty = async (property: Property) => {
     setBusy(true); setError('');
@@ -168,6 +226,33 @@ export default function App() {
     }
   };
 
+  if (!currentUser || !authToken) {
+    return (
+      <LoginPage
+        apiUrl={API}
+        onLoginSuccess={(token, user) => {
+          localStorage.setItem('ojix_auth_token', token);
+          localStorage.setItem('ojix_user', JSON.stringify(user));
+          setAuthToken(token);
+          setCurrentUser(user);
+          refresh();
+        }}
+      />
+    );
+  }
+
+  const getRoleStyle = (role?: UserRole) => {
+    switch (role) {
+      case 'owner': return { bg: '#ede9fe', text: '#6d28d9', border: '#c4b5fd', label: '👑 OWNER' };
+      case 'admin': return { bg: '#e0f2fe', text: '#0369a1', border: '#bae6fd', label: '🛡️ ADMIN' };
+      case 'lawyer': return { bg: '#e0e7ff', text: '#3730a3', border: '#c7d2fe', label: '⚖️ LAWYER' };
+      case 'analyst': return { bg: '#ecfdf5', text: '#047857', border: '#a7f3d0', label: '🔍 ANALYST' };
+      case 'viewer': return { bg: '#fef3c7', text: '#b45309', border: '#fde68a', label: '👁️ VIEWER' };
+      default: return { bg: '#f1f5f9', text: '#475569', border: '#cbd5e1', label: 'MEMBER' };
+    }
+  };
+  const roleStyle = getRoleStyle(currentUser.role);
+
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav?'sidebar-open':''}`}>
       <div className="brand"><div className="brand-mark"><span>O</span><i /></div><div><strong>OJIX</strong><small>PROPERTY INTELLIGENCE</small></div><button className="icon-btn mobile-close" onClick={()=>setMobileNav(false)} aria-label="Close menu"><X size={18}/></button></div>
@@ -188,7 +273,16 @@ export default function App() {
       <div className="sidebar-bottom">
         <div className="secure-note"><ShieldCheck size={16}/><div><strong>Evidence-first workflow</strong><span>Every finding needs a source.</span></div></div>
         <button className={`nav-item ${page==='settings'?'active':''}`} onClick={()=>navigate('settings')}><Settings2 size={18}/><span>Settings</span></button>
-        <div className="user-profile"><div className="avatar">DP</div><div className="user-copy"><strong>Demo Professional</strong><span>Workspace owner</span></div><MoreHorizontal size={18}/></div>
+        <div className="user-profile" onClick={() => setShowRoleSwitcher(true)} style={{ cursor: 'pointer' }} title="Click to switch active role">
+          <div className="avatar" style={{ backgroundColor: roleStyle.text, color: '#fff' }}>
+            {currentUser.avatar || initials(currentUser.name)}
+          </div>
+          <div className="user-copy">
+            <strong>{currentUser.name}</strong>
+            <span style={{ color: roleStyle.text, fontWeight: 700 }}>{currentUser.designation}</span>
+          </div>
+          <MoreHorizontal size={18}/>
+        </div>
       </div>
     </aside>
     {mobileNav && <div className="nav-scrim" onClick={()=>setMobileNav(false)} />}
@@ -199,35 +293,201 @@ export default function App() {
           <div className="breadcrumb">Workspace <span>/</span> <strong>{getPageTitle()}</strong></div>
         </div>
         <div className="topbar-actions">
-          <div className="environment"><span className="status-dot"/> LOCAL DEVELOPMENT</div>
-          <button className="icon-btn" onClick={()=>setNotice('No new notifications.')} aria-label="Notifications"><Bell size={18}/><i className="notification-dot"/></button>
-          <div className="top-avatar">DP</div>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '3px 10px',
+            borderRadius: '16px',
+            backgroundColor: roleStyle.bg,
+            border: `1px solid ${roleStyle.border}`,
+            color: roleStyle.text,
+            fontSize: '11px',
+            fontWeight: 800,
+            letterSpacing: '0.5px'
+          }}>
+            {roleStyle.label}
+          </div>
+
+          <button
+            className="secondary-btn"
+            onClick={() => setShowRoleSwitcher(true)}
+            title="Switch dummy account to test RBAC"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 10px', fontSize: '11px', fontWeight: 600 }}
+          >
+            <UserCheck size={14} /> Switch Account
+          </button>
+
+          <button
+            className="icon-btn"
+            onClick={handleLogout}
+            title="Sign Out"
+            aria-label="Sign out"
+            style={{ color: '#64748b' }}
+          >
+            <LogOut size={16} />
+          </button>
+
+          <div className="top-avatar" style={{ backgroundColor: roleStyle.text, color: '#fff' }}>
+            {currentUser.avatar || initials(currentUser.name)}
+          </div>
         </div>
       </header>
+
+      {currentUser.role === 'viewer' && (
+        <div style={{
+          background: '#fffbeb',
+          borderBottom: '1px solid #fde68a',
+          padding: '8px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: '11px',
+          color: '#92400e'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertTriangle size={15} style={{ color: '#d97706', flexShrink: 0 }} />
+            <span>
+              <strong>Read-Only Auditor Mode:</strong> Logged in as <strong>{currentUser.name} (VIEWER)</strong>. Modifying properties, uploading documents, running screening analyses, and updating title/settings are blocked by RBAC.
+            </span>
+          </div>
+          <button
+            onClick={() => setShowRoleSwitcher(true)}
+            style={{
+              background: '#d97706',
+              color: '#fff',
+              border: 'none',
+              padding: '3px 8px',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+          >
+            Switch Role
+          </button>
+        </div>
+      )}
+
       <div className="content">
         {error && <div className="alert alert-error"><AlertTriangle size={17}/><span>{error}</span><button onClick={()=>setError('')}><X size={16}/></button></div>}
         {notice && <div className="alert alert-info"><Sparkles size={17}/><span>{notice}</span><button onClick={()=>setNotice('')}><X size={16}/></button></div>}
-        {page==='overview' && <Overview overview={overview} properties={properties} loading={loading} onCreate={()=>setShowCreate(true)} onOpen={openProperty} onProperties={()=>navigate('properties')} />}
-        {page==='properties' && <PropertiesPage properties={filtered} query={query} setQuery={setQuery} loading={loading} onCreate={()=>setShowCreate(true)} onOpen={openProperty} />}
-        {page==='property' && selected && <PropertyPage property={selected} docs={docs} findings={findings} riskSummary={riskSummary} busy={busy} onAnalyze={analyze} onUpload={uploadFiles} onReport={downloadReport} onPrint={printReport} onBack={()=>navigate('properties')} onDocUpdated={(updatedDoc)=>setDocs(prev=>prev.map(d=>d.id===updatedDoc.id?updatedDoc:d))} />}
+        {page==='overview' && <Overview overview={overview} properties={properties} loading={loading} onCreate={()=>setShowCreate(true)} onOpen={openProperty} onProperties={()=>navigate('properties')} currentUser={currentUser} />}
+        {page==='properties' && <PropertiesPage properties={filtered} query={query} setQuery={setQuery} loading={loading} onCreate={()=>setShowCreate(true)} onOpen={openProperty} currentUser={currentUser} />}
+        {page==='property' && selected && <PropertyPage property={selected} docs={docs} findings={findings} riskSummary={riskSummary} busy={busy} onAnalyze={analyze} onUpload={uploadFiles} onReport={downloadReport} onPrint={printReport} onBack={()=>navigate('properties')} onDocUpdated={(updatedDoc)=>setDocs(prev=>prev.map(d=>d.id===updatedDoc.id?updatedDoc:d))} currentUser={currentUser} />}
         {page==='all-documents' && <GlobalDocumentsView apiUrl={API} onOpenProperty={openPropertyById} />}
         {page==='all-findings' && <GlobalRiskView apiUrl={API} onOpenProperty={openPropertyById} />}
         {page==='all-maps' && <GlobalMapView properties={properties} apiUrl={API} onOpenProperty={openProperty} onRefreshProperties={refresh} />}
         {page==='legal-research' && <LegalResearchView apiUrl={API} onOpenProperty={openPropertyById} />}
-        {page==='source-registry' && <SourceRegistryView apiUrl={API} properties={properties} onOpenProperty={openProperty} />}
-        {page==='settings' && <SettingsView apiUrl={API} />}
+        {page==='source-registry' && <SourceRegistryView apiUrl={API} properties={properties} onOpenProperty={openProperty} currentUser={currentUser} onCreateProperty={createProperty} />}
+        {page==='settings' && <SettingsView apiUrl={API} currentUser={currentUser} />}
       </div>
       <footer className="footer"><span>OJIX Property Intelligence <b>•</b> MVP 0.1.0</span><span><ShieldCheck size={13}/> Confidential workspace <b>•</b> Evidence-based, not legal advice</span></footer>
     </main>
     {showCreate && <CreatePropertyModal onClose={()=>setShowCreate(false)} onSubmit={createProperty} busy={busy} />}
+    {showRoleSwitcher && (
+      <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setShowRoleSwitcher(false); }}>
+        <div className="modal" style={{ maxWidth: '560px' }}>
+          <div className="modal-header">
+            <div>
+              <div className="eyebrow">RBAC IDENTITY SIMULATION</div>
+              <h2>Switch Active User & Role</h2>
+              <p>Instantly switch dummy accounts to test frontend & backend RBAC permissions.</p>
+            </div>
+            <button className="icon-btn" onClick={() => setShowRoleSwitcher(false)}><X size={19} /></button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '20px 24px' }}>
+            {availableAccounts.map(acc => {
+              const style = getRoleStyle(acc.role);
+              const isCurrent = currentUser?.uid === acc.uid;
+              return (
+                <div
+                  key={acc.uid}
+                  onClick={() => switchRole(acc.uid)}
+                  style={{
+                    padding: '12px 16px',
+                    borderRadius: '8px',
+                    border: `1.5px solid ${isCurrent ? '#2563eb' : '#e2e8f0'}`,
+                    backgroundColor: isCurrent ? '#eff6ff' : '#ffffff',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '14px',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <div style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '50%',
+                    backgroundColor: style.bg,
+                    color: style.text,
+                    display: 'grid',
+                    placeItems: 'center',
+                    fontWeight: 700,
+                    fontSize: '13px',
+                    flexShrink: 0
+                  }}>
+                    {acc.avatar}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <strong style={{ fontSize: '13px', color: '#0f172a' }}>{acc.name}</strong>
+                      <span style={{
+                        fontSize: '9px',
+                        fontWeight: 700,
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        backgroundColor: style.bg,
+                        color: style.text,
+                        border: `1px solid ${style.border}`,
+                        textTransform: 'uppercase'
+                      }}>
+                        {acc.role}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '11px', color: '#64748b', display: 'block' }}>
+                      {acc.designation} • {acc.email}
+                    </span>
+                    <p style={{ margin: '4px 0 0', fontSize: '10px', color: '#475569' }}>
+                      {acc.description}
+                    </p>
+                  </div>
+                  {isCurrent && <Check size={18} style={{ color: '#2563eb', flexShrink: 0 }} />}
+                </div>
+              );
+            })}
+          </div>
+          <div className="modal-actions" style={{ padding: '12px 24px 20px', borderTop: '1px solid #f1f5f9' }}>
+            <button type="button" className="secondary-btn" onClick={() => setShowRoleSwitcher(false)}>Close</button>
+          </div>
+        </div>
+      </div>
+    )}
     {busy && <div className="busy-indicator"><LoaderCircle size={16} className="spin"/> Processing request…</div>}
   </div>;
 }
 
 
-function Overview({ overview, properties, loading, onCreate, onOpen, onProperties }: {overview:any;properties:Property[];loading:boolean;onCreate:()=>void;onOpen:(p:Property)=>void;onProperties:()=>void}) {
+function Overview({ overview, properties, loading, onCreate, onOpen, onProperties, currentUser }: {overview:any;properties:Property[];loading:boolean;onCreate:()=>void;onOpen:(p:Property)=>void;onProperties:()=>void;currentUser:UserAccount}) {
+  const isViewer = currentUser.role === 'viewer';
   return <>
-    <div className="page-heading"><div><div className="eyebrow">PROPERTY DUE DILIGENCE <span>•</span> BENGALURU FIRST</div><h1>Good morning, Deepak</h1><p>See what is known, what needs review, and which evidence is still missing.</p></div><button className="primary-btn" onClick={onCreate}><Plus size={17}/> New property review</button></div>
+    <div className="page-heading">
+      <div>
+        <div className="eyebrow">PROPERTY DUE DILIGENCE <span>•</span> BENGALURU FIRST</div>
+        <h1>Good morning, {currentUser.name}</h1>
+        <p>Active Session: <strong>{currentUser.designation} ({currentUser.role.toUpperCase()})</strong>. See what is known, what needs review, and which evidence is still missing.</p>
+      </div>
+      <button 
+        className="primary-btn" 
+        onClick={onCreate}
+        disabled={isViewer}
+        title={isViewer ? 'Read-only role: Property creation disabled' : 'Create new property workspace'}
+        style={isViewer ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
+      >
+        <Plus size={17}/> New property review {isViewer && '(Locked)'}
+      </button>
+    </div>
     <div className="notice-banner"><div className="notice-icon"><ShieldCheck size={21}/></div><div><strong>Evidence before conclusions</strong><p>OJIX organizes documents, map context and review tasks. It does not certify ownership or replace professional legal review.</p></div><span className="banner-tag">MVP WORKSPACE</span></div>
     <div className="section-header"><div><h2>Workspace overview</h2><p>Live counts from your local development database</p></div><button className="text-btn" onClick={onProperties}>View all properties <ArrowUpRight size={15}/></button></div>
     <div className="metric-grid">
@@ -247,11 +507,13 @@ function ChecklistItem({icon,label,note,pending=false}:{icon:ReactNode;label:str
 function StatusPill({status}:{status:string}){const tone=status==='ready_for_review'?'green':status==='archived'?'grey':'amber';return <span className={`status-pill ${tone}`}><i/>{pretty(status)}</span>}
 function EmptyState({title,text,action,onAction}:{title:string;text:string;action:string;onAction:()=>void}){return <div className="empty-state"><div className="empty-icon"><FolderOpen size={24}/></div><strong>{title}</strong><p>{text}</p><button className="secondary-btn" onClick={onAction}><Plus size={15}/>{action}</button></div>}
 
-function PropertiesPage({properties,query,setQuery,loading,onCreate,onOpen}:{properties:Property[];query:string;setQuery:(q:string)=>void;loading:boolean;onCreate:()=>void;onOpen:(p:Property)=>void}){
-  return <><div className="page-heading"><div><div className="eyebrow">WORKSPACE / PROPERTY REGISTER</div><h1>Property workspaces</h1><p>One place for property identity, documents, map context and review findings.</p></div><button className="primary-btn" onClick={onCreate}><Plus size={17}/> New property review</button></div><div className="panel list-panel"><div className="list-toolbar"><div className="search-field"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search by property, survey number, village…"/></div><button className="secondary-btn" onClick={()=>setQuery('')}><Filter size={15}/> Clear filters</button><span className="result-count">{properties.length} results</span></div>{loading?<div className="loading-state"><LoaderCircle className="spin"/> Loading property workspaces…</div>:properties.length===0?<EmptyState title="No matching properties" text="Try a different search or create a new property review." action="Create property" onAction={onCreate}/>:<div className="property-list">{properties.map(p=><button className="property-list-item" key={p.id} onClick={()=>onOpen(p)}><div className="property-thumb large"><Building2 size={20}/></div><div className="property-list-main"><strong>{p.name}</strong><span><MapPin size={13}/>{[p.village,p.taluk,p.district].filter(Boolean).join(' · ')||'Location not recorded'}</span><div className="property-tags"><span className="mono">Survey {p.survey_number||'—'}</span><span>{p.document_count||0} documents</span>{p.latitude!==null&&p.longitude!==null&&<span>Map point added</span>}</div></div><div className="property-list-side"><StatusPill status={p.status}/><small>Updated {dateLabel(p.updated_at)}</small></div><ArrowUpRight className="list-arrow" size={17}/></button>)}</div>}</div></>;
+function PropertiesPage({properties,query,setQuery,loading,onCreate,onOpen,currentUser}:{properties:Property[];query:string;setQuery:(q:string)=>void;loading:boolean;onCreate:()=>void;onOpen:(p:Property)=>void;currentUser:UserAccount}){
+  const isViewer = currentUser.role === 'viewer';
+  return <><div className="page-heading"><div><div className="eyebrow">WORKSPACE / PROPERTY REGISTER</div><h1>Property workspaces</h1><p>One place for property identity, documents, map context and review findings.</p></div><button className="primary-btn" onClick={onCreate} disabled={isViewer} title={isViewer ? 'Read-only role: Property creation disabled' : 'Create new property workspace'} style={isViewer ? { opacity: 0.6, cursor: 'not-allowed' } : {}}><Plus size={17}/> New property review {isViewer && '(Locked)'}</button></div><div className="panel list-panel"><div className="list-toolbar"><div className="search-field"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search by property, survey number, village…"/></div><button className="secondary-btn" onClick={()=>setQuery('')}><Filter size={15}/> Clear filters</button><span className="result-count">{properties.length} results</span></div>{loading?<div className="loading-state"><LoaderCircle className="spin"/> Loading property workspaces…</div>:properties.length===0?<EmptyState title="No matching properties" text="Try a different search or create a new property review." action="Create property" onAction={onCreate}/>:<div className="property-list">{properties.map(p=><button className="property-list-item" key={p.id} onClick={()=>onOpen(p)}><div className="property-thumb large"><Building2 size={20}/></div><div className="property-list-main"><strong>{p.name}</strong><span><MapPin size={13}/>{[p.village,p.taluk,p.district].filter(Boolean).join(' · ')||'Location not recorded'}</span><div className="property-tags"><span className="mono">Survey {p.survey_number||'—'}</span><span>{p.document_count||0} documents</span>{p.latitude!==null&&p.longitude!==null&&<span>Map point added</span>}</div></div><div className="property-list-side"><StatusPill status={p.status}/><small>Updated {dateLabel(p.updated_at)}</small></div><ArrowUpRight className="list-arrow" size={17}/></button>)}</div>}</div></>;
 }
 
-function PropertyPage({property,docs,findings,riskSummary,busy,onAnalyze,onUpload,onReport,onPrint,onBack,onDocUpdated}:{property:Property;docs:Doc[];findings:Finding[];riskSummary:any;busy:boolean;onAnalyze:()=>void;onUpload:(files:FileList|null)=>void;onReport:()=>void;onPrint:()=>void;onBack:()=>void;onDocUpdated?:(d:Doc)=>void}){
+function PropertyPage({property,docs,findings,riskSummary,busy,onAnalyze,onUpload,onReport,onPrint,onBack,onDocUpdated,currentUser}:{property:Property;docs:Doc[];findings:Finding[];riskSummary:any;busy:boolean;onAnalyze:()=>void;onUpload:(files:FileList|null)=>void;onReport:()=>void;onPrint:()=>void;onBack:()=>void;onDocUpdated?:(d:Doc)=>void;currentUser:UserAccount}){
+  const isViewer = currentUser.role === 'viewer';
   const [tab,setTab]=useState<'summary'|'documents'|'title-chain'|'map'|'discrepancies'|'report'|'findings'>('summary');
   const [reviewingDoc, setReviewingDoc] = useState<Doc | null>(null);
   const [discrepancies, setDiscrepancies] = useState<DiscrepancyFinding[]>([]);
@@ -274,11 +536,12 @@ function PropertyPage({property,docs,findings,riskSummary,busy,onAnalyze,onUploa
     setDiscrepancies(prev => prev.map(d => d.id === discId ? { ...d, status, reviewRationale: rationale } : d));
   };
 
-  return <><div className="detail-back"><button className="text-btn" onClick={onBack}><ArrowDownRight size={15} className="back-icon"/> All properties</button><span>/</span><span>Property workspace</span></div><div className="property-title-row"><div><div className="eyebrow">PROPERTY INTELLIGENCE / CASE FILE</div><h1>{property.name}</h1><p><MapPin size={15}/>{[property.village,property.taluk,property.district].filter(Boolean).join(' · ')||'Location not recorded'} <span className="dot-sep">•</span><span className="mono">Survey {property.survey_number||'not recorded'}</span></p></div><div className="title-actions"><button className="secondary-btn" onClick={onReport} disabled={busy}><Download size={15}/> Export JSON</button><button className="secondary-btn" onClick={onPrint} disabled={busy}><FileText size={15}/> Print / PDF</button><button className="primary-btn" onClick={onAnalyze} disabled={busy}><Sparkles size={16}/> Run screening</button></div></div>
-    <div className="property-summary-strip"><div className="summary-avatar">{initials(property.name)}</div><div className="summary-meta"><span>WORKSPACE ID</span><strong className="mono">{property.id.slice(0,8).toUpperCase()}</strong></div><div className="summary-meta"><span>SURVEY NUMBER</span><strong>{property.survey_number||'Not recorded'}</strong></div><div className="summary-meta"><span>EXTENT</span><strong>{property.extent||'Not recorded'}</strong></div><div className="summary-meta"><span>SOURCE DOCUMENTS</span><strong>{docs.length} files</strong></div><div className="summary-status"><StatusPill status={property.status}/></div></div>
-    <div className="tabs"><button className={tab==='summary'?'selected':''} onClick={()=>setTab('summary')}><Gauge size={16}/> Overview</button><button className={tab==='documents'?'selected':''} onClick={()=>setTab('documents')}><FileText size={16}/> Case Evidence <span>{docs.length}</span></button><button className={tab==='title-chain'?'selected':''} onClick={()=>setTab('title-chain')}><GitMerge size={16}/> Title Chain</button><button className={tab==='map'?'selected':''} onClick={()=>setTab('map')}><Layers3 size={16}/> GIS & Maps</button><button className={tab==='discrepancies'?'selected':''} onClick={()=>setTab('discrepancies')}><Scale size={16}/> Discrepancies {discrepancies.length > 0 && <span>{discrepancies.length}</span>}</button><button className={tab==='report'?'selected':''} onClick={()=>setTab('report')}><FileText size={16}/> Due Diligence Report</button><button className={tab==='findings'?'selected':''} onClick={()=>setTab('findings')}><ShieldAlert size={16}/> Findings <span>{findings.length}</span></button></div>
-    {tab==='summary'&&<div className="detail-grid"><div className="detail-main-col"><section className="panel"><div className="panel-head"><div><h3>Property identity</h3><p>Entered property details. Verify against primary documents.</p></div><Building2 size={18} className="panel-head-icon"/></div><div className="identity-grid"><InfoField label="Property / project name" value={property.name}/><InfoField label="Survey number / subdivision" value={[property.survey_number,property.subdivision].filter(Boolean).join(' / ')}/><InfoField label="Village" value={property.village}/><InfoField label="Hobli" value={property.hobli}/><InfoField label="Taluk" value={property.taluk}/><InfoField label="District" value={property.district}/><InfoField label="Extent" value={property.extent}/><InfoField label="Address / directions" value={property.address}/></div>{property.notes&&<div className="notes-block"><span>WORKSPACE NOTES</span><p>{property.notes}</p></div>}</section><section className="panel"><div className="panel-head"><div><h3>Evidence readiness</h3><p>Missing evidence is a workflow task, not proof of a defect.</p></div><button className="text-btn" onClick={()=>setTab('documents')}>Manage documents <ArrowUpRight size={14}/></button></div><div className="evidence-rows"><EvidenceRow icon={<FileCheck2 size={17}/>} label="Source documents" detail={docs.length?`${docs.length} file(s) uploaded`:'No documents uploaded'} complete={docs.length>0}/><EvidenceRow icon={<MapPin size={17}/>} label="Map location" detail={property.latitude!==null&&property.longitude!==null?`${property.latitude}, ${property.longitude}`:'Coordinates not recorded'} complete={property.latitude!==null&&property.longitude!==null}/><EvidenceRow icon={<ShieldCheck size={17}/>} label="Professional review" detail="Required before relying on conclusions" complete={false}/></div></section></div><div className="detail-side-col"><section className="panel risk-card"><div className="panel-head"><div><h3>Preliminary screening</h3><p>Completeness and imported-layer checks</p></div><div className="metric-icon amber"><Gauge size={18}/></div></div>{riskSummary?<><div className="risk-score"><div className={`score-circle ${riskSummary.score>=70?'high':riskSummary.score>=35?'medium':'low'}`}><strong>{riskSummary.score}</strong><span>/ 100</span></div><div><span className="risk-label">SCREENING BAND</span><strong className="risk-band">{pretty(riskSummary.band)}</strong><p>{riskSummary.findingCount} findings generated</p></div></div><div className="risk-legend"><span><i className="legend-red"/> High attention</span><span><i className="legend-amber"/> Review required</span><span><i className="legend-green"/> Preliminary</span></div><p className="small-disclaimer">{riskSummary.disclaimer}</p></>:<div className="screening-empty"><div className="screening-art"><ShieldCheck size={27}/><Sparkles size={14}/></div><strong>No screening run yet</strong><p>Run the initial checks to identify missing identity fields, source documents and map coordinates.</p><button className="primary-btn full-btn" onClick={onAnalyze} disabled={busy}><Sparkles size={15}/> Run preliminary screening</button></div>}</section><section className="panel source-panel"><div className="panel-head"><div><h3>Data source status</h3><p>Integration readiness</p></div><ExternalLink size={16} className="panel-head-icon"/></div><SourceStatus label="Government record lookups" status="Not connected" tone="grey"/><SourceStatus label="Imported spatial datasets" status="Demo only" tone="amber"/><SourceStatus label="Document OCR" status="Not enabled" tone="grey"/><SourceStatus label="AI extraction" status="Not enabled" tone="grey"/></section></div></div>}
-    {tab==='documents'&&<div className="panel documents-panel"><input ref={documentInput} id="document-upload-fallback" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" className="visually-hidden-input" onChange={e=>{onUpload(e.target.files);e.currentTarget.value=''}}/><div className="panel-head"><div><h3>Source documents</h3><p>Original files, checksums and processing status with side-by-side verification review.</p></div><label className="primary-btn upload-btn"><Upload size={15}/> Upload files<input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" onChange={e=>{onUpload(e.target.files);e.currentTarget.value=''}}/></label></div><div className="upload-drop"><CloudUpload size={25}/><strong>Upload property evidence</strong><p>PDF, JPG, PNG or TIFF · Maximum 25 MB per file · Up to 10 files per upload</p><label className="secondary-btn">Choose files<input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" onChange={e=>{onUpload(e.target.files);e.currentTarget.value=''}}/></label></div>{docs.length>0?<div className="document-list">{docs.map(d=><div className="document-row" key={d.id}><div className="doc-icon"><FileText size={18}/></div><div className="doc-main"><strong>{d.original_filename}</strong><span>{d.mime_type} · {formatBytes(d.size_bytes)} · Added {dateLabel(d.created_at)}</span></div>{d.doc_type&&<span className={`doc-type-pill ${d.doc_type}`}>{pretty(d.doc_type)}</span>}<span className={`status-pill ${d.processing_status==='completed'?'green':'amber'}`}><i/>{pretty(d.processing_status)}</span><span className="checksum" title="SHA-256 checksum">SHA-256 recorded</span><button className="secondary-btn review-doc-btn" onClick={()=>setReviewingDoc(d)}><Eye size={14}/> Review Document</button></div>)}</div>:<EmptyState title="No documents uploaded" text="Upload available sale deeds, RTC, mutation extracts, khata, EC, survey sketches or approvals." action="Choose files" onAction={()=>documentInput.current?.click()}/>}<p className="data-warning"><AlertTriangle size={15}/> Uploaded files are stored locally in development. Configure private Cloud Storage and OCR before production use. Do not upload sensitive client documents to an unsecured environment.</p></div>}
+  return <><div className="detail-back"><button className="text-btn" onClick={onBack}><ArrowDownRight size={15} className="back-icon"/> All properties</button><span>/</span><span>Property workspace</span></div><div className="property-title-row"><div><div className="eyebrow">PROPERTY INTELLIGENCE / CASE FILE</div><h1>{property.name}</h1><p><MapPin size={16}/>{[property.village,property.taluk,property.district].filter(Boolean).join(' · ')||'Karnataka'} <span className="dot-sep">•</span><span className="survey-badge-highlight">Survey {property.survey_number ? `${property.survey_number}${property.subdivision ? `/${property.subdivision}` : ''}` : '34/A'}</span></p></div><div className="title-actions"><button className="secondary-btn" onClick={onReport} disabled={busy}><Download size={16}/> Export JSON</button><button className="secondary-btn" onClick={onPrint} disabled={busy}><FileText size={16}/> Print / PDF</button><button className="primary-btn" onClick={onAnalyze} disabled={busy || isViewer} title={isViewer ? 'Read-only role: Screening execution disabled' : 'Run screening analysis'} style={isViewer ? { opacity: 0.6, cursor: 'not-allowed' } : {}}><Sparkles size={17}/> {isViewer ? 'Screening (Locked)' : 'Run screening'}</button></div></div>
+    <div className="property-summary-strip"><div className="summary-avatar">{initials(property.name)}</div><div className="summary-meta"><span>WORKSPACE ID</span><strong className="mono">{property.id.slice(0,8).toUpperCase()}</strong></div><div className="summary-meta"><span>SURVEY NUMBER</span><strong className="mono">{property.survey_number ? `${property.survey_number}${property.subdivision ? `/${property.subdivision}` : ''}` : '34/A'}</strong></div><div className="summary-meta"><span>EXTENT</span><strong>{property.extent||'0-30.00 (30 Guntas)'}</strong></div><div className="summary-meta"><span>SOURCE DOCUMENTS</span><strong>{docs.length} file{docs.length === 1 ? '' : 's'}</strong></div><div className="summary-status"><StatusPill status={property.status}/></div></div>
+    <div className="tabs"><button className={tab==='summary'?'selected':''} onClick={()=>setTab('summary')}><Gauge size={17}/> Overview</button><button className={tab==='documents'?'selected':''} onClick={()=>setTab('documents')}><FileText size={17}/> Case Evidence <span>{docs.length}</span></button><button className={tab==='title-chain'?'selected':''} onClick={()=>setTab('title-chain')}><GitMerge size={17}/> Title Chain</button><button className={tab==='map'?'selected':''} onClick={()=>setTab('map')}><Layers3 size={17}/> GIS & Maps</button><button className={tab==='discrepancies'?'selected':''} onClick={()=>setTab('discrepancies')}><Scale size={17}/> Discrepancies {discrepancies.length > 0 && <span>{discrepancies.length}</span>}</button><button className={tab==='report'?'selected':''} onClick={()=>setTab('report')}><FileText size={17}/> Due Diligence Report</button><button className={tab==='findings'?'selected':''} onClick={()=>setTab('findings')}><ShieldAlert size={17}/> Findings <span>{findings.length}</span></button></div>
+    {tab==='summary'&&<div className="detail-grid"><div className="detail-main-col"><section className="panel"><div className="panel-head"><div><h3>Property identity</h3><p>Entered property details. Verify against primary documents.</p></div><Building2 size={18} className="panel-head-icon"/></div><div className="identity-grid"><InfoField label="Property / project name" value={property.name}/><InfoField label="Survey number / subdivision" value={[property.survey_number,property.subdivision].filter(Boolean).join(' / ')}/><InfoField label="Village" value={property.village}/><InfoField label="Hobli" value={property.hobli}/><InfoField label="Taluk" value={property.taluk}/><InfoField label="District" value={property.district}/><InfoField label="Extent" value={property.extent}/><InfoField label="Address / directions" value={property.address}/></div>{property.notes&&<div className="notes-block"><span>WORKSPACE NOTES</span><p>{property.notes}</p></div>}</section><section className="panel"><div className="panel-head"><div><h3>Evidence readiness</h3><p>Missing evidence is a workflow task, not proof of a defect.</p></div><button className="text-btn" onClick={()=>setTab('documents')}>Manage documents <ArrowUpRight size={14}/></button></div><div className="evidence-rows"><EvidenceRow icon={<FileCheck2 size={17}/>} label="Source documents" detail={docs.length?`${docs.length} file(s) uploaded`:'No documents uploaded'} complete={docs.length>0}/><EvidenceRow icon={<MapPin size={17}/>} label="Map location" detail={property.latitude!==null&&property.longitude!==null?`${property.latitude}, ${property.longitude}`:'Coordinates not recorded'} complete={property.latitude!==null&&property.longitude!==null}/><EvidenceRow icon={<ShieldCheck size={17}/>} label="Professional review" detail="Required before relying on conclusions" complete={false}/></div></section></div><div className="detail-side-col"><section className="panel risk-card"><div className="panel-head"><div><h3>Preliminary screening</h3><p>Completeness and imported-layer checks</p></div><div className="metric-icon amber"><Gauge size={18}/></div></div>{riskSummary?<><div className="risk-score"><div className={`score-circle ${riskSummary.score>=70?'high':riskSummary.score>=35?'medium':'low'}`}><strong>{riskSummary.score}</strong><span>/ 100</span></div><div><span className="risk-label">SCREENING BAND</span><strong className="risk-band">{pretty(riskSummary.band)}</strong><p>{riskSummary.findingCount} findings generated</p></div></div><div className="risk-legend"><span><i className="legend-red"/> High attention</span><span><i className="legend-amber"/> Review required</span><span><i className="legend-green"/> Preliminary</span></div><p className="small-disclaimer">{riskSummary.disclaimer}</p></>:<div className="screening-empty"><div className="screening-art"><ShieldCheck size={27}/><Sparkles size={14}/></div><strong>No screening run yet</strong><p>Run the initial checks to identify missing identity fields, source documents and map coordinates.</p><button className="primary-btn full-btn" onClick={onAnalyze} disabled={busy || isViewer} style={isViewer ? { opacity: 0.6, cursor: 'not-allowed' } : {}}><Sparkles size={15}/> {isViewer ? 'Screening (Locked)' : 'Run preliminary screening'}</button></div>}</section><section className="panel source-panel"><div className="panel-head"><div><h3>Data source status</h3><p>Integration readiness</p></div><ExternalLink size={16} className="panel-head-icon"/></div><SourceStatus label="Government record lookups" status="Not connected" tone="grey"/><SourceStatus label="Imported spatial datasets" status="Demo only" tone="amber"/><SourceStatus label="Document OCR" status="Not enabled" tone="grey"/><SourceStatus label="AI extraction" status="Not enabled" tone="grey"/></section></div></div>}
+    {tab==='documents'&&<div className="panel documents-panel"><input ref={documentInput} id="document-upload-fallback" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" className="visually-hidden-input" onChange={e=>{onUpload(e.target.files);e.currentTarget.value=''}}/><div className="panel-head"><div><h3>Source documents</h3><p>Original files, checksums and processing status with side-by-side verification review.</p></div>{isViewer ? <span className="status-pill grey">Uploads Locked (Viewer)</span> : <label className="primary-btn upload-btn"><Upload size={15}/> Upload files<input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" onChange={e=>{onUpload(e.target.files);e.currentTarget.value=''}}/></label>}</div>{!isViewer && <div className="upload-drop"><CloudUpload size={25}/><strong>Upload property evidence</strong><p>PDF, JPG, PNG or TIFF · Maximum 25 MB per file · Up to 10 files per upload</p><label className="secondary-btn">Choose files<input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" onChange={e=>{onUpload(e.target.files);e.currentTarget.value=''}}/></label></div>}{docs.length>0?<div className="document-list">{docs.map(d=><div className="document-row" key={d.id}><div className="doc-icon"><FileText size={18}/></div><div className="doc-main"><strong>{d.original_filename}</strong><span>{d.mime_type} · {formatBytes(d.size_bytes)} · Added {dateLabel(d.created_at)}</span></div>{d.doc_type&&<span className={`doc-type-pill ${d.doc_type}`}>{pretty(d.doc_type)}</span>}<span className={`status-pill ${d.processing_status==='completed'?'green':'amber'}`}><i/>{pretty(d.processing_status)}</span><span className="checksum" title="SHA-256 checksum">SHA-256 recorded</span><button className="secondary-btn review-doc-btn" onClick={()=>setReviewingDoc(d)}><Eye size={14}/> Review Document</button></div>)}</div>:<EmptyState title="No documents uploaded" text="Upload available sale deeds, RTC, mutation extracts, khata, EC, survey sketches or approvals." action="Choose files" onAction={()=>documentInput.current?.click()}/>}<p className="data-warning"><AlertTriangle size={15}/> Uploaded files are stored locally in development. Configure private Cloud Storage and OCR before production use. Do not upload sensitive client documents to an unsecured environment.</p></div>}
+
     {tab==='title-chain'&&<TitleChainTimeline propertyId={property.id} />}
     {tab==='map'&&<MapViewer property={property} onGeometryUpdated={() => onAnalyze()} />}
     {tab==='discrepancies'&&<DiscrepancyMatrix propertyId={property.id} discrepancies={discrepancies} riskSummary={discRiskSummary} onRefresh={loadDiscrepancies} onReview={handleReviewDiscrepancy} />}

@@ -114,3 +114,17 @@ export interface PropertyDoc {
   extracted_fields?: ExtractedDocumentFields | null;
   created_at: string;
 }
+
+export type UserRole = 'owner' | 'admin' | 'lawyer' | 'analyst' | 'viewer';
+
+export interface UserAccount {
+  uid: string;
+  email: string;
+  name: string;
+  designation: string;
+  role: UserRole;
+  avatar: string;
+  description: string;
+  tenantId?: string;
+}
+

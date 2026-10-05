@@ -2,7 +2,13 @@ INSERT INTO organizations (id, name, slug)
 VALUES ('11111111-1111-4111-8111-111111111111', 'OJIX Local Demo Workspace', 'ojix-local-demo')
 ON CONFLICT (slug) DO NOTHING;
 INSERT INTO org_memberships (organization_id, user_uid, email, role)
-VALUES ('11111111-1111-4111-8111-111111111111', 'local-developer', 'developer@localhost', 'owner')
+VALUES 
+  ('11111111-1111-4111-8111-111111111111', 'local-developer', 'developer@localhost', 'owner'),
+  ('11111111-1111-4111-8111-111111111111', 'user-owner', 'owner@ojix.local', 'owner'),
+  ('11111111-1111-4111-8111-111111111111', 'user-admin', 'admin@ojix.local', 'admin'),
+  ('11111111-1111-4111-8111-111111111111', 'user-lawyer', 'lawyer@ojix.local', 'lawyer'),
+  ('11111111-1111-4111-8111-111111111111', 'user-analyst', 'analyst@ojix.local', 'analyst'),
+  ('11111111-1111-4111-8111-111111111111', 'user-viewer', 'viewer@ojix.local', 'viewer')
 ON CONFLICT (organization_id, user_uid) DO NOTHING;
 
 -- Synthetic example only. This is not an official parcel, survey, Rajakaluve, lake or planning dataset.
@@ -12,3 +18,4 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO spatial_layers (id, layer_type, label, source_name, data_status, geom, metadata)
 VALUES ('33333333-3333-4333-8333-333333333333', 'demo_reference', 'Synthetic reference polygon', 'OJIX synthetic demo seed', 'demo', ST_GeomFromText('POLYGON((77.594 12.886,77.598 12.886,77.598 12.889,77.594 12.889,77.594 12.886))',4326), '{"warning":"Not a real property boundary or government feature."}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
+

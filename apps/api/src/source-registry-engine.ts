@@ -61,6 +61,22 @@ export interface PropertyInputForRegistry {
   longitude?: number | null;
 }
 
+export interface DirectRegistryQueryParams {
+  registry?: 'all' | RegistryName;
+  district?: string;
+  taluk?: string;
+  hobli?: string;
+  village?: string;
+  surveyNumber: string;
+  subdivision?: string;
+  sroOffice?: string;
+  pidNumber?: string;
+  reraNumber?: string;
+  latitude?: number;
+  longitude?: number;
+  ownerNameQuery?: string;
+}
+
 export class SourceRegistryEngine {
   private healthCache: Record<RegistryName, RegistryHealth> = {
     bhoomi: {
@@ -111,7 +127,7 @@ export class SourceRegistryEngine {
       name: 'easthi',
       displayName: 'e-Aasthi & BBMP Municipal Register',
       department: 'Bruhat Bengaluru Mahanagara Palike / Urban Development',
-      officialUrl: 'https://bbmptax.karnataka.gov.in/',
+      officialUrl: 'https://bbmpeaasthi.karnataka.gov.in/',
       status: 'operational',
       uptimePct: 97.8,
       averageLatencyMs: 320,
@@ -486,6 +502,60 @@ export class SourceRegistryEngine {
       completedAt: new Date().toISOString()
     };
   }
+
+  /**
+   * Execute direct automated search query across one or all registries using custom parameters
+   */
+  async queryDirect(params: DirectRegistryQueryParams): Promise<{
+    queryParameters: DirectRegistryQueryParams;
+    verifications: RegistryVerificationResult[];
+    overallTrustScorePct: number;
+    totalDiscrepancies: number;
+    completedAt: string;
+  }> {
+    const dummyProp: PropertyInputForRegistry = {
+      id: crypto.randomUUID(),
+      name: `Direct Query: Sy. ${params.surveyNumber} (${params.village || 'Custom'})`,
+      village: params.village || 'Arakere',
+      hobli: params.hobli || 'Begur',
+      taluk: params.taluk || 'Bengaluru South',
+      district: params.district || 'Bengaluru Urban',
+      surveyNumber: params.surveyNumber || '34',
+      subdivision: params.subdivision || 'A',
+      latitude: params.latitude || 12.887,
+      longitude: params.longitude || 77.596,
+      extent: '0-30.00 (30 Guntas)'
+    };
+
+    const target = params.registry || 'all';
+    let verifications: RegistryVerificationResult[] = [];
+
+    if (target === 'all') {
+      const allResults = await this.verifyAll(dummyProp);
+      verifications = allResults.verifications;
+    } else {
+      switch (target) {
+        case 'bhoomi': verifications = [this.verifyBhoomi(dummyProp)]; break;
+        case 'kaveri': verifications = [this.verifyKaveri(dummyProp)]; break;
+        case 'mojini': verifications = [this.verifyMojini(dummyProp)]; break;
+        case 'dishaank': verifications = [this.verifyDishaank(dummyProp)]; break;
+        case 'easthi': verifications = [this.verifyEAasthi(dummyProp)]; break;
+        case 'rera': verifications = [this.verifyRera(dummyProp)]; break;
+      }
+    }
+
+    const totalDiscrepancies = verifications.reduce((sum, v) => sum + v.discrepancies.length, 0);
+    const avgScore = verifications.length ? Math.round(verifications.reduce((sum, v) => sum + v.matchScorePct, 0) / verifications.length) : 100;
+
+    return {
+      queryParameters: params,
+      verifications,
+      overallTrustScorePct: avgScore,
+      totalDiscrepancies,
+      completedAt: new Date().toISOString()
+    };
+  }
 }
 
 export const sourceRegistryEngine = new SourceRegistryEngine();
+

@@ -16,7 +16,9 @@ interface SettingsData {
   ocr_confidence_threshold: number;
 }
 
-export function SettingsView({ apiUrl }: { apiUrl: string }) {
+import type { UserAccount } from '../types';
+
+export function SettingsView({ apiUrl, currentUser }: { apiUrl: string; currentUser?: UserAccount | null }) {
   const [form, setForm] = useState<SettingsData>({
     org_name: 'Karnataka Legal Partners LLP',
     primary_contact: 'Deepak Professional (deepak@ojix.local)',
@@ -34,6 +36,7 @@ export function SettingsView({ apiUrl }: { apiUrl: string }) {
 
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
+  const isReadOnly = Boolean(currentUser && currentUser.role !== 'admin' && currentUser.role !== 'owner');
 
   useEffect(() => {
     fetchSettings();
@@ -49,6 +52,10 @@ export function SettingsView({ apiUrl }: { apiUrl: string }) {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) {
+      setNotice(`RBAC Permission Denied: Role '${currentUser?.role}' cannot modify workspace settings. Admin or Owner required.`);
+      return;
+    }
     setSaving(true);
     setNotice('');
     try {
@@ -58,6 +65,9 @@ export function SettingsView({ apiUrl }: { apiUrl: string }) {
         body: JSON.stringify(form)
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `Save failed with status ${res.status}`);
+      }
       if (data.settings) {
         setForm(data.settings);
         setNotice('Workspace configurations saved and applied across all due-diligence engines.');
@@ -78,6 +88,12 @@ export function SettingsView({ apiUrl }: { apiUrl: string }) {
           <p>Configure legal organization credentials, spatial buffer rules, tolerance margins, and OCR thresholds.</p>
         </div>
       </div>
+
+      {isReadOnly && (
+        <div className="alert alert-warning" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', marginBottom: '16px' }}>
+          <span><strong>RBAC Policy:</strong> Workspace configuration is restricted to Administrators and Owners. Your current role is <strong>{currentUser?.role?.toUpperCase()}</strong>.</span>
+        </div>
+      )}
 
       {notice && (
         <div className="alert alert-info">
