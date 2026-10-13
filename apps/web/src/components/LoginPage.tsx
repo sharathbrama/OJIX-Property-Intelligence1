@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, BriefcaseBusiness, Scale, BadgeCheck, Activity } from 'lucide-react';
 import type { UserAccount, UserRole } from '../types';
 
 interface LoginPageProps {
@@ -8,14 +8,37 @@ interface LoginPageProps {
 }
 
 export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
+  const [mode, setMode] = useState<'login'|'login-otp'|'register'|'otp'|'verified'>('login');
   const [dummyAccounts, setDummyAccounts] = useState<UserAccount[]>([]);
   const [selectedUid, setSelectedUid] = useState<string>('user-owner');
   const [email, setEmail] = useState<string>('owner@ojix.local');
   const [password, setPassword] = useState<string>('ojix123');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [registerName, setRegisterName] = useState('');
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [otp, setOtp] = useState('');
+  const [challengeId, setChallengeId] = useState('');
+  const [developmentOtp, setDevelopmentOtp] = useState('');
+  const [serviceStatus, setServiceStatus] = useState<'checking'|'ready'|'unavailable'>('checking');
+  const [serviceMessage, setServiceMessage] = useState('Checking API and database…');
 
   useEffect(() => {
+    fetch(`${apiUrl}/health`)
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.database !== 'connected') throw new Error(data.error || 'Database is not ready.');
+        setServiceStatus('ready');
+        setServiceMessage(`API ready • ${data.databaseEngine || 'Database'} connected`);
+      })
+      .catch(() => {
+        setServiceStatus('unavailable');
+        setServiceMessage('API or database unavailable. Start the local stack and retry.');
+      });
+
     fetch(`${apiUrl}/api/auth/dummy-accounts`)
       .then(res => res.json())
       .then(data => {
@@ -63,6 +86,42 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
             description: 'Due Diligence Analyst — case intake, document upload, trigger preliminary analyses, and run registry sync.'
           },
           {
+            uid: 'user-operations',
+            email: 'operations@ojix.local',
+            name: 'Meera Kulkarni',
+            designation: 'Document Intake Specialist',
+            role: 'operations',
+            avatar: 'MK',
+            description: 'Paralegal / Operations — bulk document intake, property assignment, metadata checks, and processing follow-up.'
+          },
+          {
+            uid: 'user-consultant',
+            email: 'consultant@ojix.local',
+            name: 'Sanjay Hegde',
+            designation: 'Property Consultant',
+            role: 'consultant',
+            avatar: 'SH',
+            description: 'Property Consultant — matter access, client-ready dossier preparation, issue-list review, and approved exports.'
+          },
+          {
+            uid: 'user-support',
+            email: 'support@ojix.local',
+            name: 'Nikhil Dev',
+            designation: 'OJIX Support Engineer',
+            role: 'support',
+            avatar: 'ND',
+            description: 'OJIX Support — time-limited, read-only diagnostics with no business-data access by default.'
+          },
+          {
+            uid: 'user-data-steward',
+            email: 'steward@ojix.local',
+            name: 'Asha Iyer',
+            designation: 'OJIX Data Steward',
+            role: 'data_steward',
+            avatar: 'AI',
+            description: 'OJIX Data Steward — source mappings, rule configuration, ingestion quality, and reference-data governance.'
+          },
+          {
             uid: 'user-viewer',
             email: 'viewer@ojix.local',
             name: 'Vikram Mehta',
@@ -88,22 +147,74 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
     setError('');
 
     try {
-      const res = await fetch(`${apiUrl}/api/auth/login`, {
+      const res = await fetch(`${apiUrl}/api/auth/login/request-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, uid: selectedUid, password })
+        body: JSON.stringify({ email, password })
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Failed to authenticate');
       }
 
-      onLoginSuccess(data.token, data.user);
+      setChallengeId(data.challengeId);
+      setDevelopmentOtp(data.developmentOtp||'');
+      setOtp('');
+      setMode('login-otp');
     } catch (err: any) {
       setError(err.message || 'Login failed. Please check credentials.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const verifyLoginOtp = async (e: React.FormEvent) => {
+    e.preventDefault();setLoading(true);setError('');
+    try {
+      const res=await fetch(`${apiUrl}/api/auth/login/verify-otp`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId,email,otp})});
+      const data=await res.json();
+      if(!res.ok)throw new Error(data.error||'Unable to verify the sign-in code.');
+      onLoginSuccess(data.token,data.user);
+    } catch(err){setError(err instanceof Error?err.message:'OTP verification failed.');}
+    finally{setLoading(false);}
+  };
+
+  const requestOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (registerPassword !== confirmPassword) return setError('Passwords do not match.');
+    setLoading(true);
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/register/request-otp`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: registerName, email: registerEmail, password: registerPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unable to create registration.');
+      setChallengeId(data.challengeId);
+      setRegisterEmail(data.email);
+      setDevelopmentOtp(data.developmentOtp || '');
+      setMode('otp');
+    } catch (err) { setError(err instanceof Error ? err.message : 'Registration failed.'); }
+    finally { setLoading(false); }
+  };
+
+  const verifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(''); setLoading(true);
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/register/verify-otp`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeId, email: registerEmail, otp })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'OTP verification failed.');
+      setEmail(registerEmail);
+      setPassword(registerPassword);
+      setSelectedUid('');
+      setMode('verified');
+    } catch (err) { setError(err instanceof Error ? err.message : 'OTP verification failed.'); }
+    finally { setLoading(false); }
   };
 
   const getRoleBadgeColor = (role: UserRole) => {
@@ -112,12 +223,107 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
       case 'admin': return { bg: '#e0f2fe', text: '#0369a1', border: '#bae6fd' };
       case 'lawyer': return { bg: '#e0e7ff', text: '#3730a3', border: '#c7d2fe' };
       case 'analyst': return { bg: '#ecfdf5', text: '#047857', border: '#a7f3d0' };
+      case 'operations': return { bg: '#fff7ed', text: '#c2410c', border: '#fed7aa' };
+      case 'consultant': return { bg: '#f0fdfa', text: '#0f766e', border: '#99f6e4' };
+      case 'support': return { bg: '#f5f3ff', text: '#7c3aed', border: '#ddd6fe' };
+      case 'data_steward': return { bg: '#ecfeff', text: '#0e7490', border: '#a5f3fc' };
       case 'viewer': return { bg: '#f1f5f9', text: '#475569', border: '#cbd5e1' };
       default: return { bg: '#f1f5f9', text: '#475569', border: '#cbd5e1' };
     }
   };
 
-  const currentAccount = dummyAccounts.find(a => a.uid === selectedUid) || dummyAccounts[0];
+  const currentAccount = dummyAccounts.find(a => a.uid === selectedUid) || (selectedUid ? dummyAccounts[0] : {
+    uid: '', email, name: registerName || 'Registered member', designation: 'Registered Reviewer',
+    role: 'viewer' as UserRole, avatar: (registerName || 'RM').split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase(),
+    description: 'Verified read-only workspace member'
+  });
+
+  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card"><div className="executive-brand-mark otp"><span>O</span><i/></div><span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span><h1>Confirm your secure sign-in</h1><p>Enter the six-digit code for <strong>{email}</strong>. It expires in 10 minutes and can be used only once.</p>{developmentOtp&&<div className="executive-development-otp"><span>LOCAL DEVELOPMENT CODE</span><strong>{developmentOtp}</strong><small>Configure RESEND_API_KEY and a real email address for email delivery.</small></div>}{error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}<form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form><div className="executive-otp-actions"><button onClick={()=>{setMode('login');setOtp('');setError('');}}>Back to sign in</button><button onClick={handleLogin as any}>Send a new code</button></div><p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p></section></main>;
+
+  if (mode !== 'login') {
+    const isOtp = mode === 'otp';
+    const isVerified = mode === 'verified';
+    return (
+      <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'radial-gradient(ellipse at 50% 20%, #1e293b 0%, #0f172a 100%)',padding:24,fontFamily:'Inter, system-ui, sans-serif'}}>
+        <div style={{width:'100%',maxWidth:520,background:'#fff',borderRadius:16,padding:36,boxShadow:'0 25px 50px -12px rgba(0,0,0,.4)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:24}}><div style={{width:38,height:38,borderRadius:9,background:'linear-gradient(135deg,#1e3a8a,#2563eb)',color:'#fff',display:'grid',placeItems:'center',fontWeight:900}}>O</div><div><strong style={{display:'block',color:'#0f172a'}}>OJIX Property Intelligence</strong><span style={{fontSize:11,color:'#64748b'}}>SECURE MEMBER ONBOARDING</span></div></div>
+          <div style={{display:'flex',gap:8,marginBottom:24}}>{['Account','Verify OTP','Sign in'].map((label,index)=>{const active=isVerified?2:isOtp?1:0;return <div key={label} style={{flex:1,fontSize:11,fontWeight:700,color:index<=active?'#1d4ed8':'#94a3b8'}}><div style={{height:3,borderRadius:3,background:index<=active?'#2563eb':'#e2e8f0',marginBottom:7}}/>{index+1}. {label}</div>})}</div>
+          <h2 style={{margin:'0 0 6px',fontSize:22,color:'#0f172a'}}>{isVerified?'Account verified':isOtp?'Verify your email':'Create your account'}</h2>
+          <p style={{margin:'0 0 22px',fontSize:13,color:'#64748b',lineHeight:1.5}}>{isVerified?'Registration is complete. Continue to the sign-in page using your new password.':isOtp?`Enter the six-digit code sent for ${registerEmail}. The code expires in 10 minutes.`:'First-time users must register and verify their email before signing in.'}</p>
+          {error&&<div style={{background:'#fef2f2',border:'1px solid #fecaca',color:'#991b1b',padding:'10px 12px',borderRadius:8,fontSize:12,marginBottom:16}}>{error}</div>}
+          {developmentOtp&&isOtp&&<div style={{background:'#eff6ff',border:'1px solid #bfdbfe',color:'#1e40af',padding:'12px',borderRadius:8,fontSize:12,marginBottom:16}}><strong>Development OTP:</strong> <code style={{fontSize:16,letterSpacing:3}}>{developmentOtp}</code><br/><span style={{fontSize:10}}>In production this code will be delivered by email or SMS and will not appear here.</span></div>}
+          {isVerified ? <button onClick={()=>{setMode('login');setError('');}} style={{width:'100%',padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>Continue to Sign In <ArrowRight size={16} style={{verticalAlign:'middle',marginLeft:6}}/></button> : isOtp ? (
+            <form onSubmit={verifyOtp} style={{display:'grid',gap:15}}><label style={{fontSize:11,fontWeight:700,color:'#334155'}}>SIX-DIGIT OTP<input autoFocus inputMode="numeric" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:7,padding:13,border:'1px solid #cbd5e1',borderRadius:8,fontSize:20,letterSpacing:8,textAlign:'center'}}/></label><button disabled={loading||otp.length!==6} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Verifying…':'Verify and Activate Account'}</button><button type="button" onClick={()=>{setMode('register');setOtp('');setError('');}} style={{border:0,background:'transparent',color:'#2563eb',cursor:'pointer'}}>Change registration details</button></form>
+          ) : (
+            <form onSubmit={requestOtp} style={{display:'grid',gap:14}}>
+              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>FULL NAME<input value={registerName} onChange={e=>setRegisterName(e.target.value)} required minLength={2} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
+              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>WORK EMAIL<input type="email" value={registerEmail} onChange={e=>setRegisterEmail(e.target.value)} required style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
+              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>CREATE PASSWORD<input type="password" value={registerPassword} onChange={e=>setRegisterPassword(e.target.value)} required minLength={8} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/><small style={{display:'block',marginTop:5,color:'#64748b',fontWeight:400}}>Minimum 8 characters with uppercase, lowercase and a number.</small></label>
+              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>CONFIRM PASSWORD<input type="password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} required style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
+              <button disabled={loading} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Creating OTP…':'Register and Send OTP'}</button>
+              <button type="button" onClick={()=>{setMode('login');setError('');}} style={{border:0,background:'transparent',color:'#2563eb',cursor:'pointer'}}>Already registered? Sign in</button>
+            </form>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const isOwner = currentAccount?.role === 'owner';
+  const ownerAccount = dummyAccounts.find(account => account.role === 'owner');
+
+  if (mode === 'login') return (
+    <main className="executive-login-shell">
+      <section className="executive-login-brand" aria-label="OJIX Property Intelligence">
+        <div className="executive-brand-mark"><span>O</span><i/></div>
+        <div className="executive-brand-name"><strong>OJIX</strong><span>PROPERTY INTELLIGENCE</span></div>
+        <div className="executive-brand-copy">
+          <div className="executive-kicker"><ShieldCheck size={14}/> EVIDENCE-FIRST LEGAL WORKSPACE</div>
+          <h1>Command every property matter with clarity.</h1>
+          <p>A controlled workspace for Karnataka property due diligence, document evidence, review assignments and auditable legal decisions.</p>
+        </div>
+        <div className="executive-feature-grid">
+          <article><BriefcaseBusiness/><div><strong>Portfolio command</strong><span>Applications, deadlines and team ownership</span></div></article>
+          <article><Scale/><div><strong>Legal review controls</strong><span>Evidence-linked findings and approvals</span></div></article>
+          <article><BadgeCheck/><div><strong>Release safeguards</strong><span>Verification required before completion</span></div></article>
+          <article><Activity/><div><strong>Complete audit trail</strong><span>Accountable workflow and change history</span></div></article>
+        </div>
+        <div className="executive-trust-note"><Lock size={15}/><span><strong>Private organisation workspace</strong>Access is role-controlled and every privileged action is recorded.</span></div>
+      </section>
+
+      <section className="executive-login-access">
+        <div className="executive-access-card">
+          <div className="executive-access-topline"><span className="executive-secure-pill"><ShieldCheck size={13}/> Secure access</span><span className={`executive-service ${serviceStatus}`}><i/>{serviceStatus==='checking'?'Checking services':serviceStatus==='ready'?'Systems available':'Service unavailable'}</span></div>
+          <div className="executive-user-heading">
+            <div className="executive-avatar">{currentAccount?.avatar||'RS'}</div>
+            <div><span>{isOwner?'MANAGING PARTNER ACCESS':'WORKSPACE ACCESS'}</span><h2>{isOwner?'Welcome back, Rajesh':`Welcome, ${currentAccount?.name}`}</h2><p>{isOwner?'Sign in to the Owner command centre.':currentAccount?.designation}</p></div>
+          </div>
+
+          {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
+          {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
+
+          <form className="executive-login-form" onSubmit={handleLogin}>
+            <label><span>Work email</span><div className="executive-input"><UserCheck/><input type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
+            <label><span>Password</span><div className="executive-input"><Lock/><input type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff/>:<Eye/>}</button></div></label>
+            <div className="executive-form-meta"><label><input type="checkbox"/> Keep me signed in</label><button type="button" onClick={()=>setError('Password recovery is not enabled in this local development workspace.')}>Forgot password?</button></div>
+            <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'}>{loading?<><span className="executive-spinner"/> Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
+          </form>
+
+          <div className="executive-local-access">
+            <div><strong>Local development access</strong><span>Use the configured demonstration identities to test role permissions.</span></div>
+            <select aria-label="Select demonstration account" value={selectedUid} onChange={event=>{const account=dummyAccounts.find(item=>item.uid===event.target.value);if(account)selectAccount(account);}}>
+              {dummyAccounts.map(account=><option value={account.uid} key={account.uid}>{account.name} — {account.designation}</option>)}
+            </select>
+            {ownerAccount&&selectedUid!=='user-owner'&&<button type="button" onClick={()=>selectAccount(ownerAccount)}>Return to Owner login</button>}
+            <small>Local password: <code>ojix123</code></small>
+          </div>
+
+          <button className="executive-register-link" type="button" onClick={()=>{setMode('register');setError('');}}>New authorised member? Register and verify access <ArrowRight size={13}/></button>
+          <p className="executive-legal">By continuing, you acknowledge that OJIX supports professional review and does not independently certify title, ownership or government records.</p>
+        </div>
+      </section>
+    </main>
+  );
 
   return (
     <div style={{
@@ -259,7 +465,7 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
           }}>
             <ShieldCheck size={16} style={{ color: '#059669', flexShrink: 0, marginTop: '1px' }} />
             <span>
-              All 6 Karnataka Government Portals (Bhoomi, Kaveri 2.0, Mojini, Dishaank, e-Aasthi, K-RERA) are integrated and ready for sync.
+              Official portal links are catalogued. Live government property-record connectors are not configured; use official downloads and verified uploads.
             </span>
           </div>
         </div>
@@ -273,6 +479,19 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
             <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
               Selected Identity: <strong style={{ color: '#1e293b' }}>{currentAccount?.name}</strong> ({currentAccount?.role?.toUpperCase()})
             </p>
+            <button type="button" onClick={()=>{setMode('register');setError('');}} style={{marginTop:10,border:0,background:'transparent',padding:0,color:'#2563eb',fontSize:12,fontWeight:700,cursor:'pointer'}}>First time here? Register and verify OTP</button>
+          </div>
+
+          <div
+            role="status"
+            style={{
+              marginBottom: '18px', padding: '9px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+              color: serviceStatus === 'ready' ? '#065f46' : serviceStatus === 'unavailable' ? '#991b1b' : '#475569',
+              background: serviceStatus === 'ready' ? '#ecfdf5' : serviceStatus === 'unavailable' ? '#fef2f2' : '#f8fafc',
+              border: `1px solid ${serviceStatus === 'ready' ? '#a7f3d0' : serviceStatus === 'unavailable' ? '#fecaca' : '#e2e8f0'}`
+            }}
+          >
+            {serviceMessage}
           </div>
 
           {error && (
@@ -369,7 +588,7 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
                   <>
                     <li>Organization & GIS buffer settings configuration</li>
                     <li>Manage property workspaces & case files</li>
-                    <li>Upload documents & run full government sync</li>
+                    <li>Upload official records & review source-connection status</li>
                     <li>Dispute / verify title chain events</li>
                   </>
                 )}
@@ -385,14 +604,14 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
                   <>
                     <li>Create property case files & intake survey data</li>
                     <li>Upload registered deeds & trigger document extraction</li>
-                    <li>Run multi-registry sync (Bhoomi, Kaveri, Mojini, etc.)</li>
+                    <li>Prepare source lookups and review uploaded official records</li>
                     <li style={{ color: '#94a3b8' }}>Senior legal sign-offs locked to Lawyer/Admin</li>
                   </>
                 )}
                 {currentAccount?.role === 'viewer' && (
                   <>
                     <li>Inspect property details, cadastral maps & findings</li>
-                    <li>View official government records & evidence hashes</li>
+                    <li>View uploaded evidence and clearly labelled connection status</li>
                     <li>Read-only auditor access: all mutations blocked with 403</li>
                   </>
                 )}

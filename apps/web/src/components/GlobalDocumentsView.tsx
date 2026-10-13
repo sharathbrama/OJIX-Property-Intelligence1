@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FileText, Search, Filter, Eye, ArrowUpRight, FolderOpen, ShieldCheck } from 'lucide-react';
+import { authFetch } from '../authFetch';
 
 interface GlobalDoc {
   id: string;
@@ -29,7 +30,7 @@ export function GlobalDocumentsView({ apiUrl, onOpenProperty }: { apiUrl: string
   const fetchDocs = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/documents/all`);
+      const res = await authFetch(`${apiUrl}/api/documents/all`);
       const data = await res.json();
       setDocs(data.items || []);
     } catch { /* graceful fallback */ }

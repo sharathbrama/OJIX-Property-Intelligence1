@@ -99,6 +99,13 @@ export interface ExtractedDocumentFields {
   consideration?: Consideration;
   overallConfidence: number;
   fieldConfidence: Record<string, number>;
+  fieldAnchors?: Record<string, EvidenceAnchor>;
+  extractionMetadata?: {
+    source: 'pending' | 'ocr' | 'provider' | 'reviewer_supplied' | 'text';
+    status: 'pending' | 'completed' | 'manual_review';
+    extractedAt?: string;
+    message?: string;
+  };
   reviewState: ReviewState;
 }
 
@@ -115,7 +122,7 @@ export interface PropertyDoc {
   created_at: string;
 }
 
-export type UserRole = 'owner' | 'admin' | 'lawyer' | 'analyst' | 'viewer';
+export type UserRole = 'owner' | 'admin' | 'lawyer' | 'analyst' | 'operations' | 'consultant' | 'support' | 'data_steward' | 'viewer';
 
 export interface UserAccount {
   uid: string;
@@ -126,5 +133,5 @@ export interface UserAccount {
   avatar: string;
   description: string;
   tenantId?: string;
+  accessExpiresAt?: string;
 }
-

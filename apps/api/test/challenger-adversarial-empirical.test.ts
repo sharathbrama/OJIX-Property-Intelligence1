@@ -1,12 +1,9 @@
 process.env.NODE_ENV = 'test';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import pg from 'pg';
+import { pool } from './mariadb-test-pool.js';
 import crypto from 'node:crypto';
 
-const { Pool } = pg;
-const dbUrl = process.env.DATABASE_URL || 'postgres://ojix:ojix_local_only@localhost:5433/ojix_property';
-const pool = new Pool({ connectionString: dbUrl });
 const serverBaseUrl = process.env.TEST_API_URL || 'http://localhost:4000';
 
 const PROPERTY_ID = '22222222-2222-4222-8222-222222222222';
@@ -19,15 +16,15 @@ async function createTestDoc(storageKey = 'dummy.pdf', initialFields = { documen
       id, tenant_id, property_id, doc_type, original_filename, storage_key,
       mime_type, size_bytes, sha256, processing_status, extracted_text,
       extracted_fields, uploaded_by_uid
-    ) VALUES ($1, $2, $3, 'sale_deed', 'test.pdf', $4, 'application/pdf', 1024,
+    ) VALUES (?, ?, ?, 'sale_deed', 'test.pdf', ?, 'application/pdf', 1024,
       'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      'completed', 'sample text', $5, 'local-developer')
+      'completed', 'sample text', ?, 'local-developer')
   `, [id, TENANT_ID, PROPERTY_ID, storageKey, JSON.stringify(initialFields)]);
   return id;
 }
 
 async function cleanupDoc(id: string) {
-  await pool.query('DELETE FROM documents WHERE id=$1', [id]);
+  await pool.query('DELETE FROM documents WHERE id=?', [id]);
 }
 
 test('EMPIRICAL PROTO-1: Prototype pollution via fieldPath __proto__.polluted is rejected with 400', async () => {
@@ -254,7 +251,7 @@ test('EMPIRICAL RATIONALE-4: Whitespace rationale inside overrides object return
   }
 });
 
-test('EMPIRICAL VALID-OVERRIDE: Legitimate PATCH /fields with valid rationale updates document and reviewState', async () => {
+test('EMPIRICAL VALID-OVERRIDE: Legitimate correction is audited but does not auto-verify the document', async () => {
   const docId = await createTestDoc();
   try {
     const rationaleText = 'Verified against certified copy from Sub-Registrar Office Gandhinagar';
@@ -271,7 +268,7 @@ test('EMPIRICAL VALID-OVERRIDE: Legitimate PATCH /fields with valid rationale up
     const data = await res.json();
     assert.ok(data.extractedFields, 'Extracted fields returned');
     assert.equal(data.extractedFields.propertySchedule.surveyNumber, '45/1A');
-    assert.equal(data.extractedFields.reviewState.isVerified, true);
+    assert.equal(data.extractedFields.reviewState.isVerified, false, 'A field correction must not silently verify the complete document');
     assert.equal(data.extractedFields.reviewState.overrides['propertySchedule.surveyNumber'].rationale, rationaleText);
     assert.equal(data.extractedFields.reviewState.overrides['propertySchedule.surveyNumber'].newValue, '45/1A');
   } finally {

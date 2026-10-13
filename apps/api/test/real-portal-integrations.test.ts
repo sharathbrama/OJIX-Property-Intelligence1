@@ -35,7 +35,7 @@ test('PORTAL INTEGRATION REAL TEST: Live HTTPS Connectivity to 6 Official Portal
   }
 });
 
-test('PORTAL INTEGRATION ENGINE: Live Gateway Health Probing Engine', async () => {
+test('SOURCE CATALOG: Portal reachability probe remains distinct from connector status', async () => {
   const healthList = await sourceRegistryEngine.getRegistryHealth(true);
   assert.equal(healthList.length, 6, 'Must monitor exactly 6 official Karnataka portals');
 
@@ -48,13 +48,14 @@ test('PORTAL INTEGRATION ENGINE: Live Gateway Health Probing Engine', async () =
   assert.ok(names.includes('rera'));
 
   for (const reg of healthList) {
-    assert.ok(reg.uptimePct >= 90, `${reg.displayName} uptime must be >= 90%`);
-    assert.ok(reg.averageLatencyMs > 0, `${reg.displayName} latency must be > 0ms`);
+    assert.equal(reg.status, 'not_connected');
+    assert.ok(['reachable', 'unreachable'].includes(reg.portalReachability));
+    assert.ok(reg.averageLatencyMs !== null && reg.averageLatencyMs >= 0, `${reg.displayName} probe latency must be recorded`);
     assert.ok(reg.recordTypes.length >= 2, `${reg.displayName} must specify statutory record types`);
   }
 });
 
-test('PORTAL INTEGRATION ENGINE: Direct Federated In-App Query Runner', async () => {
+test('SOURCE CATALOG: Direct query never fabricates registry records', async () => {
   const queryResult = await sourceRegistryEngine.queryDirect({
     registry: 'all',
     surveyNumber: '34',
@@ -67,45 +68,14 @@ test('PORTAL INTEGRATION ENGINE: Direct Federated In-App Query Runner', async ()
   });
 
   assert.equal(queryResult.verifications.length, 6, 'Federated search must return all 6 registries');
-  assert.ok(queryResult.overallTrustScorePct >= 90, 'Trust score should be high for valid inputs');
+  assert.equal(queryResult.overallTrustScorePct, 0);
   assert.ok(queryResult.completedAt, 'Completion timestamp must be recorded');
-
-  // Bhoomi verification assertions
-  const bhoomi = queryResult.verifications.find(v => v.registryName === 'bhoomi');
-  assert.ok(bhoomi, 'Bhoomi result must be present');
-  assert.equal(bhoomi.matchedRecord.surveyNumber, '34');
-  assert.equal(bhoomi.matchedRecord.village, 'Arakere');
-  assert.ok(bhoomi.matchedRecord.totalExtentAcreGunta, 'Total extent must be captured');
-  assert.ok(bhoomi.matchedRecord.lastMutationNumber, 'Mutation register number must be present');
-  assert.equal(bhoomi.evidenceHash.length, 64, 'SHA-256 evidence hash must be 64 hex characters');
-
-  // Kaveri verification assertions
-  const kaveri = queryResult.verifications.find(v => v.registryName === 'kaveri');
-  assert.ok(kaveri, 'Kaveri result must be present');
-  assert.ok(kaveri.matchedRecord.formIssued.includes('Form 15'), 'Must issue Form 15 EC');
-  assert.ok(kaveri.matchedRecord.registeredInstruments.length >= 1, 'Must contain registered deeds');
-
-  // Mojini verification assertions
-  const mojini = queryResult.verifications.find(v => v.registryName === 'mojini');
-  assert.ok(mojini, 'Mojini result must be present');
-  assert.ok(mojini.matchedRecord.mojiniApplicationId, 'Mojini 11E application ID must be present');
-  assert.ok(mojini.matchedRecord.boundaries.north, 'Boundary descriptions must be populated');
-
-  // Dishaank verification assertions
-  const dishaank = queryResult.verifications.find(v => v.registryName === 'dishaank');
-  assert.ok(dishaank, 'Dishaank result must be present');
-  assert.equal(dishaank.matchedRecord.waterbodyIntersection, false, 'Must screen lake / waterbody intersection');
-  assert.ok(dishaank.matchedRecord.lakeDistanceM > 30, 'Statutory lake buffer clearance check');
-
-  // e-Aasthi verification assertions
-  const easthi = queryResult.verifications.find(v => v.registryName === 'easthi');
-  assert.ok(easthi, 'e-Aasthi result must be present');
-  assert.ok(easthi.matchedRecord.khataClassification.includes('A-Khata'), 'Must classify khata');
-
-  // K-RERA verification assertions
-  const rera = queryResult.verifications.find(v => v.registryName === 'rera');
-  assert.ok(rera, 'K-RERA result must be present');
-  assert.equal(rera.matchedRecord.reraRegistrationStatus, 'Approved & Active');
+  for (const result of queryResult.verifications) {
+    assert.equal(result.status, 'not_connected');
+    assert.equal(result.matchedRecord.isOfficialRecord, false);
+    assert.equal(result.matchedRecord.dataStatus, 'not_connected');
+    assert.equal(result.evidenceHash.length, 64);
+  }
 });
 
 test('PORTAL INTEGRATION API: Live HTTP Status Endpoint with Gateway Probing', async () => {

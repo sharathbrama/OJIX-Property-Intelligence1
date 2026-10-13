@@ -34,7 +34,7 @@ test('Legal Research Engine: Gets single provision by ID with precedents', () =>
   assert.ok(item.mandatoryChecks.length >= 2);
 });
 
-test('Source Registry Engine: Reports operational status for all 6 Karnataka registries', async () => {
+test('Source Registry Engine: Reports all 6 sources as not connected', async () => {
   const healthList = await sourceRegistryEngine.getRegistryHealth();
   assert.equal(healthList.length, 6, 'Must include all 6 registries: Bhoomi, Kaveri, Mojini, Dishaank, e-Aasthi, RERA');
 
@@ -46,13 +46,13 @@ test('Source Registry Engine: Reports operational status for all 6 Karnataka reg
   assert.ok(names.includes('easthi'));
   assert.ok(names.includes('rera'));
   for (const h of healthList) {
-    assert.equal(h.status, 'operational');
-    assert.ok(h.uptimePct >= 95);
-    assert.ok(h.averageLatencyMs > 0);
+    assert.equal(h.status, 'not_connected');
+    assert.equal(h.portalReachability, 'not_checked');
+    assert.equal(h.uptimePct, null);
   }
 });
 
-test('Source Registry Engine: Bhoomi verification checks extent consistency', () => {
+test('Source Registry Engine: Bhoomi does not fabricate an official record', () => {
   const propConsistent = {
     id: 'prop-1',
     name: 'Sample Property',
@@ -62,25 +62,15 @@ test('Source Registry Engine: Bhoomi verification checks extent consistency', ()
     extent: '30 guntas'
   };
   const resConsistent = sourceRegistryEngine.verifyBhoomi(propConsistent);
-  assert.equal(resConsistent.status, 'verified');
+  assert.equal(resConsistent.status, 'not_connected');
+  assert.equal(resConsistent.matchScorePct, 0);
+  assert.equal(resConsistent.matchedRecord.isOfficialRecord, false);
+  assert.equal(resConsistent.matchedRecord.dataStatus, 'not_connected');
   assert.equal(resConsistent.discrepancies.length, 0);
   assert.ok(resConsistent.evidenceHash.length === 64, 'Must have 64-char SHA256 hash');
-
-  const propMismatched = {
-    id: 'prop-2',
-    name: 'Mismatched Extent',
-    village: 'Arakere',
-    surveyNumber: '34',
-    subdivision: '1',
-    extent: '10 acres' // differing from 30 guntas
-  };
-  const resMismatched = sourceRegistryEngine.verifyBhoomi(propMismatched);
-  assert.equal(resMismatched.status, 'mismatch');
-  assert.ok(resMismatched.discrepancies.length > 0);
-  assert.equal(resMismatched.discrepancies[0].field, 'extent');
 });
 
-test('Source Registry Engine: Kaveri 2.0 verification returns registered deeds and EC', () => {
+test('Source Registry Engine: Kaveri does not fabricate deeds or EC data', () => {
   const prop = {
     id: 'prop-1',
     name: 'Sample Property',
@@ -88,13 +78,12 @@ test('Source Registry Engine: Kaveri 2.0 verification returns registered deeds a
     surveyNumber: '34'
   };
   const res = sourceRegistryEngine.verifyKaveri(prop);
-  assert.equal(res.status, 'verified');
-  assert.ok(res.matchedRecord.registeredInstruments.length >= 2);
-  assert.match(res.matchedRecord.formIssued, /Form 15/);
-  assert.ok(res.matchedRecord.guidanceValuePerSqFt > 0);
+  assert.equal(res.status, 'not_connected');
+  assert.equal(res.matchedRecord.isOfficialRecord, false);
+  assert.match(res.matchedRecord.requiredAction, /official portal|upload/i);
 });
 
-test('Source Registry Engine: Dishaank verification calculates spatial distances and buffers', () => {
+test('Source Registry Engine: Dishaank does not fabricate spatial clearances', () => {
   const prop = {
     id: 'prop-1',
     name: 'Sample Property',
@@ -104,9 +93,8 @@ test('Source Registry Engine: Dishaank verification calculates spatial distances
     longitude: 77.596
   };
   const res = sourceRegistryEngine.verifyDishaank(prop);
-  assert.equal(res.status, 'verified');
-  assert.ok(res.matchedRecord.swdBufferRequirementM === 25);
-  assert.match(res.matchedRecord.swdBufferStatus, /Safe/);
+  assert.equal(res.status, 'not_connected');
+  assert.equal(res.matchedRecord.isOfficialRecord, false);
 });
 
 test('Source Registry Engine: verifyAll aggregates all 6 registries with trust score', async () => {
@@ -123,6 +111,7 @@ test('Source Registry Engine: verifyAll aggregates all 6 registries with trust s
   const result = await sourceRegistryEngine.verifyAll(prop);
   assert.equal(result.propertyId, 'prop-demo-all');
   assert.equal(result.verifications.length, 6);
-  assert.ok(result.overallTrustScorePct >= 90);
+  assert.equal(result.overallTrustScorePct, 0);
   assert.equal(result.totalDiscrepancies, 0);
+  assert.ok(result.verifications.every(item => item.status === 'not_connected'));
 });

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { authFetch } from '../authFetch';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -151,7 +152,7 @@ export const TitleChainTimeline: React.FC<TitleChainTimelineProps> = ({
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${API}/api/properties/${propertyId}/title-chain`);
+      const res = await authFetch(`${API}/api/properties/${propertyId}/title-chain`);
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || `Failed to fetch title chain (${res.status})`);
@@ -179,7 +180,7 @@ export const TitleChainTimeline: React.FC<TitleChainTimelineProps> = ({
     setError('');
     setSuccessNotice('');
     try {
-      const res = await fetch(`${API}/api/properties/${propertyId}/title-events/${eventId}/review`, {
+      const res = await authFetch(`${API}/api/properties/${propertyId}/title-events/${eventId}/review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -236,7 +237,7 @@ export const TitleChainTimeline: React.FC<TitleChainTimelineProps> = ({
         encumbranceStatus: newEventForm.encumbranceStatus,
       };
 
-      const res = await fetch(`${API}/api/properties/${propertyId}/title-events`, {
+      const res = await authFetch(`${API}/api/properties/${propertyId}/title-events`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

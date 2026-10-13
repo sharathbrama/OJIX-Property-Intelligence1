@@ -1,12 +1,9 @@
 process.env.NODE_ENV = 'test';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import pg from 'pg';
+import { pool } from './mariadb-test-pool.js';
 import crypto from 'node:crypto';
 
-const { Pool } = pg;
-const dbUrl = process.env.DATABASE_URL || 'postgres://ojix:ojix_local_only@localhost:5433/ojix_property';
-const pool = new Pool({ connectionString: dbUrl });
 const serverBaseUrl = process.env.TEST_API_URL || 'http://localhost:4000';
 
 const PROPERTY_ID = '22222222-2222-4222-8222-222222222222';
@@ -29,7 +26,7 @@ async function createTestEvent(overrides: Partial<{
   await pool.query(
     `INSERT INTO title_events 
      (id, tenant_id, property_id, sequence_order, event_date, deed_type, from_parties, to_parties, extent_sq_ft, extent_raw, consideration, status, encumbrance_status, reviewed_by)
-     VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, '1000 sq ft', $9, $10, 'none', 'adversarial_tester')`,
+     VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, '1000 sq ft', ?, ?, 'none', 'adversarial_tester')`,
     [
       id,
       TENANT_ID,
@@ -47,8 +44,8 @@ async function createTestEvent(overrides: Partial<{
 }
 
 async function cleanupEvent(id: string) {
-  await pool.query('DELETE FROM title_reviews WHERE event_id=$1', [id]);
-  await pool.query('DELETE FROM title_events WHERE id=$1', [id]);
+  await pool.query('DELETE FROM title_reviews WHERE event_id=?', [id]);
+  await pool.query('DELETE FROM title_events WHERE id=?', [id]);
 }
 
 async function createTestDoc(storageKey: string): Promise<string> {
@@ -58,16 +55,16 @@ async function createTestDoc(storageKey: string): Promise<string> {
       id, tenant_id, property_id, doc_type, original_filename, storage_key,
       mime_type, size_bytes, sha256, processing_status, extracted_text,
       extracted_fields, uploaded_by_uid
-    ) VALUES ($1, $2, $3, 'sale_deed', 'test_deed.pdf', $4, 'application/pdf', 1024,
+    ) VALUES (?, ?, ?, 'sale_deed', 'test_deed.pdf', ?, 'application/pdf', 1024,
       'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      'completed', 'sample deed recital text', '{}'::jsonb, 'local-developer')`,
+      'completed', 'sample deed recital text', '{}', 'local-developer')`,
     [id, TENANT_ID, PROPERTY_ID, storageKey]
   );
   return id;
 }
 
 async function cleanupDoc(id: string) {
-  await pool.query('DELETE FROM documents WHERE id=$1', [id]);
+  await pool.query('DELETE FROM documents WHERE id=?', [id]);
 }
 
 // ============================================================================
@@ -152,7 +149,7 @@ test('ADVERSARIAL REVIEW-5: Valid dispute rationale succeeds with 200 OK and log
     assert.equal(body.item.status, 'disputed');
     assert.equal(body.item.dispute_rationale, 'PENDING_LITIGATION: Section 52 Transfer of Property Act violation under OS 452/2021');
 
-    const auditRes = await pool.query('SELECT * FROM title_reviews WHERE event_id=$1', [eventId]);
+    const auditRes = await pool.query('SELECT * FROM title_reviews WHERE event_id=?', [eventId]);
     assert.equal(auditRes.rowCount, 1, 'Audit log must record review decision in title_reviews');
     assert.equal(auditRes.rows[0].status, 'disputed');
   } finally {

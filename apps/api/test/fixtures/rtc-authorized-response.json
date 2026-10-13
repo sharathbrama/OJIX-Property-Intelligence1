@@ -1,0 +1,17 @@
+{
+  "recordReference": "RTC-TEST-45-2",
+  "district": "Mandya",
+  "taluk": "Pandavapura",
+  "hobli": "Kasaba 2",
+  "village": "Ganadahosuru",
+  "surveyNumber": "45",
+  "subdivision": "2",
+  "landholders": ["Authorized Test Holder"],
+  "extentRaw": "20 Guntas",
+  "landClassification": "Dry agricultural land",
+  "tenancyDetails": null,
+  "cultivationDetails": "Test fixture only",
+  "mutationReferences": ["MR-TEST-1"],
+  "recordDate": "2026-01-01",
+  "sourceUrl": "https://example.test/authorized-rtc-fixture"
+}

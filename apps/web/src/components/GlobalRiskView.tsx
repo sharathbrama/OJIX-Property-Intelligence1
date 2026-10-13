@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ShieldAlert, AlertTriangle, Search, ArrowUpRight, CheckCircle2, Filter } from 'lucide-react';
+import { authFetch } from '../authFetch';
 
 interface FindingRow {
   id: string;
@@ -30,7 +31,7 @@ export function GlobalRiskView({ apiUrl, onOpenProperty }: { apiUrl: string; onO
   const fetchFindings = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/findings/all`);
+      const res = await authFetch(`${apiUrl}/api/findings/all`);
       const data = await res.json();
       setFindings(data.items || []);
       setSeverityCounts(data.severityCounts || {});

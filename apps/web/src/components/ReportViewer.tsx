@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { authFetch } from '../authFetch';
 import {
   Download,
   FileCheck2,
@@ -26,21 +27,34 @@ export interface ReportViewerProps {
   };
   apiUrl?: string;
   onSnapshotCreated?: () => void;
+  readOnly?: boolean;
 }
 
 export const ReportViewer: React.FC<ReportViewerProps> = ({
   property,
   apiUrl = '',
   onSnapshotCreated,
+  readOnly = false,
 }) => {
   const [loading, setLoading] = useState(false);
   const [snapshotSuccess, setSnapshotSuccess] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string>('');
+
+  useEffect(() => {
+    let active=true;
+    let objectUrl='';
+    authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-report/html`)
+      .then(async response=>{if(!response.ok)throw new Error(`Report preview failed (${response.status})`);return response.blob();})
+      .then(blob=>{if(!active)return;objectUrl=URL.createObjectURL(blob);setPreviewUrl(objectUrl);})
+      .catch(()=>{if(active)setPreviewUrl('');});
+    return()=>{active=false;if(objectUrl)URL.revokeObjectURL(objectUrl);};
+  },[apiUrl,property.id]);
 
   const handleCreateSnapshot = async () => {
     setLoading(true);
     setSnapshotSuccess(null);
     try {
-      const res = await fetch(`${apiUrl}/api/properties/${property.id}/due-diligence-snapshot`, {
+      const res = await authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-snapshot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -55,12 +69,20 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
     }
   };
 
-  const handleDownloadPdf = () => {
-    window.open(`${apiUrl}/api/properties/${property.id}/due-diligence-report/pdf`, '_blank');
+  const handleDownloadPdf = async () => {
+    const response=await authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-report/pdf`);
+    if(!response.ok)return alert(`PDF download failed (${response.status})`);
+    const url=URL.createObjectURL(await response.blob());
+    const anchor=document.createElement('a');anchor.href=url;anchor.download=`${property.name.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}-approved-report.pdf`;anchor.click();
+    window.setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
 
-  const handleOpenHtml = () => {
-    window.open(`${apiUrl}/api/properties/${property.id}/due-diligence-report/html`, '_blank');
+  const handleOpenHtml = async () => {
+    const response=await authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-report/html`);
+    if(!response.ok)return alert(`Printable report failed (${response.status})`);
+    const url=URL.createObjectURL(await response.blob());
+    window.open(url,'_blank','noopener,noreferrer');
+    window.setTimeout(()=>URL.revokeObjectURL(url),60000);
   };
 
   return (
@@ -76,7 +98,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button
+          {!readOnly&&<button
             onClick={handleCreateSnapshot}
             disabled={loading}
             style={{
@@ -93,7 +115,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
             }}
           >
             <Lock size={16} /> Freeze New Snapshot
-          </button>
+          </button>}
           <button
             onClick={handleOpenHtml}
             style={{
@@ -160,11 +182,11 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
           <span>LIVE REPORT PREVIEW CONTAINER</span>
           <span>FORMAT: HTML5 / PLAYWRIGHT PDF</span>
         </div>
-        <iframe
-          src={`${apiUrl}/api/properties/${property.id}/due-diligence-report/html`}
+        {previewUrl?<iframe
+          src={previewUrl}
           title="Due Diligence Report Preview"
           style={{ width: '100%', height: '560px', border: 'none', background: '#fff' }}
-        />
+        />:<div style={{padding:'48px',textAlign:'center',color:'#64748b'}}>Approved report preview is unavailable.</div>}
       </div>
     </div>
   );

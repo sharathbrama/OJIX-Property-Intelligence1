@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Activity, ShieldCheck, CheckCircle2, AlertTriangle, ExternalLink, RefreshCw, Database, FileCheck2, MapPin, Building2, Layers, Search, Zap, Copy, Check, PlusCircle } from 'lucide-react';
+import { authFetch } from '../authFetch';
 
 interface RegistryHealth {
   name: string;
@@ -7,8 +8,9 @@ interface RegistryHealth {
   department: string;
   officialUrl: string;
   status: string;
-  uptimePct: number;
-  averageLatencyMs: number;
+  portalReachability?: string;
+  uptimePct: number | null;
+  averageLatencyMs: number | null;
   recordTypes: string[];
 }
 
@@ -67,7 +69,7 @@ export function SourceRegistryView({
   const [activeRegTab, setActiveRegTab] = useState<string>('bhoomi');
   const [notice, setNotice] = useState('');
 
-  // In-App Direct Automated Query State
+  // Source retrieval readiness state. No official records are fetched until an authorized connector exists.
   const [queryRegistry, setQueryRegistry] = useState<string>('all');
   const [querySurveyNumber, setQuerySurveyNumber] = useState<string>('34');
   const [queryHissa, setQueryHissa] = useState<string>('A');
@@ -99,17 +101,17 @@ export function SourceRegistryView({
   const fetchHealth = async (probe = false) => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/source-registry/status${probe ? '?probe=true' : ''}`);
+      const res = await authFetch(`${apiUrl}/api/source-registry/status${probe ? '?probe=true' : ''}`);
       const data = await res.json();
       if (data.registries) setRegistries(data.registries);
-      if (probe) setNotice('Live network probes completed across official Karnataka Government servers (Bhoomi, Kaveri 2.0, Mojini, Dishaank, e-Aasthi, K-RERA).');
+      if (probe) setNotice('Portal reachability checks completed. A reachable website does not mean OJIX is connected to, or has verified records from, that source.');
     } catch { /* graceful fallback */ }
     finally { setLoading(false); }
   };
 
   const fetchExistingVerifications = async (propId: string) => {
     try {
-      const res = await fetch(`${apiUrl}/api/source-registry/properties/${propId}`);
+      const res = await authFetch(`${apiUrl}/api/source-registry/properties/${propId}`);
       const data = await res.json();
       if (data.items && data.items.length > 0) {
         const mapped = data.items.map((it: any) => ({
@@ -143,7 +145,7 @@ export function SourceRegistryView({
     setVerifying(true);
     setNotice('');
     try {
-      const res = await fetch(`${apiUrl}/api/source-registry/properties/${selectedPropertyId}/verify`, { method: 'POST' });
+      const res = await authFetch(`${apiUrl}/api/source-registry/properties/${selectedPropertyId}/verify`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || `Sync failed with status ${res.status}`);
@@ -151,7 +153,7 @@ export function SourceRegistryView({
       if (data.verifications) {
         setVerifications(data.verifications);
         setOverallScore(data.overallTrustScorePct);
-        setNotice(`Successfully synchronized across all 6 Karnataka official registries. Overall Trust Score: ${data.overallTrustScorePct}%.`);
+        setNotice('No authorized government-data connectors are configured. Open the official portals or upload official records for evidence review.');
       }
     } catch (err: any) {
       setNotice(`Sync failed: ${err.message}`);
@@ -169,7 +171,7 @@ export function SourceRegistryView({
     setVerifying(true);
     setNotice('');
     try {
-      const res = await fetch(`${apiUrl}/api/source-registry/properties/${selectedPropertyId}/verify/${regName}`, { method: 'POST' });
+      const res = await authFetch(`${apiUrl}/api/source-registry/properties/${selectedPropertyId}/verify/${regName}`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || `Sync failed with status ${res.status}`);
@@ -179,7 +181,7 @@ export function SourceRegistryView({
           const filtered = prev.filter(v => v.registryName !== regName);
           return [...filtered, data.verification];
         });
-        setNotice(`Successfully verified ${regName.toUpperCase()} record. Match status: ${data.verification.status.toUpperCase()}.`);
+        setNotice(`${regName.toUpperCase()} is not connected. No official property record was retrieved or verified.`);
       }
     } catch (err: any) {
       setNotice(`Sync failed for ${regName.toUpperCase()}: ${err.message}`);
@@ -202,7 +204,7 @@ export function SourceRegistryView({
     setQueryLoading(true);
     setNotice('');
     try {
-      const res = await fetch(`${apiUrl}/api/source-registry/query`, {
+      const res = await authFetch(`${apiUrl}/api/source-registry/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -219,11 +221,11 @@ export function SourceRegistryView({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Query failed');
       setQueryResults(data.verifications || []);
-      setQueryTrustScore(data.overallTrustScorePct || 95);
+      setQueryTrustScore(data.overallTrustScorePct ?? 0);
       if (data.verifications && data.verifications.length > 0) {
         setQueryActiveTab(data.verifications[0].registryName);
       }
-      setNotice(`Automated query completed across ${data.verifications.length} government registry gateways. Results extracted directly into this app.`);
+      setNotice('Connection check completed. No official property records were retrieved. Use the official portal links or upload official documents.');
     } catch (err: any) {
       setNotice(`Automated query failed: ${err.message}`);
     } finally {
@@ -239,14 +241,14 @@ export function SourceRegistryView({
 
   const handleImportAsProperty = async () => {
     if (!queryResults || !onCreateProperty) return;
-    if (currentUser?.role === 'viewer') {
-      setNotice('RBAC Permission Denied: Viewer role cannot create workspace properties.');
+    if (['viewer','data_steward'].includes(currentUser?.role || '')) {
+      setNotice('RBAC Permission Denied: this role cannot create workspace properties.');
       return;
     }
     setImportingProp(true);
     try {
       await onCreateProperty({
-        name: `${queryVillage} Sy. ${querySurveyNumber}/${queryHissa} (Automated Registry Import)`,
+        name: `${queryVillage} Sy. ${querySurveyNumber}/${queryHissa} (Unverified intake)`,
         survey_number: `${querySurveyNumber}`,
         subdivision: queryHissa,
         village: queryVillage,
@@ -255,7 +257,7 @@ export function SourceRegistryView({
         property_type: 'agricultural',
         extent: '0-30.00 (30 Guntas)',
         address: `${queryVillage}, ${queryTaluk}, ${queryDistrict}`,
-        notes: `Imported directly from automated government registry search. Bhoomi & Kaveri records cross-referenced.`
+        notes: 'Created from user-entered identifiers only. No government record was retrieved or verified.'
       });
       setNotice(`Property created and imported into workspace! Check Properties list.`);
     } catch (err: any) {
@@ -272,12 +274,12 @@ export function SourceRegistryView({
     <div className="source-registry-view">
       <div className="page-heading">
         <div>
-          <div className="eyebrow">GOVERNMENT DATA SOURCES <span>•</span> OFFICIAL INTEGRATIONS</div>
-          <h1>Government Source Registry & Real-Time Sync</h1>
-          <p>Live health, endpoint latencies, and cross-registry verification for Karnataka property records.</p>
+          <div className="eyebrow">GOVERNMENT DATA SOURCES <span>•</span> CONNECTION STATUS</div>
+          <h1>Government Source Catalog</h1>
+          <p>Official portal links and reachability checks. Government property-record connectors are not configured.</p>
         </div>
         <button className="secondary-btn" onClick={() => fetchHealth(true)} disabled={loading}>
-          <RefreshCw size={14} className={loading ? 'spin' : ''} /> Probe Live Gateways
+          <RefreshCw size={14} className={loading ? 'spin' : ''} /> Check Portal Reachability
         </button>
 
       </div>
@@ -293,8 +295,8 @@ export function SourceRegistryView({
       {/* 6 Registries Health Grid */}
       <div className="section-header">
         <div>
-          <h2>Official Karnataka Registries</h2>
-          <p>Real-time uptime, response latency, and supported statutory record types</p>
+          <h2>Karnataka source directory</h2>
+          <p>Portal reachability is informational and does not verify any property record</p>
         </div>
       </div>
 
@@ -306,8 +308,8 @@ export function SourceRegistryView({
                 <Database size={15} style={{ color: '#2563eb' }} />
                 <strong style={{ fontSize: '12px', color: '#1e293b' }}>{reg.displayName}</strong>
               </div>
-              <span className={`status-pill ${reg.status === 'operational' ? 'green' : 'amber'}`}>
-                <i /> {reg.status}
+              <span className="status-pill amber">
+                <i /> NOT CONNECTED
               </span>
             </div>
 
@@ -316,8 +318,8 @@ export function SourceRegistryView({
             </p>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '9px', color: '#475569', background: '#f8fafc', padding: '6px 10px', borderRadius: '5px' }}>
-              <span>Uptime: <strong>{reg.uptimePct}%</strong></span>
-              <span>Avg Latency: <strong>{reg.averageLatencyMs}ms</strong></span>
+              <span>Portal: <strong>{reg.portalReachability || 'not checked'}</strong></span>
+              <span>Probe latency: <strong>{reg.averageLatencyMs == null ? '—' : `${reg.averageLatencyMs}ms`}</strong></span>
             </div>
 
             <div style={{ marginTop: 'auto', paddingTop: '8px', borderTop: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -339,14 +341,14 @@ export function SourceRegistryView({
                 <Zap size={16} />
               </div>
               <h3 style={{ margin: 0, fontSize: '15px', color: '#0f172a' }}>
-                Automated In-App Registry Query Console
+                Official-record retrieval readiness
               </h3>
-              <span className="status-pill green" style={{ fontSize: '9px' }}>
-                <CheckCircle2 size={11} /> ZERO EXTERNAL REDIRECTS
+              <span className="status-pill amber" style={{ fontSize: '9px' }}>
+                <AlertTriangle size={11} /> CONNECTORS NOT CONFIGURED
               </span>
             </div>
             <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>
-              Query official Karnataka land records directly from inside OJIX. The engine automatically queries Bhoomi RTC, Kaveri 2.0 EC, Mojini 11E, Dishaank GIS, and e-Aasthi, returning live structured records, provenance hashes, and statutory compliance status right here.
+              Enter identifiers to prepare a retrieval request. OJIX does not currently query Bhoomi, Kaveri, Mojini, Dishaank, e-Aasthi, or K-RERA records. Use the official portal or upload an official record.
             </p>
           </div>
 
@@ -500,7 +502,7 @@ export function SourceRegistryView({
               style={{ width: '100%', height: '35px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', background: '#2563eb' }}
             >
               {queryLoading ? <RefreshCw size={13} className="spin" /> : <Search size={13} />}
-              {queryLoading ? 'Searching…' : 'Run Automated Query'}
+              {queryLoading ? 'Checking…' : 'Check Connection Status'}
             </button>
           </div>
         </form>
@@ -511,13 +513,13 @@ export function SourceRegistryView({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid #e2e8f0', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <span className="status-pill green">
-                  <CheckCircle2 size={12} /> {queryResults.length} Registries Extracted
+                  <AlertTriangle size={12} /> {queryResults.length} Sources Not Connected
                 </span>
                 <span style={{ fontSize: '11px', color: '#475569' }}>
-                  Overall Trust Score: <strong style={{ color: '#059669' }}>{queryTrustScore}%</strong>
+                  Verification score: <strong style={{ color: '#b45309' }}>{queryTrustScore ?? 0}%</strong>
                 </span>
                 <span style={{ fontSize: '10px', color: '#94a3b8' }}>
-                  Gateway Latency: <strong>{queryResults[0]?.latencyMs || 85}ms</strong>
+                  Official records retrieved: <strong>0</strong>
                 </span>
               </div>
 
@@ -526,12 +528,12 @@ export function SourceRegistryView({
                   type="button"
                   className="secondary-btn"
                   onClick={handleImportAsProperty}
-                  disabled={importingProp || currentUser?.role === 'viewer'}
-                  title={currentUser?.role === 'viewer' ? 'Read-only role cannot create properties' : 'Import this searched record into active workspace'}
+                  disabled={importingProp || ['viewer','data_steward'].includes(currentUser?.role || '')}
+                  title={['viewer','data_steward'].includes(currentUser?.role || '') ? 'This role cannot create property workspaces' : 'Import this searched record into active workspace'}
                   style={{ fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#1d4ed8' }}
                 >
                   <PlusCircle size={13} />
-                  {importingProp ? 'Importing…' : 'Import into Workspace as Property'}
+                  {importingProp ? 'Creating…' : 'Create Unverified Intake'}
                 </button>
               )}
             </div>
@@ -579,7 +581,7 @@ export function SourceRegistryView({
                     </span>
                   </div>
                   <span style={{ fontSize: '10px', color: '#64748b' }}>
-                    Match Score: <strong>{activeQueryResult.matchScorePct}%</strong>
+                    Verification Score: <strong>{activeQueryResult.matchScorePct}%</strong>
                   </span>
                 </div>
 
@@ -601,7 +603,7 @@ export function SourceRegistryView({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#ffffff', padding: '8px 12px', borderRadius: '5px', border: '1px solid #e2e8f0', fontSize: '10px', color: '#64748b' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <ShieldCheck size={13} style={{ color: '#059669' }} />
-                    <span>Cryptographic Evidence Hash: <code style={{ color: '#0f172a', fontWeight: 600 }}>{activeQueryResult.evidenceHash.slice(0, 24)}…</code></span>
+                    <span>Response Metadata Hash: <code style={{ color: '#0f172a', fontWeight: 600 }}>{activeQueryResult.evidenceHash.slice(0, 24)}…</code></span>
                   </div>
                   <button
                     type="button"
@@ -623,10 +625,10 @@ export function SourceRegistryView({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <h3 style={{ margin: '0 0 4px', fontSize: '15px', color: '#0f172a' }}>
-              Interactive Multi-Registry Property Sync
+              Property source-connection check
             </h3>
             <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>
-              Run automated cross-verification against Bhoomi RTC, Kaveri EC, Mojini 11E, Dishaank GIS, and e-Aasthi.
+              Check which official sources require portal retrieval or document upload. This does not verify property data.
             </p>
           </div>
 
@@ -645,7 +647,7 @@ export function SourceRegistryView({
 
             <button className="primary-btn" onClick={handleRunSync} disabled={verifying || !selectedPropertyId}>
               <RefreshCw size={14} className={verifying ? 'spin' : ''} />
-              {verifying ? 'Synchronizing…' : 'Run Full Multi-Registry Sync'}
+              {verifying ? 'Checking…' : 'Check Source Connections'}
             </button>
           </div>
         </div>
@@ -668,14 +670,14 @@ export function SourceRegistryView({
               </div>
               <div style={{ flex: 1 }}>
                 <strong style={{ fontSize: '13px', color: '#0f172a', display: 'block' }}>
-                  Government Source Trust Score
+                  Official verification unavailable
                 </strong>
                 <span style={{ fontSize: '10px', color: '#475569' }}>
-                  6 of 6 government registries successfully synchronized. 1 minor extent variance flagged for reviewer confirmation.
+                  No authorized registry connector is configured. No owner, RTC, deed, mutation, khata, GIS clearance, or RERA result has been verified.
                 </span>
               </div>
               <span className="status-pill green">
-                <ShieldCheck size={12} /> PROVENANCE SECURED
+                <AlertTriangle size={12} /> NOT VERIFIED
               </span>
             </div>
           </div>
@@ -726,7 +728,7 @@ export function SourceRegistryView({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
                   <div>
                     <h4 style={{ margin: 0, fontSize: '14px', color: '#1e293b' }}>
-                      Official {activeVerification.registryName.toUpperCase()} Record
+                      {activeVerification.registryName.toUpperCase()} Connection Status
                     </h4>
                     <span style={{ fontSize: '10px', color: '#64748b' }}>
                       Latency: {activeVerification.latencyMs}ms · Checked {new Date(activeVerification.timestamp).toLocaleTimeString()}
@@ -741,7 +743,7 @@ export function SourceRegistryView({
                       disabled={verifying}
                     >
                       <RefreshCw size={12} className={verifying ? 'spin' : ''} />
-                      Re-sync {activeVerification.registryName.toUpperCase()}
+                      Re-check {activeVerification.registryName.toUpperCase()}
                     </button>
                     {activeVerification.officialPortalReference && (
                       <a

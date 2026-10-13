@@ -2,13 +2,26 @@
   "name": "ojix-property-intelligence",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["apps/web", "apps/api"],
+  "workspaces": [
+    "apps/web",
+    "apps/api"
+  ],
   "scripts": {
     "dev": "concurrently -n api,web -c blue,green \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
     "build": "npm run build -w apps/api && npm run build -w apps/web",
     "test": "npm run test -w apps/api",
-    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web"
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "db:locations": "node scripts/import-karnataka-locations.mjs database/kaveri-live-hierarchy.json --replace"
   },
-  "devDependencies": {"concurrently": "^9.1.2", "typescript": "^5.7.3"},
-  "engines": {"node": ">=20"}
+  "devDependencies": {
+    "@types/swagger-ui-express": "^4.1.8",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "swagger-ui-express": "^5.0.1"
+  }
 }

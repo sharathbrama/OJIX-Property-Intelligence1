@@ -7,3 +7,10 @@ node_modules
 uploads/
 coverage
 .DS_Store
+
+# Local/generated development artifacts
+database-backups/
+output/
+outputs/
+tmp/
+apps/api/src/*-backup.ts

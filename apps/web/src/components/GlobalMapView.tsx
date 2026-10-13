@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { authFetch } from '../authFetch';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import {
   MapPin,
@@ -75,12 +76,14 @@ export function GlobalMapView({
   properties,
   apiUrl = '',
   onOpenProperty,
-  onRefreshProperties
+  onRefreshProperties,
+  readOnly = false
 }: {
   properties: any[];
   apiUrl?: string;
   onOpenProperty?: (p: any) => Promise<void> | void;
   onRefreshProperties?: () => void;
+  readOnly?: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -113,7 +116,7 @@ export function GlobalMapView({
     }
 
     try {
-      const res = await fetch(`${apiUrl}/api/spatial/screen-point`, {
+      const res = await authFetch(`${apiUrl}/api/spatial/screen-point`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ latitude: lat, longitude: lon }),
@@ -311,7 +314,7 @@ export function GlobalMapView({
         },
       };
 
-      const res = await fetch(`${apiUrl}/api/properties/${assignPropId}/parcel-geometry`, {
+      const res = await authFetch(`${apiUrl}/api/properties/${assignPropId}/parcel-geometry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -336,7 +339,7 @@ export function GlobalMapView({
     <div className="global-map-view">
       <div className="page-heading">
         <div>
-          <div className="eyebrow">SPATIAL DUE DILIGENCE <span>•</span> REAL-TIME POSTGIS SCREENING</div>
+          <div className="eyebrow">SPATIAL DUE DILIGENCE <span>•</span> REAL-TIME MARIADB SPATIAL SCREENING</div>
           <h1>Map Intelligence & Cadastral Clearance</h1>
           <p>
             Interactive GIS clearance engine. Click anywhere on the map or select a known property to run
@@ -428,7 +431,7 @@ export function GlobalMapView({
 
           {screening ? (
             <div style={{ padding: '40px 10px', textAlign: 'center', color: '#64748b' }}>
-              <div style={{ marginBottom: '8px', fontSize: '13px', fontWeight: 600 }}>Screening against PostGIS layers…</div>
+              <div style={{ marginBottom: '8px', fontSize: '13px', fontWeight: 600 }}>Screening against MariaDB spatial layers…</div>
               <p style={{ fontSize: '11px' }}>Calculating geodesic distance to Rajakaluve drains and lake peripheries</p>
             </div>
           ) : screenResult ? (
@@ -541,7 +544,7 @@ export function GlobalMapView({
               </div>
 
               {/* Real-world action: Link Coordinates & Parcel to Property */}
-              <div style={{ background: '#faf5ff', padding: '12px', borderRadius: '6px', border: '1px solid #e9d5ff' }}>
+              {!readOnly&&<div style={{ background: '#faf5ff', padding: '12px', borderRadius: '6px', border: '1px solid #e9d5ff' }}>
                 <strong style={{ fontSize: '11px', color: '#6b21a8', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '6px' }}>
                   <LinkIcon size={13} /> Link Geometry to Case File
                 </strong>
@@ -584,14 +587,14 @@ export function GlobalMapView({
                     <Check size={14} /> {assignSuccess}
                   </div>
                 )}
-              </div>
+              </div>}
             </div>
           ) : (
             <div className="empty-state" style={{ padding: '36px 12px', textAlign: 'center' }}>
               <Crosshair size={28} style={{ color: '#94a3b8', marginBottom: '8px' }} />
               <strong style={{ fontSize: '13px' }}>Click anywhere on the map</strong>
               <p style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>
-                Click any cadastral location or stormwater corridor to compute instant PostGIS buffer clearance and attach surveyed geometry to your property dossier.
+                Click any cadastral location or stormwater corridor to compute instant spatial buffer clearance and attach surveyed geometry to your property dossier.
               </p>
             </div>
           )}

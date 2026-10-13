@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Search, BookOpen, Scale, AlertTriangle, ShieldCheck, ChevronDown, ChevronRight, ExternalLink, Bookmark, CheckCircle2, BookmarkCheck, ArrowRight } from 'lucide-react';
+import { authFetch } from '../authFetch';
 
 interface Precedent {
   caseName: string;
@@ -52,7 +53,7 @@ export function LegalResearchView({ apiUrl, onOpenProperty }: { apiUrl: string; 
 
   const fetchCategories = async () => {
     try {
-      const res = await fetch(`${apiUrl}/api/legal-research/categories`);
+      const res = await authFetch(`${apiUrl}/api/legal-research/categories`);
       const data = await res.json();
       if (data.categories) setCategories(data.categories);
     } catch { /* graceful fallback */ }
@@ -64,7 +65,7 @@ export function LegalResearchView({ apiUrl, onOpenProperty }: { apiUrl: string; 
       const url = new URL(`${apiUrl}/api/legal-research`);
       if (q) url.searchParams.set('q', q);
       if (cat && cat !== 'all') url.searchParams.set('category', cat);
-      const res = await fetch(url.toString());
+      const res = await authFetch(url.toString());
       const data = await res.json();
       setProvisions(data.items || []);
     } catch { /* graceful fallback */ }
@@ -73,7 +74,7 @@ export function LegalResearchView({ apiUrl, onOpenProperty }: { apiUrl: string; 
 
   const fetchBookmarks = async () => {
     try {
-      const res = await fetch(`${apiUrl}/api/legal-research/bookmarks`);
+      const res = await authFetch(`${apiUrl}/api/legal-research/bookmarks`);
       const data = await res.json();
       setBookmarks(data.items || []);
     } catch { /* graceful fallback */ }
@@ -94,11 +95,11 @@ export function LegalResearchView({ apiUrl, onOpenProperty }: { apiUrl: string; 
     try {
       const existing = bookmarks.find(b => b.act_id === prov.id);
       if (existing) {
-        await fetch(`${apiUrl}/api/legal-research/bookmarks/${existing.id}`, { method: 'DELETE' });
+        await authFetch(`${apiUrl}/api/legal-research/bookmarks/${existing.id}`, { method: 'DELETE' });
         setBookmarks(prev => prev.filter(b => b.id !== existing.id));
         setNotice(`Removed bookmark for ${prov.section}`);
       } else {
-        const res = await fetch(`${apiUrl}/api/legal-research/bookmarks`, {
+        const res = await authFetch(`${apiUrl}/api/legal-research/bookmarks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

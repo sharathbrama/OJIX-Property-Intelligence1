@@ -58,6 +58,13 @@ test('CHALLENGE: "0-30 Guntas" correctly handles zero acres and 30 guntas', () =
   assert.equal(result.normalizedSqFt, 32670);
 });
 
+test('REGRESSION: year ranges are never interpreted as property extent', () => {
+  assert.equal(normalizeKarnatakaExtent('2000-2022').normalizedSqFt, 0);
+  const extracted = extractDocument('SALE DEED registration history 2000-2022');
+  assert.equal(extracted.propertySchedule.extent.rawText, '');
+  assert.equal(extracted.propertySchedule.extent.normalizedSqFt, 0);
+});
+
 test('CHALLENGE: Dimensional and area conversions (sq ft, sq meters, cents)', () => {
   assert.equal(normalizeKarnatakaExtent('40 x 60 ft').normalizedSqFt, 2400);
   assert.equal(normalizeKarnatakaExtent('50 Cents').normalizedSqFt, 21780);
@@ -196,4 +203,3 @@ test('BUG 9 REMEDIATION: Kannada extent "1 ಎಕರೆ 20 ಗುಂಟೆ" corr
   assert.equal(result.acres, 1);
   assert.equal(result.guntas, 20);
 });
-

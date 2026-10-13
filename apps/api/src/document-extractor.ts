@@ -138,8 +138,10 @@ export function normalizeKarnatakaExtent(raw: string | any): PropertyExtent {
   } else if (sqMeters > 0) {
     normalizedSqFt = sqMeters * SQFT_PER_SQM;
   } else if (!hasParsed) {
-    // Fallback: look for a plain number if no unit matched
-    const plainNum = clean.replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+    // A unitless value is accepted only when the entire value is numeric.
+    // This prevents registration/year ranges such as "2000-2022" from
+    // silently becoming a 2,000 sq-ft property extent.
+    const plainNum = clean.replace(/,/g, '').match(/^\d+(?:\.\d+)?$/);
     if (plainNum) {
       normalizedSqFt = parseFloat(plainNum[0]);
     }
@@ -747,6 +749,10 @@ export function extractDocument(
     }
   }
 
+  if (/^(?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2}$/.test(extent.rawText.trim())) {
+    extent = { rawText: '', normalizedSqFt: 0 };
+  }
+
   // 4-side Boundaries
   const boundaries: FourSideBoundaries = {
     north: jsonPayload?.propertySchedule?.boundaries?.north || '',
@@ -867,6 +873,12 @@ export function extractDocument(
     consideration,
     overallConfidence,
     fieldConfidence,
+    fieldAnchors: docNumberAnchor ? { documentNumber: docNumberAnchor } : {},
+    extractionMetadata: {
+      source: tokens?.length ? 'ocr' : jsonPayload ? 'provider' : 'text',
+      status: overallConfidence >= 0.60 ? 'completed' : 'manual_review',
+      extractedAt: new Date().toISOString(),
+    },
     reviewState,
   };
 }

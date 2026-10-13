@@ -1,12 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import pg from 'pg';
+import { pool } from './mariadb-test-pool.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const { Pool } = pg;
-const dbUrl = process.env.DATABASE_URL || 'postgres://ojix:ojix_local_only@localhost:5433/ojix_property';
-const pool = new Pool({ connectionString: dbUrl });
 const serverBaseUrl = process.env.TEST_API_URL || 'http://localhost:4000';
 
 // ============================================================================
@@ -31,9 +28,9 @@ test('SECURITY: Path Traversal blocked in GET /api/properties/:id/documents/:doc
       'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       'completed',
       'some text',
-      '{}'::jsonb,
+      '{}',
       'local-developer'
-    ) RETURNING id;
+    ) /*RETURN_ID*/;
   `);
   const docId = res.rows[0].id;
 
@@ -44,16 +41,16 @@ test('SECURITY: Path Traversal blocked in GET /api/properties/:id/documents/:doc
     assert.equal(streamRes.status, 403, 'Server correctly returns 403 Forbidden on path traversal');
     assert.ok(!body.includes('@ojix/property-api'), 'Host file contents are not leaked');
   } finally {
-    await pool.query('DELETE FROM documents WHERE id=$1', [docId]);
+    await pool.query('DELETE FROM documents WHERE id=?', [docId]);
   }
 });
 
 test('CHALLENGER STRESS: Non-UUID docId parameter causes unhandled 500 error instead of 400/404', async () => {
   const streamRes = await fetch(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/not-a-valid-uuid/file`);
   const body = await streamRes.json();
-  // Postgres crashes on uuid syntax error: returns 500 Internal server error
-  assert.equal(streamRes.status, 500);
-  assert.equal(body.error, 'Internal server error.');
+  // MariaDB compares a CHAR UUID column without a cast, so an invalid UUID is simply absent: returns 500 Internal server error
+  assert.equal(streamRes.status, 404);
+  assert.equal(body.error, "Document not found.");
 });
 
 test('SECURITY: PATCH /fields enforces mandatory rationale and rejects missing rationale with 400', async () => {
@@ -73,9 +70,9 @@ test('SECURITY: PATCH /fields enforces mandatory rationale and rejects missing r
       'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       'completed',
       'text',
-      '{"documentNumber":"INITIAL-123","reviewState":{"isVerified":false}}'::jsonb,
+      '{"documentNumber":"INITIAL-123","reviewState":{"isVerified":false}}',
       'local-developer'
-    ) RETURNING id;
+    ) /*RETURN_ID*/;
   `);
   const docId = res.rows[0].id;
 
@@ -94,7 +91,7 @@ test('SECURITY: PATCH /fields enforces mandatory rationale and rejects missing r
     assert.equal(patchRes.status, 400, 'Endpoint correctly returns 400 Bad Request when rationale is missing');
     assert.ok(data.error.includes('rationale'));
   } finally {
-    await pool.query('DELETE FROM documents WHERE id=$1', [docId]);
+    await pool.query('DELETE FROM documents WHERE id=?', [docId]);
   }
 });
 
@@ -115,9 +112,9 @@ test('SECURITY: PATCH /fields rejects whitespace-only rationale with 400', async
       'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       'completed',
       'text',
-      '{"documentNumber":"INITIAL-123","reviewState":{"isVerified":false}}'::jsonb,
+      '{"documentNumber":"INITIAL-123","reviewState":{"isVerified":false}}',
       'local-developer'
-    ) RETURNING id;
+    ) /*RETURN_ID*/;
   `);
   const docId = res.rows[0].id;
 
@@ -136,7 +133,7 @@ test('SECURITY: PATCH /fields rejects whitespace-only rationale with 400', async
     assert.equal(patchRes.status, 400, 'Endpoint correctly returns 400 Bad Request on whitespace-only rationale');
     assert.ok(data.error.includes('rationale'));
   } finally {
-    await pool.query('DELETE FROM documents WHERE id=$1', [docId]);
+    await pool.query('DELETE FROM documents WHERE id=?', [docId]);
   }
 });
 
@@ -157,9 +154,9 @@ test('SECURITY: Prototype Pollution blocked in PATCH /fields and setNestedValue'
       'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       'completed',
       'text',
-      '{"documentNumber":"INITIAL-123","reviewState":{"isVerified":false}}'::jsonb,
+      '{"documentNumber":"INITIAL-123","reviewState":{"isVerified":false}}',
       'local-developer'
-    ) RETURNING id;
+    ) /*RETURN_ID*/;
   `);
   const docId = res.rows[0].id;
 
@@ -207,7 +204,7 @@ test('SECURITY: Prototype Pollution blocked in PATCH /fields and setNestedValue'
     assert.equal(cleanObject.challengerPollutionFlag, undefined, 'Prototype pollution blocked on clean object');
     assert.equal((Object.prototype as any).challengerPollutionFlag, undefined, 'Prototype pollution blocked on Object.prototype');
   } finally {
-    await pool.query('DELETE FROM documents WHERE id=$1', [docId]);
+    await pool.query('DELETE FROM documents WHERE id=?', [docId]);
   }
 });
 
@@ -220,13 +217,13 @@ test('CHALLENGER VERIFICATION: Tenant Boundary Enforcement is strictly enforced 
   await pool.query(`
     INSERT INTO organizations (id, name, slug)
     VALUES ('${tenant2Id}', 'Tenant Two Org', 'tenant-two-org')
-    ON CONFLICT (id) DO NOTHING;
+    ON DUPLICATE KEY UPDATE id=VALUES(id);
   `);
 
   await pool.query(`
-    INSERT INTO properties (id, tenant_id, name, created_by_uid, updated_by_uid)
-    VALUES ('${prop2Id}', '${tenant2Id}', 'Tenant 2 Property', 't2-user', 't2-user')
-    ON CONFLICT (id) DO NOTHING;
+    INSERT INTO properties (id, tenant_id, application_number, name, created_by_uid, updated_by_uid)
+    VALUES ('${prop2Id}', '${tenant2Id}', 'OJIX-TEST-TENANT-2', 'Tenant 2 Property', 't2-user', 't2-user')
+    ON DUPLICATE KEY UPDATE id=VALUES(id);
   `);
 
   await pool.query(`
@@ -236,8 +233,8 @@ test('CHALLENGER VERIFICATION: Tenant Boundary Enforcement is strictly enforced 
     ) VALUES (
       '${doc2Id}', '${tenant2Id}', '${prop2Id}', 'sale_deed', 't2_doc.pdf', 't2.pdf',
       'application/pdf', 100, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      'completed', '{}'::jsonb, 't2-user'
-    ) ON CONFLICT (id) DO NOTHING;
+      'completed', '{}', 't2-user'
+    ) ON DUPLICATE KEY UPDATE id=VALUES(id);
   `);
 
   try {
@@ -269,9 +266,9 @@ test('CHALLENGER VERIFICATION: Tenant Boundary Enforcement is strictly enforced 
     });
     assert.equal(rPatch.status, 404);
   } finally {
-    await pool.query('DELETE FROM documents WHERE id=$1', [doc2Id]);
-    await pool.query('DELETE FROM properties WHERE id=$1', [prop2Id]);
-    await pool.query('DELETE FROM organizations WHERE id=$1', [tenant2Id]);
+    await pool.query('DELETE FROM documents WHERE id=?', [doc2Id]);
+    await pool.query('DELETE FROM properties WHERE id=?', [prop2Id]);
+    await pool.query('DELETE FROM organizations WHERE id=?', [tenant2Id]);
   }
 });
 
@@ -292,9 +289,9 @@ test('CHALLENGER VERIFICATION: Empty or missing updates payload returns 400 Bad 
       'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       'completed',
       'text',
-      '{}'::jsonb,
+      '{}',
       'local-developer'
-    ) RETURNING id;
+    ) /*RETURN_ID*/;
   `);
   const docId = res.rows[0].id;
 
@@ -313,7 +310,7 @@ test('CHALLENGER VERIFICATION: Empty or missing updates payload returns 400 Bad 
     });
     assert.equal(rGibberish.status, 400);
   } finally {
-    await pool.query('DELETE FROM documents WHERE id=$1', [docId]);
+    await pool.query('DELETE FROM documents WHERE id=?', [docId]);
     await pool.end();
   }
 });

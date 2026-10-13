@@ -1,0 +1,349 @@
+CREATE DATABASE IF NOT EXISTS ojix_property_mysql
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
+
+USE ojix_property_mysql;
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+DROP TABLE IF EXISTS title_reviews;
+DROP TABLE IF EXISTS title_events;
+DROP TABLE IF EXISTS legal_bookmarks;
+DROP TABLE IF EXISTS source_registry_verifications;
+DROP TABLE IF EXISTS risk_findings;
+DROP TABLE IF EXISTS documents;
+DROP TABLE IF EXISTS audit_events;
+DROP TABLE IF EXISTS spatial_layers;
+DROP TABLE IF EXISTS properties;
+DROP TABLE IF EXISTS org_memberships;
+DROP TABLE IF EXISTS workspace_settings;
+DROP TABLE IF EXISTS organizations;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+CREATE TABLE organizations (
+    id CHAR(36) NOT NULL,
+    name TEXT NOT NULL,
+    slug VARCHAR(255) NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY organizations_slug_key (slug)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE org_memberships (
+    id CHAR(36) NOT NULL,
+    organization_id CHAR(36) NOT NULL,
+    user_uid TEXT NOT NULL,
+    email TEXT NULL,
+    role VARCHAR(20) NOT NULL DEFAULT 'analyst',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY org_memberships_organization_user_key (organization_id, user_uid(191)),
+    KEY org_memberships_user_idx (user_uid(191)),
+    CONSTRAINT org_memberships_organization_fk
+        FOREIGN KEY (organization_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE properties (
+    id CHAR(36) NOT NULL,
+    tenant_id CHAR(36) NOT NULL,
+    name TEXT NOT NULL,
+    village TEXT NOT NULL DEFAULT '',
+    hobli TEXT NOT NULL DEFAULT '',
+    taluk TEXT NOT NULL DEFAULT '',
+    district TEXT NOT NULL DEFAULT 'Bengaluru Urban',
+    survey_number TEXT NOT NULL DEFAULT '',
+    subdivision TEXT NOT NULL DEFAULT '',
+    extent TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    latitude DOUBLE NULL,
+    longitude DOUBLE NULL,
+
+    /*
+      MariaDB spatial replacement for PostgreSQL
+      geometry(Point,4326).
+
+      MariaDB 10.4 does not provide the same PostGIS
+      type modifier, so SRID 4326 is maintained when
+      inserting geometry values.
+    */
+    location POINT NULL,
+
+    notes TEXT NOT NULL DEFAULT '',
+    status VARCHAR(30) NOT NULL DEFAULT 'in_review',
+    created_by_uid TEXT NOT NULL,
+    updated_by_uid TEXT NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (id),
+    KEY properties_survey_idx (tenant_id, survey_number(191)),
+    KEY properties_tenant_updated_idx (tenant_id, updated_at),
+    SPATIAL KEY properties_location_spatial_idx (location),
+
+    CONSTRAINT properties_tenant_fk
+        FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE documents (
+    id CHAR(36) NOT NULL,
+    tenant_id CHAR(36) NOT NULL,
+    property_id CHAR(36) NOT NULL,
+    doc_type VARCHAR(50) NULL,
+    original_filename TEXT NOT NULL,
+    storage_key TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    sha256 CHAR(64) NOT NULL,
+    processing_status VARCHAR(30) NOT NULL DEFAULT 'queued',
+    extracted_text LONGTEXT NULL,
+    extracted_fields JSON NOT NULL,
+    uploaded_by_uid TEXT NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (id),
+    KEY documents_doc_type_idx (tenant_id, doc_type),
+    KEY documents_property_idx (tenant_id, property_id, created_at),
+
+    CONSTRAINT documents_property_fk
+        FOREIGN KEY (property_id)
+        REFERENCES properties(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT documents_tenant_fk
+        FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE risk_findings (
+    id CHAR(36) NOT NULL,
+    tenant_id CHAR(36) NOT NULL,
+    property_id CHAR(36) NOT NULL,
+    code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    severity VARCHAR(20) NOT NULL,
+    points INT NOT NULL DEFAULT 0,
+    explanation TEXT NOT NULL,
+    evidence_status VARCHAR(20) NOT NULL,
+    next_action TEXT NOT NULL,
+    created_by_uid TEXT NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (id),
+    KEY findings_property_idx (tenant_id, property_id, created_at),
+
+    CONSTRAINT risk_findings_property_fk
+        FOREIGN KEY (property_id)
+        REFERENCES properties(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT risk_findings_tenant_fk
+        FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE spatial_layers (
+    id CHAR(36) NOT NULL,
+    layer_type TEXT NOT NULL,
+    label TEXT NOT NULL,
+    source_name TEXT NULL,
+    source_url TEXT NULL,
+    source_date DATE NULL,
+    data_status VARCHAR(20) NOT NULL DEFAULT 'demo',
+
+    /*
+      MariaDB spatial replacement for
+      geometry(Geometry,4326).
+    */
+    geom GEOMETRY NOT NULL,
+
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    metadata JSON NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (id),
+    KEY spatial_layers_active_type_idx (active, layer_type(191)),
+    SPATIAL KEY spatial_layers_geom_spatial_idx (geom)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE audit_events (
+    id CHAR(36) NOT NULL,
+    actor_uid TEXT NOT NULL,
+    tenant_id CHAR(36) NULL,
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NULL,
+    details JSON NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (id),
+    KEY audit_events_tenant_time_idx (tenant_id, created_at),
+
+    CONSTRAINT audit_events_tenant_fk
+        FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE title_events (
+    id CHAR(36) NOT NULL,
+    tenant_id CHAR(36) NOT NULL,
+    property_id CHAR(36) NOT NULL,
+    document_id CHAR(36) NULL,
+    sequence_order INT NOT NULL DEFAULT 1,
+    event_date DATE NOT NULL,
+    registration_date DATE NULL,
+    deed_type TEXT NOT NULL,
+    from_parties JSON NOT NULL,
+    to_parties JSON NOT NULL,
+    extent_sq_ft DECIMAL(20,4) NOT NULL DEFAULT 0,
+    extent_raw TEXT NOT NULL DEFAULT '',
+    consideration DECIMAL(20,4) NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL DEFAULT 'unverified',
+    dispute_rationale TEXT NULL,
+    reviewed_by TEXT NULL,
+    encumbrance_status VARCHAR(30) NOT NULL DEFAULT 'none',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (id),
+    KEY title_events_property_idx (tenant_id, property_id, event_date),
+
+    CONSTRAINT title_events_document_fk
+        FOREIGN KEY (document_id)
+        REFERENCES documents(id)
+        ON DELETE SET NULL,
+
+    CONSTRAINT title_events_property_fk
+        FOREIGN KEY (property_id)
+        REFERENCES properties(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT title_events_tenant_fk
+        FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE title_reviews (
+    id CHAR(36) NOT NULL,
+    tenant_id CHAR(36) NOT NULL,
+    property_id CHAR(36) NOT NULL,
+    event_id CHAR(36) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    rationale TEXT NULL,
+    reviewer_uid TEXT NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (id),
+    KEY title_reviews_event_idx (tenant_id, event_id, created_at),
+
+    CONSTRAINT title_reviews_event_fk
+        FOREIGN KEY (event_id)
+        REFERENCES title_events(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT title_reviews_property_fk
+        FOREIGN KEY (property_id)
+        REFERENCES properties(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT title_reviews_tenant_fk
+        FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE source_registry_verifications (
+    id CHAR(36) NOT NULL,
+    tenant_id CHAR(36) NOT NULL,
+    property_id CHAR(36) NOT NULL,
+    registry_name VARCHAR(30) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    query_params JSON NOT NULL,
+    matched_record JSON NOT NULL,
+    discrepancies JSON NOT NULL,
+    latency_ms INT NOT NULL DEFAULT 0,
+    response_hash TEXT NOT NULL,
+    verified_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (id),
+    KEY src_reg_prop_idx (tenant_id, property_id, registry_name),
+    KEY src_reg_verified_at_idx (tenant_id, verified_at),
+
+    CONSTRAINT source_registry_property_fk
+        FOREIGN KEY (property_id)
+        REFERENCES properties(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT source_registry_tenant_fk
+        FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE legal_bookmarks (
+    id CHAR(36) NOT NULL,
+    tenant_id CHAR(36) NOT NULL,
+    property_id CHAR(36) NULL,
+    act_id TEXT NOT NULL,
+    section_number TEXT NOT NULL,
+    title TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_by_uid TEXT NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (id),
+    KEY legal_bookmarks_tenant_idx (tenant_id, property_id),
+
+    CONSTRAINT legal_bookmarks_property_fk
+        FOREIGN KEY (property_id)
+        REFERENCES properties(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT legal_bookmarks_tenant_fk
+        FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE workspace_settings (
+    tenant_id CHAR(36) NOT NULL,
+    org_name TEXT NOT NULL DEFAULT 'Karnataka Legal Partners LLP',
+    primary_contact TEXT NOT NULL DEFAULT 'Deepak Professional (deepak@ojix.local)',
+    default_district TEXT NOT NULL DEFAULT 'Bengaluru Urban',
+    auto_screen_bhoomi BOOLEAN NOT NULL DEFAULT TRUE,
+    auto_screen_kaveri BOOLEAN NOT NULL DEFAULT TRUE,
+    auto_screen_spatial BOOLEAN NOT NULL DEFAULT TRUE,
+    swd_primary_buffer_m DECIMAL(20,4) NOT NULL DEFAULT 50,
+    swd_secondary_buffer_m DECIMAL(20,4) NOT NULL DEFAULT 25,
+    swd_tertiary_buffer_m DECIMAL(20,4) NOT NULL DEFAULT 15,
+    lake_buffer_m DECIMAL(20,4) NOT NULL DEFAULT 30,
+    survey_margin_tolerance_pct DECIMAL(10,4) NOT NULL DEFAULT 1.0,
+    ocr_confidence_threshold DECIMAL(10,4) NOT NULL DEFAULT 0.60,
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+    PRIMARY KEY (tenant_id),
+
+    CONSTRAINT workspace_settings_tenant_fk
+        FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

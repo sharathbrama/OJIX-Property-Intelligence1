@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Settings2, Building2, ShieldCheck, Save, Sliders, CheckCircle2 } from 'lucide-react';
+import { authFetch } from '../authFetch';
 
 interface SettingsData {
   org_name: string;
@@ -44,7 +45,7 @@ export function SettingsView({ apiUrl, currentUser }: { apiUrl: string; currentU
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch(`${apiUrl}/api/settings`);
+      const res = await authFetch(`${apiUrl}/api/settings`);
       const data = await res.json();
       if (data.settings) setForm(data.settings);
     } catch { /* graceful fallback */ }
@@ -59,7 +60,7 @@ export function SettingsView({ apiUrl, currentUser }: { apiUrl: string; currentU
     setSaving(true);
     setNotice('');
     try {
-      const res = await fetch(`${apiUrl}/api/settings`, {
+      const res = await authFetch(`${apiUrl}/api/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form)

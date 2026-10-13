@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { authFetch } from '../authFetch';
 import {
   X,
   CheckCircle2,
@@ -34,9 +35,11 @@ import type {
 
 interface SideBySideReviewProps {
   propertyId: string;
+  propertyIdentity: { survey_number:string; subdivision:string; village:string; district:string; extent:string; boundary_north:string; boundary_south:string; boundary_east:string; boundary_west:string };
   doc: PropertyDoc;
   onClose: () => void;
   onDocumentUpdated?: (updatedDoc: PropertyDoc) => void;
+  readOnly?: boolean;
 }
 
 interface ActiveBox {
@@ -51,11 +54,35 @@ interface ActiveBox {
   snippet?: string;
 }
 
+function getVerificationIssues(fields: ExtractedDocumentFields | null): string[] {
+  if (!fields) return ['Document extraction has not completed.'];
+  const issues: string[] = [];
+  const missing = (value: unknown) => !value || ['not recorded','not specified','none','unknown','—'].includes(String(value).trim().toLowerCase());
+  const schedule = fields.propertySchedule;
+  const conveyanceTypes = new Set(['sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney']);
+  if (missing(fields.documentNumber)) issues.push('Document / registration number');
+  if (missing(schedule?.surveyNumber)) issues.push('Survey number');
+  if (missing(schedule?.village)) issues.push('Village');
+  if (!schedule?.extent?.normalizedSqFt || schedule.extent.normalizedSqFt <= 0) issues.push('Valid property extent');
+  const boundaries = schedule?.boundaries;
+  if (!boundaries || [boundaries.north,boundaries.south,boundaries.east,boundaries.west].some(missing)) issues.push('Four-side boundaries');
+  if (conveyanceTypes.has(fields.documentType)) {
+    if (!fields.parties?.length) issues.push('Parties and entities');
+    if (missing(fields.executionDate)) issues.push('Execution date');
+    if (missing(fields.registrationDate)) issues.push('Registration date');
+  }
+  const confidence = fields.fieldConfidence || {};
+  if (['documentNumber','surveyNumber','extent','boundaries'].some(key => confidence[key] !== undefined && confidence[key] < 0.60)) issues.push('Low-confidence core fields');
+  return issues;
+}
+
 export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
   propertyId,
+  propertyIdentity,
   doc,
   onClose,
   onDocumentUpdated,
+  readOnly = false,
 }) => {
   const [fields, setFields] = useState<ExtractedDocumentFields | null>(
     doc.extracted_fields || null
@@ -67,6 +94,49 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [successNotice, setSuccessNotice] = useState<string>('');
+  const [documentUrl, setDocumentUrl] = useState<string>('');
+  const [documentLoadError, setDocumentLoadError] = useState<string>('');
+  const verificationIssues = useMemo(() => getVerificationIssues(fields), [fields]);
+  const identityAssessment = useMemo(() => {
+    if (!fields) return {status:'unknown' as const, details:['Document extraction has not completed.']};
+    const clean=(value:unknown)=>String(value||'').toLowerCase().replace(/guntas?/g,'gunta').replace(/[^a-z0-9]/g,'');
+    const missing=(value:unknown)=>!value||['notrecorded','notspecified','none','unknown'].includes(clean(value));
+    const expectedSurvey=clean(propertyIdentity.survey_number);
+    const expectedHissa=clean(propertyIdentity.subdivision);
+    const documentSurvey=clean(fields.propertySchedule?.surveyNumber);
+    const documentHissa=clean(fields.propertySchedule?.subdivisionHissa);
+    const expectedVillage=clean(propertyIdentity.village);
+    const documentVillage=clean(fields.propertySchedule?.village);
+    const conflicts:string[]=[];
+    const confirmed:string[]=[];
+    if (!missing(fields.propertySchedule?.surveyNumber)&&expectedSurvey) {
+      const surveyMatches=documentSurvey===clean(`${propertyIdentity.survey_number}${propertyIdentity.subdivision||''}`)||(documentSurvey===expectedSurvey&&(!documentHissa||!expectedHissa||documentHissa===expectedHissa));
+      const displayDocumentSurvey=`${fields.propertySchedule.surveyNumber}${fields.propertySchedule.subdivisionHissa&&!String(fields.propertySchedule.surveyNumber).includes('/')?`/${fields.propertySchedule.subdivisionHissa}`:''}`;
+      (surveyMatches?confirmed:conflicts).push(`Survey/Hissa: application ${propertyIdentity.survey_number}${propertyIdentity.subdivision?`/${propertyIdentity.subdivision}`:''}, document ${displayDocumentSurvey}`);
+    }
+    if (!missing(fields.propertySchedule?.village)&&expectedVillage) (documentVillage===expectedVillage?confirmed:conflicts).push(`Village: application ${propertyIdentity.village}, document ${fields.propertySchedule.village}`);
+    if (conflicts.length) return {status:'mismatch' as const,details:conflicts};
+    if (confirmed.length) return {status:'match' as const,details:confirmed};
+    return {status:'unknown' as const,details:['Survey/Hissa and village were not extracted, so this document cannot yet be linked confidently.']};
+  },[fields,propertyIdentity]);
+  const mirrorRows = useMemo(() => {
+    const clean=(value:unknown)=>String(value||'').toLowerCase().replace(/guntas?/g,'gunta').replace(/[^a-z0-9]/g,'');
+    const missing=(value:unknown)=>!value||['notrecorded','notspecified','none','unknown'].includes(clean(value));
+    const row=(label:string,applicationValue:unknown,documentValue:unknown)=>({label,applicationValue:String(applicationValue||'Not entered'),documentValue:String(documentValue||'Not extracted'),status:missing(documentValue)?'missing':clean(applicationValue)===clean(documentValue)?'match':'mismatch'});
+    const schedule=fields?.propertySchedule;
+    const appSurvey=`${propertyIdentity.survey_number||''}${propertyIdentity.subdivision?`/${propertyIdentity.subdivision}`:''}`;
+    const documentSurveyBase=schedule?.surveyNumber&&!missing(schedule.surveyNumber)?schedule.surveyNumber:'';
+    const docSurvey=`${documentSurveyBase}${schedule?.subdivisionHissa&&!String(documentSurveyBase).includes('/')?`/${schedule.subdivisionHissa}`:''}`;
+    return [
+      row('Survey / Hissa',appSurvey,docSurvey),
+      row('Village',propertyIdentity.village,schedule?.village),
+      row('Extent',propertyIdentity.extent,schedule?.extent?.rawText),
+      row('North boundary',propertyIdentity.boundary_north,schedule?.boundaries?.north),
+      row('South boundary',propertyIdentity.boundary_south,schedule?.boundaries?.south),
+      row('East boundary',propertyIdentity.boundary_east,schedule?.boundaries?.east),
+      row('West boundary',propertyIdentity.boundary_west,schedule?.boundaries?.west),
+    ];
+  },[fields,propertyIdentity]);
 
   // Override dialog state
   const [overrideModal, setOverrideModal] = useState<{
@@ -90,18 +160,39 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
 
   // If extracted_fields is missing, trigger extraction automatically on load
   useEffect(() => {
-    if (!doc.extracted_fields) {
+    if (!readOnly && !doc.extracted_fields) {
       handleTriggerExtraction();
     } else {
-      setFields(doc.extracted_fields);
+      setFields(doc.extracted_fields || null);
     }
-  }, [doc.id]);
+  }, [doc.id, readOnly]);
+
+  useEffect(() => {
+    let objectUrl = '';
+    let cancelled = false;
+    setDocumentLoadError('');
+    authFetch(`/api/properties/${propertyId}/documents/${doc.id}/file`)
+      .then(async response => {
+        if (!response.ok) throw new Error('The original document could not be loaded.');
+        const blob = await response.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setDocumentUrl(objectUrl);
+      })
+      .catch(error => {
+        if (!cancelled) setDocumentLoadError(error instanceof Error ? error.message : 'The original document could not be loaded.');
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [doc.id, propertyId]);
 
   const handleTriggerExtraction = async () => {
     setBusy(true);
     setError('');
     try {
-      const res = await fetch(`/api/properties/${propertyId}/documents/${doc.id}/extract`, {
+      const res = await authFetch(`/api/properties/${propertyId}/documents/${doc.id}/extract`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -127,32 +218,26 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     if (!fields) return [];
     const boxes: ActiveBox[] = [];
 
-    // Document Number Anchor
-    boxes.push({
+    const documentNumberAnchor = fields.fieldAnchors?.documentNumber;
+    if (documentNumberAnchor) boxes.push({
       fieldId: 'documentNumber',
       label: 'Doc Number',
-      pageNumber: 1,
-      ymin: 0.08,
-      xmin: 0.15,
-      ymax: 0.14,
-      xmax: 0.85,
-      confidence: fields.fieldConfidence?.documentNumber ?? 0.85,
-      snippet: fields.documentNumber,
+      pageNumber: documentNumberAnchor.pageNumber,
+      ...documentNumberAnchor.boundingBox,
+      confidence: documentNumberAnchor.confidenceScore,
+      snippet: documentNumberAnchor.extractedSnippet,
     });
 
     // Parties
     fields.parties.forEach((party, idx) => {
       const anchor = party.evidenceAnchor;
-      boxes.push({
+      if (anchor) boxes.push({
         fieldId: `party_${idx}`,
         label: `${prettyRole(party.role)}: ${party.name}`,
-        pageNumber: anchor?.pageNumber || 1,
-        ymin: anchor?.boundingBox?.ymin ?? 0.20 + idx * 0.08,
-        xmin: anchor?.boundingBox?.xmin ?? 0.10,
-        ymax: anchor?.boundingBox?.ymax ?? 0.26 + idx * 0.08,
-        xmax: anchor?.boundingBox?.xmax ?? 0.90,
-        confidence: anchor?.confidenceScore ?? (party.relationship ? 0.92 : 0.85),
-        snippet: anchor?.extractedSnippet || `${party.name} (${party.role})`,
+        pageNumber: anchor.pageNumber,
+        ...anchor.boundingBox,
+        confidence: anchor.confidenceScore,
+        snippet: anchor.extractedSnippet,
       });
     });
 
@@ -160,62 +245,26 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     if (fields.propertySchedule) {
       const sched = fields.propertySchedule;
       const anchor = sched.evidenceAnchor;
-      boxes.push({
+      if (anchor) boxes.push({
         fieldId: 'surveyNumber',
         label: `Survey No. ${sched.surveyNumber}`,
-        pageNumber: anchor?.pageNumber || 1,
-        ymin: anchor?.boundingBox?.ymin ?? 0.45,
-        xmin: anchor?.boundingBox?.xmin ?? 0.12,
-        ymax: anchor?.boundingBox?.ymax ?? 0.51,
-        xmax: anchor?.boundingBox?.xmax ?? 0.88,
-        confidence: fields.fieldConfidence?.surveyNumber ?? 0.92,
-        snippet: `Survey No: ${sched.surveyNumber} in ${sched.village}`,
+        pageNumber: anchor.pageNumber,
+        ...anchor.boundingBox,
+        confidence: anchor.confidenceScore,
+        snippet: anchor.extractedSnippet,
       });
-
-      // Extent
-      if (sched.extent?.rawText) {
-        boxes.push({
-          fieldId: 'extent',
-          label: `Extent: ${sched.extent.rawText}`,
-          pageNumber: anchor?.pageNumber || 1,
-          ymin: Math.min(0.85, (anchor?.boundingBox?.ymin ?? 0.45) + 0.07),
-          xmin: 0.12,
-          ymax: Math.min(0.92, (anchor?.boundingBox?.ymax ?? 0.51) + 0.07),
-          xmax: 0.88,
-          confidence: fields.fieldConfidence?.extent ?? 0.90,
-          snippet: sched.extent.rawText,
-        });
-      }
-
-      // Boundaries
-      if (sched.boundaries?.north) {
-        boxes.push({
-          fieldId: 'boundaries',
-          label: 'Schedule Boundaries',
-          pageNumber: sched.evidenceAnchor?.pageNumber || 1,
-          ymin: 0.62,
-          xmin: 0.10,
-          ymax: 0.74,
-          xmax: 0.90,
-          confidence: fields.fieldConfidence?.boundaries ?? 0.88,
-          snippet: `N: ${sched.boundaries.north}, S: ${sched.boundaries.south}`,
-        });
-      }
     }
 
     // Consideration
     if (fields.consideration) {
       const conAnchor = fields.consideration.evidenceAnchor;
-      boxes.push({
+      if (conAnchor) boxes.push({
         fieldId: 'consideration',
         label: `Consideration: ₹ ${fields.consideration.amount.toLocaleString('en-IN')}`,
-        pageNumber: conAnchor?.pageNumber || 1,
-        ymin: conAnchor?.boundingBox?.ymin ?? 0.78,
-        xmin: conAnchor?.boundingBox?.xmin ?? 0.12,
-        ymax: conAnchor?.boundingBox?.ymax ?? 0.85,
-        xmax: conAnchor?.boundingBox?.xmax ?? 0.88,
-        confidence: fields.fieldConfidence?.consideration ?? 0.91,
-        snippet: `Amount: Rs. ${fields.consideration.amount}`,
+        pageNumber: conAnchor.pageNumber,
+        ...conAnchor.boundingBox,
+        confidence: conAnchor.confidenceScore,
+        snippet: conAnchor.extractedSnippet,
       });
     }
 
@@ -277,6 +326,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
 
   // Open override modal
   const openOverrideDialog = (fieldPath: string, fieldLabel: string, previousValue: any) => {
+    if (readOnly) return;
     setOverrideModal({
       isOpen: true,
       fieldPath,
@@ -302,7 +352,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
         parsedNewValue = parseFloat(overrideModal.newValue) || overrideModal.newValue;
       }
 
-      const res = await fetch(`/api/properties/${propertyId}/documents/${doc.id}/fields`, {
+      const res = await authFetch(`/api/properties/${propertyId}/documents/${doc.id}/fields`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -319,7 +369,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
 
       const data = await res.json();
       setFields(data.extractedFields);
-      setSuccessNotice(`Field "${overrideModal.fieldLabel}" overridden and verified.`);
+      setSuccessNotice(`Field "${overrideModal.fieldLabel}" corrected. The document still requires explicit reviewer verification.`);
       setOverrideModal({ isOpen: false, fieldPath: '', fieldLabel: '', previousValue: null, newValue: '', rationale: '' });
       if (onDocumentUpdated) {
         onDocumentUpdated(data.document);
@@ -333,11 +383,15 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
 
   // Quick verify toggle
   const handleToggleVerification = async () => {
+    if (!fields?.reviewState?.isVerified && (verificationIssues.length||identityAssessment.status!=='match')) {
+      setError(identityAssessment.status==='mismatch'?`This document may belong to another property: ${identityAssessment.details.join('; ')}.`:`Review required before verification: ${verificationIssues.join(', ')}.`);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const isVerified = !fields?.reviewState?.isVerified;
-      const res = await fetch(`/api/properties/${propertyId}/documents/${doc.id}/fields`, {
+      const res = await authFetch(`/api/properties/${propertyId}/documents/${doc.id}/fields`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -362,12 +416,11 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     }
   };
 
-  const fileUrl = `/api/properties/${propertyId}/documents/${doc.id}/file`;
   const isImage = doc.mime_type.startsWith('image/');
   const isPdf = doc.mime_type === 'application/pdf';
 
   return (
-    <div className="side-by-side-overlay">
+    <div className={`side-by-side-overlay ${readOnly ? 'read-only' : ''}`}>
       {/* Top Navbar */}
       <header className="review-header">
         <div className="review-header-left">
@@ -408,14 +461,15 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
             </div>
           )}
 
-          <button className="secondary-btn" onClick={handleTriggerExtraction} disabled={busy}>
+          {!readOnly&&<button className="secondary-btn" onClick={handleTriggerExtraction} disabled={busy}>
             <RefreshCw size={15} className={busy ? 'spin' : ''} /> Re-extract
-          </button>
+          </button>}
 
-          <button
+          {!readOnly&&<button
             className={`primary-btn ${fields?.reviewState?.isVerified ? 'verified-btn' : ''}`}
             onClick={handleToggleVerification}
-            disabled={busy}
+            disabled={busy || (!fields?.reviewState?.isVerified && (verificationIssues.length > 0||identityAssessment.status!=='match'))}
+            title={!fields?.reviewState?.isVerified&&identityAssessment.status!=='match'?identityAssessment.details.join('; '):!fields?.reviewState?.isVerified&&verificationIssues.length?`Review required: ${verificationIssues.join(', ')}`:undefined}
           >
             {fields?.reviewState?.isVerified ? (
               <>
@@ -426,7 +480,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
                 <CheckCircle2 size={16} /> Mark as Verified
               </>
             )}
-          </button>
+          </button>}
 
           <button className="icon-btn close-btn" onClick={onClose}>
             <X size={20} />
@@ -441,6 +495,9 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
           <button onClick={() => setError('')}><X size={14} /></button>
         </div>
       )}
+      {!fields?.reviewState?.isVerified&&verificationIssues.length>0&&<div className="review-alert alert-warning"><AlertTriangle size={15}/><span><strong>Verification blocked.</strong> Review or correct: {verificationIssues.join(', ')}.</span></div>}
+      {fields?.extractionMetadata?.status==='manual_review'&&<div className="review-alert alert-warning"><AlertTriangle size={15}/><span><strong>Manual evidence review required.</strong> {fields.extractionMetadata.message||'Automatic extraction did not produce verified source facts.'}</span></div>}
+      <div className={`review-alert identity-assessment ${identityAssessment.status}`}><MapPin size={15}/><span><strong>{identityAssessment.status==='match'?'Document identity matches this application':identityAssessment.status==='mismatch'?'Possible property mismatch':'Document ownership cannot yet be confirmed'}</strong> {identityAssessment.details.join(' · ')}</span></div>
       {successNotice && (
         <div className="review-alert alert-success">
           <Check size={16} /> <span>{successNotice}</span>
@@ -513,72 +570,18 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
               }}
             >
               {/* Document Image Background if available */}
-              {isImage ? (
+              {documentLoadError ? (
+                <div className="document-load-state"><AlertTriangle size={24}/><strong>Original document unavailable</strong><span>{documentLoadError}</span></div>
+              ) : !documentUrl ? (
+                <div className="document-load-state"><RefreshCw className="spin" size={24}/><strong>Loading original document…</strong></div>
+              ) : isImage ? (
                 <img
-                  src={fileUrl}
+                  src={documentUrl}
                   alt={doc.original_filename}
                   className="document-image-bg"
                 />
               ) : isPdf ? (
-                <div className="pdf-canvas-placeholder">
-                  <div className="legal-paper-header">
-                    <div className="govt-seal">GOVERNMENT OF KARNATAKA</div>
-                    <div className="dept-sub">{fields?.issuingAuthority || 'Department of Stamps and Registration'}</div>
-                    <div className="doc-headline">
-                      {prettyDocType(fields?.documentType || 'sale_deed').toUpperCase()}
-                      {totalPages > 1 && <span className="sheet-badge"> — SHEET {currentPage} OF {totalPages}</span>}
-                    </div>
-                  </div>
-                  <div className="legal-paper-body">
-                    <div className="watermark-bg">
-                      KARNATAKA JANA SEVA{totalPages > 1 ? ` • SHEET ${currentPage}` : ''}
-                    </div>
-
-                    {/* Sheet 1: Registration info & Parties */}
-                    {(totalPages === 1 || currentPage === 1) && (
-                      <>
-                        <p className="doc-num-row"><strong>Registered Document No:</strong> {fields?.documentNumber || 'PENDING'}</p>
-                        <div className="mock-parties-p">
-                          <strong>VENDORS / EXECUTANTS:</strong>
-                          {fields?.parties?.filter(p => p.role === 'seller' || p.role === 'donor' || p.role === 'owner').map((p, i) => (
-                            <div key={i}>{p.name} {p.relationship ? `(${p.relationship})` : ''}</div>
-                          )) || '—'}
-                        </div>
-                        <div className="mock-parties-p">
-                          <strong>PURCHASERS / CLAIMANTS:</strong>
-                          {fields?.parties?.filter(p => p.role === 'buyer' || p.role === 'donee').map((p, i) => (
-                            <div key={i}>{p.name} {p.relationship ? `(${p.relationship})` : ''}</div>
-                          )) || '—'}
-                        </div>
-                      </>
-                    )}
-
-                    {/* Sheet 2 (or Page 1 if single page): Property Schedule & Boundaries */}
-                    {(totalPages === 1 || currentPage === 2) && (
-                      <>
-                        <p className="schedule-p">
-                          <strong>SCHEDULE PROPERTY:</strong> All that piece and parcel of immovable agricultural / converted land bearing Survey No. {fields?.propertySchedule?.surveyNumber || '—'} situated at {fields?.propertySchedule?.village || '—'}, {fields?.propertySchedule?.district || 'Bengaluru Urban'}, measuring {fields?.propertySchedule?.extent?.rawText || '—'} ({fields?.propertySchedule?.extent?.normalizedSqFt?.toLocaleString('en-IN') || '—'} Sq. Ft.).
-                        </p>
-                        <div className="mock-boundaries-grid">
-                          <div><strong>North:</strong> {fields?.propertySchedule?.boundaries?.north || '—'}</div>
-                          <div><strong>South:</strong> {fields?.propertySchedule?.boundaries?.south || '—'}</div>
-                          <div><strong>East:</strong> {fields?.propertySchedule?.boundaries?.east || '—'}</div>
-                          <div><strong>West:</strong> {fields?.propertySchedule?.boundaries?.west || '—'}</div>
-                        </div>
-                      </>
-                    )}
-
-                    {/* Sheet 3+ (or Sheet 2 if 2 pages total, or Sheet 1 if single page): Consideration & Endorsements */}
-                    {(totalPages === 1 || (totalPages === 2 && currentPage === 2) || currentPage >= 3) && fields?.consideration && (
-                      <div className="mock-consideration">
-                        <strong>Total Consideration Amount:</strong> ₹ {fields.consideration.amount.toLocaleString('en-IN')}
-                        <div style={{ fontSize: '10px', color: '#64748b', marginTop: '4px' }}>
-                          Registered at {fields.subRegistrarOffice || 'Sub-Registrar Office'} • Official Stamp Verified
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <iframe title={`Original document ${doc.original_filename}`} src={`${documentUrl}#page=${currentPage}&toolbar=0&navpanes=0`} className="document-pdf-frame" />
               ) : (
                 <div className="text-canvas-mock">
                   <div className="mock-content-text">{doc.original_filename}</div>
@@ -622,6 +625,8 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
             <h3>Structured Document Evidence</h3>
             <p>Verify extracted facts against document anchors. Corrections are audited.</p>
           </div>
+
+          {fields&&<section className="mirror-comparison"><div className="mirror-heading"><div><strong>Application ↔ document comparison</strong><span>Entered property facts are mirrored against this uploaded document.</span></div><span className={`mirror-overall ${identityAssessment.status}`}>{identityAssessment.status==='match'?'Identity match':identityAssessment.status==='mismatch'?'Possible mismatch':'Needs review'}</span></div><div className="mirror-table"><div className="mirror-table-head"><span>FIELD</span><span>APPLICATION</span><span>DOCUMENT</span><span>RESULT</span></div>{mirrorRows.map(item=><div className="mirror-row" key={item.label}><strong>{item.label}</strong><span>{item.applicationValue}</span><span>{item.documentValue}</span><em className={item.status}>{item.status==='match'?<><Check size={12}/>Match</>:item.status==='mismatch'?<><X size={12}/>Mismatch</>:<><AlertTriangle size={12}/>Missing</>}</em></div>)}</div><small>Mismatch means the extracted wording differs from the application. Review the source image before deciding whether the document belongs to another property.</small></section>}
 
           {!fields ? (
             <div className="empty-extraction">

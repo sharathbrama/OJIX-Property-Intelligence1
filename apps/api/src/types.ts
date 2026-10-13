@@ -115,6 +115,13 @@ export interface ExtractedDocumentFields {
   encumbranceEntries?: EncumbranceEntry[];
   overallConfidence: number; // 0.0 to 1.0
   fieldConfidence: Record<string, number>;
+  fieldAnchors?: Record<string, EvidenceAnchor>;
+  extractionMetadata?: {
+    source: 'pending' | 'ocr' | 'provider' | 'reviewer_supplied' | 'text';
+    status: 'pending' | 'completed' | 'manual_review';
+    extractedAt?: string;
+    message?: string;
+  };
   reviewState: ReviewState;
 }
 

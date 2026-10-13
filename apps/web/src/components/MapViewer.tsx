@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { authFetch } from '../authFetch';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import {
   Layers,
@@ -70,12 +71,13 @@ export interface MapViewerProps {
     address?: string;
   };
   onGeometryUpdated?: (geometry: any) => void;
+  readOnly?: boolean;
 }
 
 const API = (typeof import.meta.env.VITE_API_URL !== 'undefined' ? import.meta.env.VITE_API_URL : (typeof window !== 'undefined' && window.location.port === '5173' ? 'http://localhost:4000' : ''));
 
 async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, init);
+  const res = await authFetch(`${API}${path}`, init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data as T;
@@ -103,7 +105,7 @@ function createGeoCircle(center: [number, number], radiusMeters: number, points 
   };
 }
 
-export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdated }) => {
+export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdated, readOnly = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -747,14 +749,14 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
           <div className="eyebrow">REGULATORY SPATIAL SCREENING & GIS</div>
           <h2>Rajakaluve SWD & Lake Buffer Engine</h2>
           <p>
-            PostGIS-backed geodesic buffer screening for Karnataka storm-water drains (50m primary,
+            MariaDB-backed spatial buffer screening for Karnataka storm-water drains (50m primary,
             25m secondary, 15m tertiary) and statutory waterbody boundaries (30m).
           </p>
         </div>
         <div className="gis-header-actions">
-          <button className="secondary-btn" onClick={() => setShowGeoJsonModal(true)}>
+          {!readOnly&&<button className="secondary-btn" onClick={() => setShowGeoJsonModal(true)}>
             <FileCode size={15} /> Upload / Edit Parcel GeoJSON
-          </button>
+          </button>}
           <button className="primary-btn" onClick={loadSpatialScreening} disabled={loading}>
             <RefreshCw size={15} className={loading ? 'spin' : ''} /> Refresh Screening
           </button>
@@ -1060,7 +1062,7 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
       </div>
 
       {/* Cadastral GeoJSON Upload Modal */}
-      {showGeoJsonModal && (
+      {showGeoJsonModal && !readOnly && (
         <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setShowGeoJsonModal(false)}>
           <div className="modal">
             <div className="modal-header">

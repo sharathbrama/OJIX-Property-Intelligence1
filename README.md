@@ -6,7 +6,7 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
 
 - Responsive React + TypeScript PWA-style workspace (overview, property register, property case file, documents, map context, findings).
 - TypeScript/Express REST API with request validation, upload size/type limits, rate limiting, security headers, audit events and tenant-scoped property/document/findings queries.
-- PostgreSQL + PostGIS schema for organizations, memberships, properties, documents, spatial layers, findings and audit events.
+- MariaDB schema for organizations, memberships, properties, documents, spatial layers, findings and audit events.
 - SHA-256 checksum recorded for every uploaded file.
 - Explainable baseline screening rules for missing survey number, documents and coordinates.
 - Spatial-layer proximity checks against explicitly imported features. The seeded feature is synthetic and labelled demo; it is not an official boundary.
@@ -16,7 +16,7 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
 
 ## Not yet implemented / do not imply it is live
 
-- No live Bhoomi, Kaveri 2.0, BBMP/e-Aasthi, BDA or Rajakaluve government integration.
+- No live Bhoomi, Kaveri 2.0, BBMP/e-Aasthi, BDA or Rajakaluve government integration. The RTC module stores validated lookup attempts and supports an authorised API adapter, but remains in manual-retrieval mode until official credentials are supplied.
 - No Document AI OCR or Vertex AI extraction pipeline yet. Uploads are queued in metadata only; files remain in local `uploads/` for development.
 - No verified survey parcel boundaries, official lake/SWD geometry, buffer-rule engine or official planning notices.
 - No production Cloud Storage adapter, Cloud Tasks/Pub/Sub workers, PDF report renderer, billing or organisation-management UI.
@@ -36,13 +36,27 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
    cp .env.example .env
    ```
 
-2. Start PostGIS:
+2. Start MariaDB:
 
    ```bash
    docker compose up -d db
    ```
 
-   The first database initialisation loads the schema and one synthetic demo workspace. If you already ran the database and change schema/seed files, recreate the local volume only if you are comfortable deleting local data:
+   The first database initialization loads the schema, demo role memberships, and one synthetic property. If you change schema or seed files later, recreate the local volume only if you are comfortable deleting local development data:
+
+   For an existing database created before the Organisation Admin module, preserve its data and apply migration 017 once:
+
+   ```bash
+   docker exec -i ojix-mariadb mariadb -uojix -pojix_local_only ojix_property_mysql < database/migrations/017_admin_governance.sql
+   ```
+
+   Migration 017 uses forward-only MariaDB DDL and is intentionally non-idempotent; confirm the new tables do not already exist before rerunning it.
+
+   To add RTC lookup persistence to an existing database, apply migration 018 once:
+
+   ```bash
+   docker exec -i ojix-mariadb mariadb -uojix -pojix_local_only ojix_property_mysql < database/migrations/018_rtc_lookups.sql
+   ```
 
    ```bash
    docker compose down -v
@@ -55,7 +69,13 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
    npm install
    ```
 
-4. Start API and web app in separate terminals (or use `npm run dev` from the root):
+4. Load the Karnataka district, taluk, hobli and village hierarchy used by the property forms:
+
+   ```bash
+   npm run db:locations
+   ```
+
+5. Start API and web app in separate terminals (or use `npm run dev` from the root):
 
    ```bash
    npm run dev
@@ -64,7 +84,20 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
    - Web: http://localhost:5173
    - API health: http://localhost:4000/health
 
-5. Open the web app. In local mode, the API uses the seeded `local-developer` identity and demo workspace. This bypass is intentionally limited to development; `NODE_ENV=production` refuses unauthenticated operation.
+6. Open the web app. In local mode, the API uses the seeded `local-developer` identity and demo workspace. This bypass is intentionally limited to development; `NODE_ENV=production` refuses unauthenticated operation.
+
+### Run the complete stack with Docker
+
+To run MariaDB, the API, and the production web build together:
+
+```bash
+docker compose up --build
+```
+
+- Web: http://localhost:8080
+- API health: http://localhost:4000/health
+
+If an older standalone `ojix-mariadb` container is already using port 3306, stop it first with `docker stop ojix-mariadb`, or start Compose with a different host port using `DB_PORT=3307 docker compose up --build`.
 
 ## Commands
 
@@ -73,6 +106,7 @@ npm run dev        # start API and web app
 npm run build      # build API and web app
 npm run typecheck  # TypeScript checks
 npm test           # API rule-engine tests
+npm run db:locations # reload Karnataka location dropdown data
 ```
 
 ## Core API
@@ -89,6 +123,16 @@ npm test           # API rule-engine tests
 | POST | `/api/properties/:id/analyze` | Run deterministic completeness + imported spatial-layer screening |
 | GET | `/api/properties/:id/report` | Download a JSON evidence report |
 | GET | `/api/map/layers` | GeoJSON for active imported spatial layers |
+| POST | `/api/rtc/search` | Validate and initiate an authorised RTC lookup |
+| GET | `/api/rtc/:id` | Read a tenant-scoped stored RTC lookup |
+| GET | `/api/rtc/:id/status` | Read lookup and manual-intervention status |
+| PATCH | `/api/rtc/:id/confirmation` | Record the Owner/Admin source-match decision |
+
+## Karnataka RTC retrieval
+
+The New Property Review form enables **Fetch RTC Details** only after District, Taluk, Hobli, Village and Survey Number are valid. Every attempt is stored separately from the property, so retrieved source data never silently overwrites user-entered facts. With `RTC_PROVIDER_MODE=disabled` (the default), the API returns `manual_required` and the UI links to the official Bhoomi portal. An authorised provider can be enabled with `RTC_PROVIDER_MODE=api`, `RTC_API_BASE_URL` and `RTC_API_TOKEN`. CAPTCHA, authorization failures, timeouts, empty results and malformed provider responses are recorded with explicit statuses. The adapter never attempts to bypass CAPTCHA or authentication controls. Fixture mode is restricted to automated tests.
+
+Live portal review on 13 October 2026 found that `https://landrecords.karnataka.gov.in/service53/` presents Google reCAPTCHA before RTC-information access. `https://landrecords.karnataka.gov.in/Service2/` provides the citizen View RTC and MR form using stateful ASP.NET dropdown postbacks, but the page does not publish an automation licence or a supported machine-to-machine API contract. OJIX therefore does not scrape that form by default. Written authorization and a stable integration contract are required before enabling automated portal navigation in production.
 
 ## Firebase Authentication
 
@@ -105,7 +149,7 @@ To enable token verification locally or in cloud:
 Recommended target architecture from the FRD:
 
 - Web/API: Cloud Run; serve the web app via Firebase Hosting or Cloud Run.
-- Database: Cloud SQL for PostgreSQL with PostGIS enabled where supported by the chosen instance configuration; verify extension availability before provisioning.
+- Database: a managed MySQL-compatible service selected only after its required MariaDB and spatial behavior has been verified against this schema.
 - Private files: Google Cloud Storage with uniform bucket-level access, least-privilege service accounts and retention controls.
 - OCR: Document AI processor behind a document-processing job interface.
 - AI extraction: Vertex AI through a provider abstraction; require schema validation, source/page provenance, confidence and human review.
@@ -136,9 +180,10 @@ This example geometry is illustrative only; do not use it as a real Rajakaluve r
 apps/
   api/            Express API, risk rules, tests
   web/            React + Vite user interface
-infra/db/         PostGIS schema and synthetic seed
+database/         canonical MariaDB schema and migrations
+infra/db/         Docker database entry point and synthetic seed
 .env.example      local configuration template
-docker-compose.yml local PostGIS
+docker-compose.yml local MariaDB, API and web stack
 ```
 
 ## Production readiness gate
