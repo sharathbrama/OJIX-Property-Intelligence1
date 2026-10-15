@@ -11,6 +11,12 @@ import { calculateRiskScore, type DiscrepancyFinding, type RiskScoreResult } fro
 import type { EvidenceAnchor } from './types.js';
 import type { TitleEvent, TitleGap } from './title-engine.js';
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character] as string);
+}
+
 export interface DueDiligenceReportSnapshot {
   reportId: string;
   reportVersion: string;
@@ -29,10 +35,17 @@ export interface DueDiligenceReportSnapshot {
 
 export interface GeneratedReportOutput {
   html: string;
-  pdfBytesMock: Buffer;
   sectionsPresent: string[];
   hasNorthArrow: boolean;
   hasEvidenceAppendix: boolean;
+}
+
+function emptySpatialScreening(message: string): SpatialScreeningResult {
+  return {
+    drainClearanceStatus: 'unknown', lakeClearanceStatus: 'unknown', findings: [],
+    screeningStatus: 'unavailable', message, cadastralParcelGeoJSON: { type: 'FeatureCollection', features: [] } as any,
+    georeferencedSnapshot: { imagePngBase64: '', metadata: { center: null, zoom: 0, scaleText: 'Scale unavailable', hasNorthArrow: false, sources: [], timestamp: new Date().toISOString(), crs: 'Not available' } },
+  };
 }
 
 /**
@@ -58,9 +71,13 @@ export function createDueDiligenceSnapshot(data: {
   const documents = data.documents ? JSON.parse(JSON.stringify(data.documents)) : [];
   const evidenceAppendix = data.evidenceAppendix ? JSON.parse(JSON.stringify(data.evidenceAppendix)) : [];
 
-  const spatialScreening = data.spatialScreening || screenSpatialBuffers(
-    { latitude: data.property?.latitude || 12.9716, longitude: data.property?.longitude || 77.5946 },
-    []
+  const latitude = data.property?.latitude;
+  const longitude = data.property?.longitude;
+  const spatialScreening = data.spatialScreening || (
+    Number.isFinite(Number(latitude)) && latitude !== null && latitude !== undefined &&
+    Number.isFinite(Number(longitude)) && longitude !== null && longitude !== undefined
+      ? screenSpatialBuffers({ latitude: Number(latitude), longitude: Number(longitude) }, [])
+      : emptySpatialScreening('Coordinates are not recorded; spatial screening was not run.')
   );
 
   // Combine all findings across domains for holistic explainable risk scoring
@@ -76,7 +93,7 @@ export function createDueDiligenceSnapshot(data: {
     reportId,
     reportVersion: '1.0.0',
     snapshotTimestamp: new Date().toISOString(),
-    tenant: data.tenant ? { ...data.tenant } : { id: 'org_karnataka_legal', organizationName: 'Karnataka Legal Partners LLP' },
+    tenant: data.tenant ? { ...data.tenant } : { id: String(data.property?.tenant_id || 'not-recorded'), organizationName: 'Not recorded' },
     property: data.property ? JSON.parse(JSON.stringify(data.property)) : {},
     documents,
     titleTimeline,
@@ -93,6 +110,9 @@ export function createDueDiligenceSnapshot(data: {
  * Feature 20 & 21: Client-Ready HTML & PDF Due-Diligence Report with 7 mandatory sections
  */
 export function generateDueDiligenceReport(snapshot: DueDiligenceReportSnapshot): GeneratedReportOutput {
+  const property = snapshot.property || {};
+  const surveyNumber = property.surveyNumber ?? property.survey_number;
+  const subdivision = property.subdivision ?? property.subdivision_number;
   const sectionsPresent = [
     'Executive Summary',
     'Property Profile & Identification Matrix',
@@ -103,7 +123,22 @@ export function generateDueDiligenceReport(snapshot: DueDiligenceReportSnapshot)
     'Statutory Disclaimers & Legal Notice',
   ];
 
-  const scoreClass = snapshot.riskSummary.score >= 70 ? 'critical' : (snapshot.riskSummary.score >= 35 ? 'warning' : 'good');
+  const hasVerifiedDocument = snapshot.documents.some((document: any) => {
+    const fields = typeof document.extracted_fields === 'string'
+      ? (() => { try { return JSON.parse(document.extracted_fields); } catch { return {}; } })()
+      : (document.extracted_fields || {});
+    return fields.reviewState?.isVerified === true;
+  });
+  const reviewIncomplete = snapshot.titleTimeline.length === 0 ||
+    snapshot.spatialScreening?.screeningStatus === 'unavailable' ||
+    snapshot.spatialScreening?.drainClearanceStatus === 'unknown' ||
+    snapshot.spatialScreening?.lakeClearanceStatus === 'unknown' ||
+    snapshot.documents.length === 0 || !hasVerifiedDocument ||
+    !snapshot.property?.extent || String(snapshot.property.extent).trim() === '' || String(snapshot.property.extent).toLowerCase() === 'not verified';
+  const scoreClass = reviewIncomplete ? 'incomplete' : snapshot.riskSummary.score >= 70 ? 'critical' : (snapshot.riskSummary.score >= 35 ? 'warning' : 'good');
+  const scoreLabel = reviewIncomplete
+    ? `Risk score: ${snapshot.riskSummary.score} / 100 (${snapshot.riskSummary.band}) — INCOMPLETE · NOT CLEARED`
+    : `Risk score: ${snapshot.riskSummary.score} / 100 (${snapshot.riskSummary.band})`;
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -118,6 +153,7 @@ export function generateDueDiligenceReport(snapshot: DueDiligenceReportSnapshot)
     .score-badge.critical { background: #fed7d7; color: #9b2c2c; }
     .score-badge.warning { background: #feebc8; color: #9c4221; }
     .score-badge.good { background: #c6f6d5; color: #22543d; }
+    .score-badge.incomplete { background: #feebc8; color: #9c4221; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; }
     th, td { border: 1px solid #cbd5e0; padding: 8px 12px; text-align: left; }
     th { background: #f7fafc; }
@@ -131,27 +167,28 @@ export function generateDueDiligenceReport(snapshot: DueDiligenceReportSnapshot)
   <header>
     <h1>OJIX PROPERTY INTELLIGENCE</h1>
     <p>Comprehensive Legal & Geospatial Due-Diligence Report | Report ID: ${snapshot.reportId}</p>
-    <p>Tenant: <strong>${snapshot.tenant.organizationName}</strong> | Generated: ${new Date(snapshot.snapshotTimestamp).toLocaleString('en-IN')}</p>
+    <p>Tenant: <strong>${escapeHtml(snapshot.tenant.organizationName)}</strong> | Generated: ${escapeHtml(snapshot.snapshotTimestamp)} (UTC)</p>
   </header>
 
   <section id="executive-summary">
     <h2>Executive Summary</h2>
-    <div class="score-badge ${scoreClass}">Score: ${snapshot.riskSummary.score} / 100 (${snapshot.riskSummary.band})</div>
-    <p><strong>Property Name:</strong> ${snapshot.property.name || 'Untitled Property'}</p>
-    <p>Survey No: ${snapshot.property.surveyNumber || 'Not recorded'}, Village: ${snapshot.property.village || 'Not recorded'}, Taluk: ${snapshot.property.taluk || 'Not recorded'}</p>
-    <p>${snapshot.riskSummary.disclaimer}</p>
+    <div class="score-badge ${scoreClass}">${escapeHtml(scoreLabel)}</div>
+    ${reviewIncomplete ? '<p><strong>Review status: INCOMPLETE — NOT CLEARED.</strong> Missing or unverified evidence prevents a complete assessment. A low or zero risk score does not mean the property is safe or legally clear.</p>' : ''}
+    <p><strong>Property Name:</strong> ${escapeHtml(snapshot.property.name || 'Not recorded')}</p>
+    <p>Survey No: ${escapeHtml(surveyNumber || 'Not recorded')}, Village: ${escapeHtml(property.village || 'Not recorded')}, Taluk: ${escapeHtml(property.taluk || 'Not recorded')}</p>
+    <p>${escapeHtml(snapshot.riskSummary.disclaimer)}</p>
   </section>
 
   <section id="property-profile">
     <h2>Property Profile & Identification Matrix</h2>
     <table>
       <tr><th>Field</th><th>Value</th></tr>
-      <tr><td>Survey / Subdivision</td><td>${snapshot.property.surveyNumber || '—'} / ${snapshot.property.subdivision || '—'}</td></tr>
-      <tr><td>Village / Hobli / Taluk</td><td>${snapshot.property.village || '—'}, ${snapshot.property.hobli || '—'}, ${snapshot.property.taluk || '—'}</td></tr>
-      <tr><td>District</td><td>${snapshot.property.district || 'Bengaluru Urban'}</td></tr>
-      <tr><td>Extent:</td><td>${snapshot.property.extent || 'Not verified'}</td></tr>
-      <tr><td>Address</td><td>${snapshot.property.address || '—'}</td></tr>
-      <tr><td>Coordinates (WGS 84)</td><td>${snapshot.property.latitude && snapshot.property.longitude ? `${snapshot.property.latitude.toFixed(6)}, ${snapshot.property.longitude.toFixed(6)}` : 'Location not recorded'}</td></tr>
+      <tr><td>Survey / Subdivision</td><td>${escapeHtml(surveyNumber || 'Not recorded')} / ${escapeHtml(subdivision || 'Not recorded')}</td></tr>
+      <tr><td>Village / Hobli / Taluk</td><td>${escapeHtml(property.village || 'Not recorded')}, ${escapeHtml(property.hobli || 'Not recorded')}, ${escapeHtml(property.taluk || 'Not recorded')}</td></tr>
+      <tr><td>District</td><td>${escapeHtml(property.district || 'Not recorded')}</td></tr>
+      <tr><td>Extent:</td><td>${escapeHtml(property.extent || 'Not verified')}</td></tr>
+      <tr><td>Address</td><td>${escapeHtml(property.address || 'Not recorded')}</td></tr>
+      <tr><td>Coordinates (WGS 84)</td><td>${property.latitude != null && property.longitude != null ? `${escapeHtml(Number(property.latitude).toFixed(6))}, ${escapeHtml(Number(property.longitude).toFixed(6))}` : 'Location not recorded'}</td></tr>
     </table>
   </section>
 
@@ -159,26 +196,26 @@ export function generateDueDiligenceReport(snapshot: DueDiligenceReportSnapshot)
     <h2>Title Chain & Ownership Progression</h2>
     ${snapshot.titleTimeline.length === 0 ? '<p>No title events recorded.</p>' : `
       <ul>
-        ${snapshot.titleTimeline.map((t: TitleEvent) => `<li><strong>${t.eventDate}</strong>: ${t.deedType} (${t.status}) — Extent: ${t.extentRaw || `${t.extentSqFt} sq ft`}, Parties: ${t.fromParties.map(p => p.name).join(', ')} &rarr; ${t.toParties.map(p => p.name).join(', ')}</li>`).join('')}
+        ${snapshot.titleTimeline.map((t: TitleEvent) => `<li><strong>${escapeHtml(t.eventDate)}</strong>: ${escapeHtml(t.deedType)} (${escapeHtml(t.status)}) — Extent: ${escapeHtml(t.extentRaw || `${t.extentSqFt} sq ft`)}, Parties: ${escapeHtml(t.fromParties.map(p => p.name).join(', '))} &rarr; ${escapeHtml(t.toParties.map(p => p.name).join(', '))}</li>`).join('')}
       </ul>
     `}
-    ${snapshot.titleGaps.length === 0 ? '<p><em>No title gaps or chronological discontinuities identified in 30-year search window.</em></p>' : snapshot.titleGaps.map((g: TitleGap) => `
+    ${snapshot.titleTimeline.length === 0 ? snapshot.titleGaps.length ? snapshot.titleGaps.map((g: TitleGap) => `<div class="gap"><strong>${escapeHtml(g.title)}</strong> (${escapeHtml(g.severity).toUpperCase()} — ${escapeHtml(g.points)} pts)<br/>${escapeHtml(g.description)}</div>`).join('') : '<p><em>No title events were supplied; title-chain review is unavailable.</em></p>' : snapshot.titleGaps.length === 0 ? '<p><em>No title gaps were detected in the recorded events. This is not a verified 30-year chain.</em></p>' : snapshot.titleGaps.map((g: TitleGap) => `
       <div class="gap">
-        <strong>${g.title}</strong> (${g.severity.toUpperCase()} — ${g.points} pts)<br/>
-        ${g.description}
+        <strong>${escapeHtml(g.title)}</strong> (${escapeHtml(g.severity).toUpperCase()} — ${escapeHtml(g.points)} pts)<br/>
+        ${escapeHtml(g.description)}
       </div>
     `).join('')}
   </section>
 
   <section id="discrepancy-matrix">
     <h2>Discrepancy Matrix</h2>
-    ${snapshot.discrepancies.length === 0 ? '<p><em>No cross-document extent or schedule boundary discrepancies detected.</em></p>' : `
+    ${snapshot.documents.length === 0 ? '<p><em>No source documents are attached; discrepancy review is unavailable.</em></p>' : snapshot.discrepancies.length === 0 ? '<p><em>No discrepancies were detected in the supplied document values. This does not confirm title or accuracy.</em></p>' : `
       <ul>
         ${snapshot.discrepancies.map((d: DiscrepancyFinding) => `
           <li class="discrepancy">
-            <strong>${d.field.toUpperCase()} MISMATCH</strong>: ${d.deltaText} (${d.severity.toUpperCase()} — ${d.points} pts)<br/>
-            <span>${d.explanation}</span><br/>
-            <small><em>Next Action: ${d.nextAction} [Statutory ref: ${d.statutoryCitation}]</em></small>
+            <strong>${escapeHtml(d.field).toUpperCase()} MISMATCH</strong>: ${escapeHtml(d.deltaText)} (${escapeHtml(d.severity).toUpperCase()} — ${escapeHtml(d.points)} pts)<br/>
+            <span>${escapeHtml(d.explanation)}</span><br/>
+            <small><em>Next Action: ${escapeHtml(d.nextAction)} [Statutory ref: ${escapeHtml(d.statutoryCitation)}]</em></small>
           </li>
         `).join('')}
       </ul>
@@ -187,63 +224,51 @@ export function generateDueDiligenceReport(snapshot: DueDiligenceReportSnapshot)
 
   <section id="gis-screening">
     <h2>GIS & Environmental Buffer Screening Analysis</h2>
-    <div class="north-arrow">True North: YES [&uarr; N]</div>
-    <div class="scale-bar">${snapshot.spatialScreening?.georeferencedSnapshot?.metadata?.scaleText || '1 cm = 50 m'}</div>
-    <p>Drain Clearance: <strong>${(snapshot.spatialScreening?.drainClearanceStatus || 'clear').toUpperCase()}</strong> | Lake Clearance: <strong>${(snapshot.spatialScreening?.lakeClearanceStatus || 'clear').toUpperCase()}</strong></p>
+    <div class="north-arrow">Map orientation: ${snapshot.spatialScreening?.georeferencedSnapshot?.imagePngBase64 && snapshot.spatialScreening?.georeferencedSnapshot?.metadata?.hasNorthArrow ? 'north arrow shown' : 'not available; no map snapshot was rendered'}</div>
+    <div class="scale-bar">${escapeHtml(snapshot.spatialScreening?.georeferencedSnapshot?.metadata?.scaleText || 'Scale unavailable')}</div>
+    <p>${escapeHtml(snapshot.spatialScreening?.message || 'Screening status not recorded.')}</p>
+    <p>Drain Screening: <strong>${(snapshot.spatialScreening?.drainClearanceStatus || 'unknown').toUpperCase()}</strong> | Lake Screening: <strong>${(snapshot.spatialScreening?.lakeClearanceStatus || 'unknown').toUpperCase()}</strong></p>
     ${snapshot.spatialScreening?.findings?.length > 0 ? `
       <table>
         <tr><th>Layer</th><th>Distance</th><th>Statutory Buffer</th><th>Severity</th></tr>
         ${snapshot.spatialScreening.findings.map((f: any) => `
           <tr>
-            <td>${f.layerType.toUpperCase()}</td>
-            <td>${f.distanceM} m</td>
-            <td>${f.bufferM} m</td>
-            <td><strong>${f.severity.toUpperCase()}</strong></td>
+            <td>${escapeHtml(f.layerType).toUpperCase()}</td>
+            <td>${escapeHtml(f.distanceM)} m</td>
+            <td>${escapeHtml(f.bufferM)} m</td>
+            <td><strong>${escapeHtml(f.severity).toUpperCase()}</strong></td>
           </tr>
         `).join('')}
       </table>
-    ` : '<p>Property is located outside all designated primary/secondary/tertiary SWD and lake buffer zones.</p>'}
+    ` : '<p>No spatial findings are available. This must not be interpreted as clearance.</p>'}
   </section>
 
   <section id="evidence-appendix">
     <h2>Itemized Evidence Appendix</h2>
     ${snapshot.evidenceAppendix.length === 0 ? '<p>No document evidence anchors indexed.</p>' : `
       <div>
-        ${snapshot.evidenceAppendix.map((a: any) => `<div>Doc: ${a.documentId} Pg ${a.pageNumber}: ${a.extractedSnippet || a.snippet || ''}</div>`).join('')}
+        ${snapshot.evidenceAppendix.map((a: any) => `<div>Doc: ${escapeHtml(a.documentId)} Pg ${escapeHtml(a.pageNumber)}: ${escapeHtml(a.extractedSnippet || a.snippet || '')}</div>`).join('')}
       </div>
     `}
     ${snapshot.documents?.length > 0 ? `
       <h3>Source Document Checksums</h3>
       <ul>
-        ${snapshot.documents.map((d: any) => `<li>${d.originalFilename || d.original_filename}: <span class="checksum">${d.sha256 || 'SHA-256 not recorded'}</span></li>`).join('')}
+        ${snapshot.documents.map((d: any) => `<li>${escapeHtml(d.originalFilename || d.original_filename)}: <span class="checksum">${escapeHtml(d.sha256 || 'SHA-256 not recorded')}</span></li>`).join('')}
       </ul>
     ` : ''}
   </section>
 
   <section id="statutory-notice">
     <h2>Statutory Disclaimers & Legal Notice</h2>
-    <p>${snapshot.statutoryNotice}</p>
+    <p>${escapeHtml(snapshot.statutoryNotice)}</p>
   </section>
 </body>
 </html>`;
 
-  // Mock PDF binary buffer conforming to %PDF-1.4 standard
-  const pdfBytesMock = Buffer.from(
-    `%PDF-1.4\n` +
-    `%OJIX-LEGAL-REPORT\n` +
-    `ReportId: ${snapshot.reportId}\n` +
-    `Score: ${snapshot.riskSummary.score}\n` +
-    `Band: ${snapshot.riskSummary.band}\n` +
-    `Timestamp: ${snapshot.snapshotTimestamp}\n` +
-    `Tenant: ${snapshot.tenant.id}\n` +
-    `%%EOF`
-  );
-
   return {
     html,
-    pdfBytesMock,
     sectionsPresent,
-    hasNorthArrow: true,
+    hasNorthArrow: Boolean(snapshot.spatialScreening?.georeferencedSnapshot?.imagePngBase64 && snapshot.spatialScreening?.georeferencedSnapshot?.metadata?.hasNorthArrow),
     hasEvidenceAppendix: true,
   };
 }

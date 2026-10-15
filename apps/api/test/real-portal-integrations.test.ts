@@ -101,6 +101,7 @@ test('PORTAL INTEGRATION API: Live In-App Query Endpoint POST /api/source-regist
       surveyNumber: '112',
       subdivision: '1',
       village: 'Begur',
+      hobli: 'Begur',
       taluk: 'Bengaluru South',
       district: 'Bengaluru Urban',
       sroOffice: 'Bommanahalli'
@@ -113,6 +114,7 @@ test('PORTAL INTEGRATION API: Live In-App Query Endpoint POST /api/source-regist
   assert.equal(data.verifications.length, 6);
   assert.equal(data.queryParameters.surveyNumber, '112');
   assert.equal(data.queryParameters.village, 'Begur');
+  assert.equal(data.queryParameters.hobli, 'Begur');
 
   // Verify SHA-256 evidence integrity
   for (const v of data.verifications) {

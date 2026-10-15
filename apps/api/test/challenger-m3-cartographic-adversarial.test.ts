@@ -77,17 +77,17 @@ test('ADVERSARIAL GIS-1.1: Polar coordinates (North & South Poles) do not crash 
   // North pole
   const resNorth = screenSpatialBuffers(northPole, []);
   assert.ok(resNorth.georeferencedSnapshot);
-  assert.ok(resNorth.georeferencedSnapshot.imagePngBase64.startsWith('data:image/png;base64,'));
-  assert.equal(resNorth.georeferencedSnapshot.metadata.center[0], 0.0);
-  assert.equal(resNorth.georeferencedSnapshot.metadata.center[1], 90.0);
+  assert.equal(resNorth.georeferencedSnapshot.imagePngBase64, '');
+  assert.equal(resNorth.georeferencedSnapshot.metadata.center?.[0], 0.0);
+  assert.equal(resNorth.georeferencedSnapshot.metadata.center?.[1], 90.0);
   assert.match(resNorth.georeferencedSnapshot.metadata.scaleText, /1 cm = \d+ m/);
 
   // South pole
   const resSouth = screenSpatialBuffers(southPole, []);
   assert.ok(resSouth.georeferencedSnapshot);
-  assert.ok(resSouth.georeferencedSnapshot.imagePngBase64.startsWith('data:image/png;base64,'));
-  assert.equal(resSouth.georeferencedSnapshot.metadata.center[0], 0.0);
-  assert.equal(resSouth.georeferencedSnapshot.metadata.center[1], -90.0);
+  assert.equal(resSouth.georeferencedSnapshot.imagePngBase64, '');
+  assert.equal(resSouth.georeferencedSnapshot.metadata.center?.[0], 0.0);
+  assert.equal(resSouth.georeferencedSnapshot.metadata.center?.[1], -90.0);
   assert.match(resSouth.georeferencedSnapshot.metadata.scaleText, /1 cm = \d+ m/);
 });
 
@@ -96,8 +96,8 @@ test('ADVERSARIAL GIS-1.2: Equatorial Center & Prime Meridian (Null Island [0,0]
   const res = screenSpatialBuffers(nullIsland, []);
   assert.ok(res.georeferencedSnapshot);
   assert.equal(res.georeferencedSnapshot.metadata.hasNorthArrow, true);
-  assert.equal(res.georeferencedSnapshot.metadata.center[0], 0.0);
-  assert.equal(res.georeferencedSnapshot.metadata.center[1], 0.0);
+  assert.equal(res.georeferencedSnapshot.metadata.center?.[0], 0.0);
+  assert.equal(res.georeferencedSnapshot.metadata.center?.[1], 0.0);
   // At latitude 0 zoom 16: metersPerPixel = 156543.03392 * cos(0) / 65536 = 2.38865 m/px
   // 1 cm = 2.38865 * 37.795 = 90.28m -> 90 m
   assert.equal(res.georeferencedSnapshot.metadata.scaleText, '1 cm = 90 m (Zoom 16)');
@@ -114,9 +114,9 @@ test('ADVERSARIAL GIS-1.3: Antimeridian / Date Line extreme longitudes (+180, -1
   for (const pt of coords) {
     const res = screenSpatialBuffers(pt, []);
     assert.ok(res.georeferencedSnapshot);
-    assert.ok(res.georeferencedSnapshot.imagePngBase64.length > 100);
-    assert.equal(res.georeferencedSnapshot.metadata.center[0], pt.longitude);
-    assert.equal(res.georeferencedSnapshot.metadata.center[1], pt.latitude);
+    assert.equal(res.georeferencedSnapshot.imagePngBase64, '');
+    assert.equal(res.georeferencedSnapshot.metadata.center?.[0], pt.longitude);
+    assert.equal(res.georeferencedSnapshot.metadata.center?.[1], pt.latitude);
   }
 });
 
@@ -243,121 +243,12 @@ test('ADVERSARIAL GIS-1.5: Cadastral GeoJSON validator handles null, empty, corr
 // 2. BINARY PNG FORMAT INTEGRITY & CRYPTOGRAPHIC CRC-32 VALIDATION
 // ============================================================================
 
-test('ADVERSARIAL GIS-2.1: Base64 snapshot decodes into genuine PNG binary stream', () => {
-  const propertyPoint = { latitude: 12.9716, longitude: 77.5946 };
-  const res = screenSpatialBuffers(propertyPoint, []);
-  const base64Data = res.georeferencedSnapshot.imagePngBase64;
-
-  assert.ok(base64Data.startsWith('data:image/png;base64,'), 'Starts with standard PNG data URL prefix');
-  const rawBase64 = base64Data.slice('data:image/png;base64,'.length);
-  const buf = Buffer.from(rawBase64, 'base64');
-
-  // Verify PNG 8-byte file magic signature: 0x89 'P' 'N' 'G' 0x0D 0x0A 0x1A 0x0A
-  const expectedSig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  assert.ok(buf.subarray(0, 8).equals(expectedSig), 'PNG magic header matches byte-for-byte');
-
-  // Parse all chunks
-  const { signatureValid, chunks } = parsePngBuffer(buf);
-  assert.equal(signatureValid, true, 'PNG signature is valid');
-  assert.ok(chunks.length >= 3, `Must contain at least 3 chunks (IHDR, IDAT, IEND), found ${chunks.length}`);
-
-  // Chunk order: IHDR must be first, IEND must be last
-  assert.equal(chunks[0].type, 'IHDR', 'First chunk must be IHDR');
-  assert.equal(chunks[chunks.length - 1].type, 'IEND', 'Last chunk must be IEND');
-
-  // Every chunk must have a valid CRC-32 checksum matching IEEE 802.3
-  for (const chunk of chunks) {
-    assert.equal(
-      chunk.crc,
-      chunk.calculatedCrc,
-      `Chunk ${chunk.type} CRC-32 (0x${chunk.crc.toString(16)}) matches calculated CRC-32 (0x${chunk.calculatedCrc.toString(16)})`
-    );
-  }
-});
-
-test('ADVERSARIAL GIS-2.2: IHDR Chunk conforms to standard RGBA raster format (NOT 1x1 dummy)', () => {
-  const res = screenSpatialBuffers({ latitude: 12.9716, longitude: 77.5946 }, []);
-  const rawBase64 = res.georeferencedSnapshot.imagePngBase64.slice('data:image/png;base64,'.length);
-  const buf = Buffer.from(rawBase64, 'base64');
-  const { chunks } = parsePngBuffer(buf);
-
-  const ihdr = chunks.find((c) => c.type === 'IHDR');
-  assert.ok(ihdr, 'IHDR chunk exists');
-  assert.equal(ihdr.length, 13, 'IHDR data length is exactly 13 bytes');
-
-  const width = ihdr.data.readUInt32BE(0);
-  const height = ihdr.data.readUInt32BE(4);
-  const bitDepth = ihdr.data[8];
-  const colorType = ihdr.data[9];
-  const compression = ihdr.data[10];
-  const filterMethod = ihdr.data[11];
-  const interlaceMethod = ihdr.data[12];
-
-  assert.equal(width, 128, 'Width is 128px (genuine map raster, not 1x1)');
-  assert.equal(height, 128, 'Height is 128px (genuine map raster, not 1x1)');
-  assert.equal(bitDepth, 8, 'Bit depth is 8 bits per channel');
-  assert.equal(colorType, 6, 'Color type is 6 (Truecolor with alpha / RGBA)');
-  assert.equal(compression, 0, 'Compression is 0 (standard zlib deflate)');
-  assert.equal(filterMethod, 0, 'Filter method is 0 (standard)');
-  assert.equal(interlaceMethod, 0, 'Interlace method is 0 (no interlace)');
-});
-
-test('ADVERSARIAL GIS-2.3: IDAT decompression & pixel variance verification (proves real drawing)', () => {
-  const res = screenSpatialBuffers({ latitude: 12.9716, longitude: 77.5946 }, []);
-  const rawBase64 = res.georeferencedSnapshot.imagePngBase64.slice('data:image/png;base64,'.length);
-  const buf = Buffer.from(rawBase64, 'base64');
-  const { chunks } = parsePngBuffer(buf);
-
-  const idat = chunks.find((c) => c.type === 'IDAT');
-  assert.ok(idat, 'IDAT chunk exists');
-  assert.ok(idat.length > 0, 'IDAT payload is non-empty');
-
-  // Decompress IDAT payload using zlib inflate
-  const decompressed = zlib.inflateSync(idat.data);
-  const width = 128;
-  const height = 128;
-  const expectedRawLength = height * (1 + width * 4); // 128 * 513 = 65664 bytes
-  assert.equal(decompressed.length, expectedRawLength, `Decompressed length matches ${expectedRawLength} bytes`);
-
-  // Verify scanline filter bytes: row offset 0, 513, 1026... must be 0 (None filter)
-  for (let y = 0; y < height; y++) {
-    const filterByte = decompressed[y * (1 + width * 4)];
-    assert.equal(filterByte, 0, `Row ${y} scanline filter byte must be 0 (None)`);
-  }
-
-  // Count distinct RGBA colors across the decompressed image
-  const uniqueColors = new Set<number>();
-  for (let y = 0; y < height; y++) {
-    const rowOffset = y * (1 + width * 4) + 1;
-    for (let x = 0; x < width; x++) {
-      const px = rowOffset + x * 4;
-      const colorVal = decompressed.readUInt32BE(px);
-      uniqueColors.add(colorVal);
-    }
-  }
-
-  // A genuine map drawing has: background, grid lines, parcel border, parcel fill, red center pin, north arrow
-  assert.ok(
-    uniqueColors.size >= 5,
-    `Image must contain multiple distinct cartographic colors, found ${uniqueColors.size} unique colors`
-  );
-
-  // Verify center pin (red marker around center 64, 64)
-  const cy = 64;
-  const cx = 64;
-  const centerPxOffset = cy * 513 + 1 + cx * 4;
-  const r = decompressed[centerPxOffset];
-  const g = decompressed[centerPxOffset + 1];
-  const b = decompressed[centerPxOffset + 2];
-  assert.equal(r, 220, 'Center pin red channel is 220');
-  assert.equal(g, 40, 'Center pin green channel is 40');
-  assert.equal(b, 30, 'Center pin blue channel is 30');
-
-  // Verify IEND chunk is empty (0 bytes) and has valid CRC
-  const iend = chunks.find((c) => c.type === 'IEND');
-  assert.ok(iend, 'IEND chunk exists');
-  assert.equal(iend.length, 0, 'IEND data length is 0');
-  assert.equal(iend.crc, 0xae426082, 'IEND CRC matches standard 0xae426082');
+test('ADVERSARIAL GIS-2: No synthetic map raster is emitted without a renderer and source geometry', () => {
+  const result = screenSpatialBuffers({ latitude: 12.9716, longitude: 77.5946 }, []);
+  assert.equal(result.georeferencedSnapshot.imagePngBase64, '');
+  assert.deepEqual(result.cadastralParcelGeoJSON, { type: 'FeatureCollection', features: [] });
+  assert.equal(result.drainClearanceStatus, 'unknown');
+  assert.equal(result.lakeClearanceStatus, 'unknown');
 });
 
 // ============================================================================
@@ -483,7 +374,7 @@ test('ADVERSARIAL GIS-4.1: 50 concurrent calls to snapshot metadata generator ex
   assert.ok(maxDuration < 50, `Max duration ${maxDuration}ms < 50ms`);
 });
 
-test('ADVERSARIAL GIS-4.2: 50 concurrent calls to full screenSpatialBuffers (including PNG compression) under 50ms latency', async () => {
+test('ADVERSARIAL GIS-4.2: 50 concurrent spatial evaluations preserve findings without fabricated imagery', async () => {
   const CONCURRENCY = 50;
   const layers: SpatialScreeningLayerInput[] = [
     { id: 'swd_1', layerType: 'swd_primary', label: 'Primary SWD', distanceM: 25 },
@@ -528,7 +419,7 @@ test('ADVERSARIAL GIS-4.2: 50 concurrent calls to full screenSpatialBuffers (inc
       r.durationMs < 50,
       `Full screening call #${r.id} duration (${r.durationMs.toFixed(3)}ms) must be under 50ms`
     );
-    assert.ok(r.pngLength > 500, `Valid PNG generated (length ${r.pngLength})`);
+    assert.equal(r.pngLength, 0, 'No map raster is fabricated without configured rendering');
     assert.equal(r.findingsCount, 2, 'Findings calculated consistently across parallel threads');
   }
 
@@ -577,8 +468,8 @@ test('ADVERSARIAL GIS-5.1: MapViewer.tsx source analysis proves graceful WebGL f
 
   // 4. Engine Badge Feedback
   assert.ok(
-    source.includes('2D CANVAS ENGINE') && source.includes('MAPLIBRE GL'),
-    'MapViewer dynamically indicates active engine badge ("2D CANVAS ENGINE" vs "MAPLIBRE GL")'
+    source.includes('BASEMAP FALLBACK') && source.includes('MAPLIBRE GL'),
+    'MapViewer dynamically indicates active renderer'
   );
 
   // 5. Fallback 2D Canvas Drawing Routine
@@ -586,33 +477,11 @@ test('ADVERSARIAL GIS-5.1: MapViewer.tsx source analysis proves graceful WebGL f
     source.includes('const drawCanvasFallback = useCallback(() => {'),
     'MapViewer implements drawCanvasFallback callback'
   );
-  assert.ok(
-    source.includes('ctx.arc(') && source.includes('50 * mToPx'),
-    'Fallback canvas draws 50m Primary SWD buffer ring'
-  );
-  assert.ok(
-    source.includes('25 * mToPx'),
-    'Fallback canvas draws 25m Secondary SWD buffer ring'
-  );
-  assert.ok(
-    source.includes('15 * mToPx'),
-    'Fallback canvas draws 15m Tertiary SWD buffer ring'
-  );
-  assert.ok(
-    source.includes('30 * mToPx'),
-    'Fallback canvas draws 30m Lake buffer ring'
-  );
-  assert.ok(
-    source.includes("ctx.fillText('N'") || source.includes('ctx.fillText("N"'),
-    'Fallback canvas draws True North Arrow with "N" label'
-  );
-  assert.ok(
-    source.includes('1 cm ≈ 38 m') || source.includes('scaleText'),
-    'Fallback canvas displays metric scale text'
-  );
+  assert.ok(source.includes('Map overlays unavailable; no geometry is being inferred.'));
+  assert.ok(!source.includes('50 * mToPx') && !source.includes('1 cm ≈ 38 m'));
 });
 
-test('ADVERSARIAL GIS-5.2: Simulated WebGL failure triggers Canvas 2D fallback drawing routine cleanly', () => {
+test('ADVERSARIAL GIS-5.2: Canvas fallback displays no inferred spatial geometry', () => {
   // Simulate the canvas 2D fallback context drawing calls to verify no syntax or math exceptions
   const drawOps: string[] = [];
   const mockCtx: any = {
@@ -634,53 +503,12 @@ test('ADVERSARIAL GIS-5.2: Simulated WebGL failure triggers Canvas 2D fallback d
     setLineDash: (arr: number[]) => drawOps.push(`setLineDash([${arr.join(',')}])`),
   };
 
-  // Replicate drawCanvasFallback logic from MapViewer.tsx in mock environment
+  // Replicate the neutral fallback behavior in a mock environment.
   function simulateDrawCanvasFallback(ctx: any, width = 700, height = 480) {
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#f4f6fa';
     ctx.fillRect(0, 0, width, height);
-
-    const cx = width / 2;
-    const cy = height / 2;
-    const mToPx = 2.2;
-
-    // 50m SWD
-    ctx.beginPath();
-    ctx.arc(cx, cy, 50 * mToPx, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    // 30m Lake
-    ctx.beginPath();
-    ctx.arc(cx, cy, 30 * mToPx, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    // Cadastral parcel
-    ctx.beginPath();
-    ctx.rect(cx - 22, cy - 22, 44, 44);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillText('Sy. 34/2', cx, cy - 4);
-
-    // North arrow
-    ctx.save();
-    ctx.translate(width - 40, 40);
-    ctx.beginPath();
-    ctx.moveTo(0, -18);
-    ctx.lineTo(6, 6);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillText('N', 0, -22);
-    ctx.restore();
-
-    // Scale bar
-    ctx.beginPath();
-    ctx.moveTo(24, height - 26);
-    ctx.lineTo(84, height - 26);
-    ctx.stroke();
-    ctx.fillText('0', 21, height - 33);
-    ctx.fillText('30 m', 74, height - 33);
+    ctx.fillText('Map overlays unavailable; no geometry is being inferred.', width / 2, height / 2);
   }
 
   assert.doesNotThrow(() => {
@@ -688,10 +516,6 @@ test('ADVERSARIAL GIS-5.2: Simulated WebGL failure triggers Canvas 2D fallback d
   }, 'Fallback canvas drawing executes without throwing');
 
   assert.ok(drawOps.includes('fillRect(0,0,700,480)'), 'Canvas background filled');
-  assert.ok(drawOps.includes('arc(350,240,110)'), 'Primary SWD 50m buffer ring drawn (50 * 2.2 = 110px radius)');
-  assert.ok(drawOps.includes('arc(350,240,66)'), 'Lake 30m buffer ring drawn (30 * 2.2 = 66px radius)');
-  assert.ok(drawOps.includes('rect(328,218,44,44)'), 'Cadastral parcel rect drawn at center');
-  assert.ok(drawOps.includes('fillText(Sy. 34/2,350,236)'), 'Survey number text labeled');
-  assert.ok(drawOps.includes('fillText(N,0,-22)'), 'True North arrow N drawn');
-  assert.ok(drawOps.includes('fillText(30 m,74,447)'), 'Scale bar 30m metric label drawn');
+  assert.ok(drawOps.includes('fillText(Map overlays unavailable; no geometry is being inferred.,350,240)'));
+  assert.equal(drawOps.some(operation => operation.startsWith('arc(')), false);
 });

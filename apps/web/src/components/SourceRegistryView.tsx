@@ -71,13 +71,13 @@ export function SourceRegistryView({
 
   // Source retrieval readiness state. No official records are fetched until an authorized connector exists.
   const [queryRegistry, setQueryRegistry] = useState<string>('all');
-  const [querySurveyNumber, setQuerySurveyNumber] = useState<string>('34');
-  const [queryHissa, setQueryHissa] = useState<string>('A');
-  const [queryVillage, setQueryVillage] = useState<string>('Arakere');
-  const [queryTaluk, setQueryTaluk] = useState<string>('Bengaluru South');
-  const [queryDistrict, setQueryDistrict] = useState<string>('Bengaluru Urban');
-  const [querySro, setQuerySro] = useState<string>('Jayanagar');
-  const [queryPid, setQueryPid] = useState<string>('192-W0187-34');
+  const [querySurveyNumber, setQuerySurveyNumber] = useState<string>('');
+  const [queryHissa, setQueryHissa] = useState<string>('');
+  const [queryVillage, setQueryVillage] = useState<string>('');
+  const [queryTaluk, setQueryTaluk] = useState<string>('');
+  const [queryDistrict, setQueryDistrict] = useState<string>('');
+  const [querySro, setQuerySro] = useState<string>('');
+  const [queryPid, setQueryPid] = useState<string>('');
   const [queryLoading, setQueryLoading] = useState<boolean>(false);
   const [queryResults, setQueryResults] = useState<RegistryVerificationResult[] | null>(null);
   const [queryTrustScore, setQueryTrustScore] = useState<number | null>(null);
@@ -190,15 +190,6 @@ export function SourceRegistryView({
     }
   };
 
-  const handlePreset = (sy: string, hissa: string, village: string, taluk: string, sro: string, pid?: string) => {
-    setQuerySurveyNumber(sy);
-    setQueryHissa(hissa);
-    setQueryVillage(village);
-    setQueryTaluk(taluk);
-    setQuerySro(sro);
-    if (pid) setQueryPid(pid);
-  };
-
   const handleDirectQuery = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setQueryLoading(true);
@@ -255,7 +246,7 @@ export function SourceRegistryView({
         taluk: queryTaluk,
         district: queryDistrict,
         property_type: 'agricultural',
-        extent: '0-30.00 (30 Guntas)',
+        extent: '',
         address: `${queryVillage}, ${queryTaluk}, ${queryDistrict}`,
         notes: 'Created from user-entered identifiers only. No government record was retrieved or verified.'
       });
@@ -353,31 +344,7 @@ export function SourceRegistryView({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 600 }}>Quick Presets:</span>
-            <button
-              type="button"
-              className="secondary-btn"
-              style={{ fontSize: '10px', padding: '4px 8px' }}
-              onClick={() => handlePreset('34', 'A', 'Arakere', 'Bengaluru South', 'Jayanagar', '192-W0187-34')}
-            >
-              🏷️ Sy. 34 Arakere
-            </button>
-            <button
-              type="button"
-              className="secondary-btn"
-              style={{ fontSize: '10px', padding: '4px 8px' }}
-              onClick={() => handlePreset('112', '1', 'Begur', 'Bengaluru South', 'Bommanahalli', '192-W0188-112')}
-            >
-              🏷️ Sy. 112 Begur
-            </button>
-            <button
-              type="button"
-              className="secondary-btn"
-              style={{ fontSize: '10px', padding: '4px 8px' }}
-              onClick={() => handlePreset('45', '2', 'Bellandur', 'Bengaluru East', 'Varthur', '192-W0150-45')}
-            >
-              🏷️ Sy. 45 Bellandur
-            </button>
+            <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 600 }}>Use identifiers from the source record; examples are not prefilled.</span>
           </div>
         </div>
 
@@ -411,7 +378,7 @@ export function SourceRegistryView({
               required
               value={querySurveyNumber}
               onChange={e => setQuerySurveyNumber(e.target.value)}
-              placeholder="e.g. 34"
+              placeholder="Enter the actual survey number"
               style={{ width: '100%', padding: '7px 10px', borderRadius: '5px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
             />
           </div>
@@ -424,7 +391,7 @@ export function SourceRegistryView({
               type="text"
               value={queryHissa}
               onChange={e => setQueryHissa(e.target.value)}
-              placeholder="e.g. A or 1"
+              placeholder="Actual subdivision, if applicable"
               style={{ width: '100%', padding: '7px 10px', borderRadius: '5px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
             />
           </div>
@@ -437,7 +404,7 @@ export function SourceRegistryView({
               type="text"
               value={queryVillage}
               onChange={e => setQueryVillage(e.target.value)}
-              placeholder="e.g. Arakere"
+              placeholder="Enter the actual village"
               style={{ width: '100%', padding: '7px 10px', borderRadius: '5px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
             />
           </div>
@@ -450,7 +417,7 @@ export function SourceRegistryView({
               type="text"
               value={queryTaluk}
               onChange={e => setQueryTaluk(e.target.value)}
-              placeholder="e.g. Bengaluru South"
+              placeholder="Enter the actual taluk"
               style={{ width: '100%', padding: '7px 10px', borderRadius: '5px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
             />
           </div>
@@ -463,7 +430,7 @@ export function SourceRegistryView({
               type="text"
               value={queryDistrict}
               onChange={e => setQueryDistrict(e.target.value)}
-              placeholder="e.g. Bengaluru Urban"
+              placeholder="Enter the actual district"
               style={{ width: '100%', padding: '7px 10px', borderRadius: '5px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
             />
           </div>
@@ -476,7 +443,7 @@ export function SourceRegistryView({
               type="text"
               value={querySro}
               onChange={e => setQuerySro(e.target.value)}
-              placeholder="e.g. Jayanagar"
+              placeholder="Actual SRO, if applicable"
               style={{ width: '100%', padding: '7px 10px', borderRadius: '5px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
             />
           </div>
@@ -489,7 +456,7 @@ export function SourceRegistryView({
               type="text"
               value={queryPid}
               onChange={e => setQueryPid(e.target.value)}
-              placeholder="e.g. 192-W0187-34"
+              placeholder="Actual PID or khata, if known"
               style={{ width: '100%', padding: '7px 10px', borderRadius: '5px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
             />
           </div>
@@ -516,7 +483,7 @@ export function SourceRegistryView({
                   <AlertTriangle size={12} /> {queryResults.length} Sources Not Connected
                 </span>
                 <span style={{ fontSize: '11px', color: '#475569' }}>
-                  Verification score: <strong style={{ color: '#b45309' }}>{queryTrustScore ?? 0}%</strong>
+                  Connector availability: <strong style={{ color: '#b45309' }}>{queryResults?.every(result => result.status === 'not_connected') ? 'Not connected' : queryTrustScore === null ? 'Not checked' : 'Review required'}</strong>
                 </span>
                 <span style={{ fontSize: '10px', color: '#94a3b8' }}>
                   Official records retrieved: <strong>0</strong>

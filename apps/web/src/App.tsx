@@ -338,7 +338,7 @@ export default function App() {
       case 'properties': return 'Properties';
       case 'all-documents': return 'Document Vault & Evidence Repository';
       case 'all-findings': return 'Risk Reviews & Audit Findings';
-      case 'all-maps': return 'Map Intelligence & GIS Clearance';
+      case 'all-maps': return 'Map Intelligence & Spatial Review';
       case 'legal-research': return 'Legal Research & Case Precedents';
       case 'source-registry': return 'Government Source Catalog & Connection Status';
       case 'settings': return 'Workspace & Engine Settings';
@@ -394,7 +394,7 @@ export default function App() {
 
   return <div className={`app-shell premium-shell role-${currentUser.role}`}>
     <aside className={`sidebar ${mobileNav?'sidebar-open':''}`}>
-      <div className="brand"><div className="brand-mark"><span>O</span><i /></div><div><strong>OJIX</strong><small>PROPERTY INTELLIGENCE</small></div><button className="icon-btn mobile-close" onClick={()=>setMobileNav(false)} aria-label="Close menu"><X size={18}/></button></div>
+      <div className="brand"><img className="brand-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/><button className="icon-btn mobile-close" onClick={()=>setMobileNav(false)} aria-label="Close menu"><X size={18}/></button></div>
       <div className="workspace-switch"><div className="workspace-icon">OD</div><div className="workspace-copy"><strong>OJIX Demo Workspace</strong><span>Property due diligence</span></div><ChevronDown size={15}/></div>
       <div className="nav-label">{currentUser.role==='admin'?'ADMINISTRATION':currentUser.role==='lawyer'?'LEGAL REVIEW':currentUser.role==='analyst'?'EVIDENCE ANALYSIS':currentUser.role==='operations'?'DOCUMENT INTAKE':currentUser.role==='consultant'?'CLIENT DOSSIERS':currentUser.role==='support'?'SUPPORT DIAGNOSTICS':currentUser.role==='data_steward'?'DATA GOVERNANCE':currentUser.role==='viewer'?'CLIENT ACCESS':'WORKSPACE'}</div>
       <nav>
@@ -517,7 +517,7 @@ export default function App() {
         {page==='property' && selected && <PropertyPage property={selected} docs={docs} findings={findings} riskSummary={riskSummary} busy={busy} onAnalyze={analyze} onUpload={uploadFiles} onReport={downloadReport} onPrint={printReport} onEdit={()=>setShowEdit(true)} onWorkflowUpdated={item=>{setSelected(item);setProperties(current=>current.map(property=>property.id===item.id?{...property,...item}:property));setNotice(`Workflow for ${item.application_number} updated.`);}} onBack={()=>navigate('properties')} onDocUpdated={(updatedDoc)=>setDocs(prev=>prev.map(d=>d.id===updatedDoc.id?updatedDoc:d))} currentUser={currentUser} />}
         {page==='all-documents' && <GlobalDocumentsView apiUrl={API} onOpenProperty={openPropertyById} />}
         {page==='all-findings' && <GlobalRiskView apiUrl={API} onOpenProperty={openPropertyById} />}
-        {page==='all-maps' && <GlobalMapView properties={properties} apiUrl={API} onOpenProperty={openProperty} onRefreshProperties={refresh} readOnly={['consultant','data_steward'].includes(currentUser.role)} />}
+        {page==='all-maps' && <GlobalMapView properties={properties} apiUrl={API} onOpenProperty={openProperty} />}
         {page==='legal-research' && <LegalResearchView apiUrl={API} onOpenProperty={openPropertyById} />}
         {page==='source-registry' && <SourceRegistryView apiUrl={API} properties={properties} onOpenProperty={openProperty} currentUser={currentUser} onCreateProperty={createProperty} />}
         {page==='settings' && <SettingsView apiUrl={API} currentUser={currentUser} />}

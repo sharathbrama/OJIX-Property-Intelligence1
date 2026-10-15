@@ -172,7 +172,14 @@ if (process.env.FIREBASE_PROJECT_ID) {
 
 app.disable('x-powered-by');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
-app.use(cors({ origin: true, credentials: true }));
+const allowedCorsOrigins = corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedCorsOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Origin is not allowed by CORS policy.'));
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', rateLimit({
   windowMs: 60_000,
@@ -361,9 +368,9 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
     if (!identity) {
       if (matched) {
         identity = { uid: matched.uid, email: matched.email, name: matched.name };
-      } else if (rawToken === 'local-developer' || tokenUid === 'local-developer') {
+      } else if (process.env.NODE_ENV !== 'production' && (rawToken === 'local-developer' || tokenUid === 'local-developer')) {
         identity = { uid: 'local-developer', email: 'developer@localhost', name: 'Demo Professional' };
-      } else if (rawToken.startsWith('user-token-') && pool) {
+      } else if (process.env.NODE_ENV !== 'production' && rawToken.startsWith('user-token-') && pool) {
         const account = await pool.query('SELECT id, email, full_name FROM user_accounts WHERE id=? AND email_verified=TRUE AND status=\'active\' LIMIT 1', [tokenUid]);
         if (!account.rowCount) return res.status(401).json({ error: 'Invalid or expired identity token.' });
         identity = { uid: account.rows[0].id, email: account.rows[0].email, name: account.rows[0].full_name };
@@ -666,6 +673,7 @@ app.get('/readyz', asyncRoute(async (_req, res) => {
    Authentication & RBAC Endpoints
    ========================================================================== */
 app.get('/api/auth/dummy-accounts', (_req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'Not found.' });
   res.json({ accounts: DUMMY_ACCOUNTS });
 });
 
@@ -738,7 +746,7 @@ app.post('/api/auth/login/request-otp', asyncRoute(async (req, res) => {
   const parsed=z.object({email:z.string().trim().email().transform(value=>value.toLowerCase()),password:z.string().min(1).max(128)}).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error:'Enter a valid email and password.' });
   const {email,password}=parsed.data;
-  const dummy=DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email);
+  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email):undefined;
   const registered=!dummy?await pool.query('SELECT id,email,full_name,password_hash,email_verified,status FROM user_accounts WHERE email=? LIMIT 1',[email]):{rowCount:0,rows:[]};
   if (!dummy&&!registered.rowCount) return res.status(401).json({ error:'Invalid email or password.' });
   if (dummy?password!=='ojix123':!verifyPassword(password,registered.rows[0].password_hash)) return res.status(401).json({ error:'Invalid email or password.' });
@@ -767,7 +775,7 @@ app.post('/api/auth/login/verify-otp', asyncRoute(async (req,res)=>{
   if (new Date(challenge.rows[0].expires_at).getTime()<=Date.now()) return res.status(400).json({ error:'The sign-in code has expired. Request a new code.' });
   if (Number(challenge.rows[0].attempts)>=5) return res.status(429).json({ error:'Too many incorrect attempts. Request a new code.' });
   if (challenge.rows[0].otp_hash!==hashOtp(email,otp)) {await pool.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=?',[challengeId]);return res.status(400).json({ error:'Incorrect sign-in code.' });}
-  const dummy=DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email);
+  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email):undefined;
   const registered=!dummy?await pool.query("SELECT id,email,full_name FROM user_accounts WHERE email=? AND email_verified=TRUE AND status='active' LIMIT 1",[email]):{rowCount:0,rows:[]};
   if (!dummy&&!registered.rowCount) return res.status(401).json({ error:'The account is no longer active.' });
   const target:any=dummy||{uid:registered.rows[0].id,email:registered.rows[0].email,name:registered.rows[0].full_name,designation:'Registered Reviewer',role:'viewer',avatar:registered.rows[0].full_name.split(/\s+/).slice(0,2).map((part:string)=>part[0]).join('').toUpperCase(),description:'Verified workspace member'};
@@ -996,7 +1004,7 @@ app.patch('/api/rtc/:id/confirmation', authGuard, rtcLookupGuard, asyncRoute(asy
 
 app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured. Start MariaDB and set DATABASE_URL.' });
-  if (_req.user?.role === 'support') return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:'local_development', ocr:'not_enabled', gisLayers:'demo_only' }, supportScope:'diagnostics_only' });
+  if (_req.user?.role === 'support') return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:'local_development', ocr:'not_enabled', gisLayers:'unavailable' }, supportScope:'diagnostics_only' });
   const result = await pool.query(
     `SELECT COUNT(*) AS total,
        SUM(CASE WHEN p.status='in_review' THEN 1 ELSE 0 END) AS in_review,
@@ -1039,6 +1047,7 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
      WHERE tenant_id=? GROUP BY processing_status ORDER BY total DESC`,
     [_req.user?.tenantId]
   );
+  const spatialLayerStatus = await pool.query("SELECT data_status, COUNT(*) AS total FROM spatial_layers WHERE active=true AND data_status='verified' AND source_name IS NOT NULL AND source_url IS NOT NULL AND source_date IS NOT NULL GROUP BY data_status");
   const portfolioCoverage = await pool.query(
     `SELECT
        SUM(CASE WHEN latitude IS NOT NULL AND longitude IS NOT NULL THEN 1 ELSE 0 END) AS mapped,
@@ -1080,7 +1089,7 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
       governmentConnectors: 'not_connected',
       documentStorage: 'local_development',
       ocr: 'not_enabled',
-      gisLayers: 'demo_only'
+      gisLayers: spatialLayerStatus.rows.length ? 'loaded_verified_provenance' : 'unavailable'
     }
   });
 }));
@@ -1456,7 +1465,7 @@ app.post('/api/properties/:id/analyze', authGuard, writeGuard, asyncRoute(async 
   if (p.latitude !== null && p.longitude !== null) {
     const spatial = await pool.query(`SELECT id, layer_type, label, source_name, source_url, source_date, data_status,
       ST_Distance_Sphere(ST_Centroid(geom), ST_GeomFromText(CONCAT('POINT(', ?, ' ', ?, ')'), 4326)) AS distance_m
-      FROM spatial_layers WHERE active=true ORDER BY distance_m LIMIT 50`, [p.longitude, p.latitude]);
+      FROM spatial_layers WHERE active=true AND data_status='verified' AND source_name IS NOT NULL AND source_url IS NOT NULL AND source_date IS NOT NULL ORDER BY distance_m LIMIT 50`, [p.longitude, p.latitude]);
     for (const layer of spatial.rows) {
       findings.push({ code: `SPATIAL_${String(layer.layer_type).toUpperCase()}_${layer.id}`, title: `${layer.layer_type} layer nearby: ${layer.label}`, severity: 'unverified', points: 0, explanation: `A spatial dataset feature is approximately ${Math.round(Number(layer.distance_m))} metres from the entered map point. Proximity alone does not establish legal impact or boundary intersection. Source: ${layer.source_name || 'not recorded'}.`, evidenceStatus: layer.data_status === 'verified' ? 'verified' : layer.data_status === 'demo' ? 'demo' : 'unverified', nextAction: 'Review source metadata, geometry quality, applicable buffer rules and obtain confirmation from the competent authority.' } as RiskFinding);
     }
@@ -1645,7 +1654,7 @@ app.get('/api/properties/:id/documents/:docId/file', authGuard, asyncRoute(async
 
   res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.original_filename)}"`);
-  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('Cache-Control', 'private, no-store');
   const stream = fs.createReadStream(safePath);
   stream.on('error', (err) => {
     console.error('File stream error:', err);
@@ -1966,58 +1975,6 @@ app.get('/api/properties/:id/title-chain', authGuard, asyncRoute(async (req, res
       reviewedBy: row.reviewed_by || undefined,
       encumbranceStatus: row.encumbrance_status || 'none',
     }));
-  } else {
-    // Generate realistic demo fallback chain for this property workspace
-    const extentStr = propertyRes.rows[0].extent || '1 Acre 20 Guntas';
-    events = [
-      {
-        id: `demo-ev-1-${req.params.id.slice(0, 8)}`,
-        propertyId: req.params.id,
-        documentId: '',
-        sequenceOrder: 1,
-        eventDate: '1995-04-12',
-        registrationDate: '1995-04-12',
-        deedType: 'Absolute Sale Deed',
-        fromParties: [{ name: 'Govindappa (S/o Late Muniswamappa)', normalizedName: 'GOVINDAPPA (S/O LATE MUNISWAMAPPA)' }],
-        toParties: [{ name: 'Sri Muniyappa (S/o Govindappa)', normalizedName: 'MUNIYAPPA (S/O GOVINDAPPA)' }],
-        extentSqFt: 65340,
-        extentRaw: extentStr,
-        consideration: 350000,
-        status: 'verified',
-        reviewedBy: 'legal_team',
-      },
-      {
-        id: `demo-ev-2-${req.params.id.slice(0, 8)}`,
-        propertyId: req.params.id,
-        documentId: '',
-        sequenceOrder: 2,
-        eventDate: '2010-08-18',
-        registrationDate: '2010-08-18',
-        deedType: 'Gift Deed',
-        fromParties: [{ name: 'Sri Muniyappa', normalizedName: 'MUNIYAPPA' }],
-        toParties: [{ name: 'Suresh M (S/o Muniyappa)', normalizedName: 'SURESH M (S/O MUNIYAPPA)' }],
-        extentSqFt: 65340,
-        extentRaw: extentStr,
-        consideration: 0,
-        status: 'verified',
-        reviewedBy: 'legal_team',
-      },
-      {
-        id: `demo-ev-3-${req.params.id.slice(0, 8)}`,
-        propertyId: req.params.id,
-        documentId: '',
-        sequenceOrder: 3,
-        eventDate: '2021-11-05',
-        registrationDate: '2021-11-05',
-        deedType: 'Sale Deed',
-        fromParties: [{ name: 'Suresh M', normalizedName: 'SURESH M' }],
-        toParties: [{ name: 'Sri K. R. Ramesh (S/o Kadirappa)', normalizedName: 'RAMESH (S/O KADIRAPPA)' }],
-        extentSqFt: 65340,
-        extentRaw: extentStr,
-        consideration: 9500000,
-        status: 'unverified',
-      },
-    ];
   }
 
   const dag = buildTitleDAG(events);
@@ -2200,15 +2157,27 @@ app.get('/api/properties/:id/spatial-screening', authGuard, asyncRoute(async (re
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
 
   const prop = p.rows[0];
-  const lat = prop.latitude !== null && prop.latitude !== undefined ? Number(prop.latitude) : 12.9716;
-  const lon = prop.longitude !== null && prop.longitude !== undefined ? Number(prop.longitude) : 77.5946;
+  if (prop.latitude === null || prop.latitude === undefined || prop.longitude === null || prop.longitude === undefined) {
+    return res.json({
+      screeningStatus: 'missing_coordinates',
+      message: 'Property coordinates are not recorded; spatial screening was not run.',
+      drainClearanceStatus: 'unknown', lakeClearanceStatus: 'unknown', findings: [],
+      cadastralParcelGeoJSON: null, georeferencedSnapshot: null,
+    });
+  }
+  const lat = Number(prop.latitude);
+  const lon = Number(prop.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return res.status(422).json({ error: 'Stored property coordinates are invalid; spatial screening was not run.', code: 'INVALID_STORED_COORDINATES' });
+  }
 
   // MariaDB 10.4 computes spherical centroid-to-point distance in metres.
   const spatial = await pool.query(
     `SELECT id, layer_type, label, source_name, data_status,
             ST_Distance_Sphere(ST_Centroid(geom), ST_GeomFromText(CONCAT('POINT(', ?, ' ', ?, ')'), 4326)) AS distance_m
      FROM spatial_layers
-     WHERE active=true AND layer_type IN ('swd_primary', 'swd_secondary', 'swd_tertiary', 'waterbody')
+     WHERE active=true AND data_status='verified' AND source_name IS NOT NULL AND source_url IS NOT NULL AND source_date IS NOT NULL
+       AND layer_type IN ('swd_primary', 'swd_secondary', 'swd_tertiary', 'waterbody')
      ORDER BY distance_m LIMIT 50`,
     [lon, lat]
   );
@@ -2219,30 +2188,6 @@ app.get('/api/properties/:id/spatial-screening', authGuard, asyncRoute(async (re
     label: r.label,
     distanceM: Math.round(Number(r.distance_m) * 10) / 10,
   }));
-
-  // Fallback demo layers if empty
-  if (layers.length === 0) {
-    layers = [
-      {
-        id: 'demo_swd_primary',
-        layerType: 'swd_primary',
-        label: 'Koramangala Valley Primary SWD (Valakaluve)',
-        coords: [lon + 0.00045, lat + 0.00035],
-      },
-      {
-        id: 'demo_swd_secondary',
-        layerType: 'swd_secondary',
-        label: 'Secondary Feeder Halla Drain',
-        coords: [lon - 0.00060, lat + 0.00050],
-      },
-      {
-        id: 'demo_waterbody',
-        layerType: 'waterbody',
-        label: 'Bellandur-Varthur Catchment Waterbody Buffer',
-        coords: [lon + 0.00085, lat - 0.00075],
-      },
-    ];
-  }
 
   // Retrieve linked parcel geometry from audit log if available
   let linkedParcelGeoJSON: any = null;
@@ -2277,8 +2222,11 @@ app.get('/api/properties/:id/spatial-screening', authGuard, asyncRoute(async (re
 
 app.post('/api/spatial/screen-point', authGuard, asyncRoute(async (req, res) => {
   const { latitude, longitude } = req.body;
-  const lat = latitude !== undefined && latitude !== null ? Number(latitude) : 12.887;
-  const lon = longitude !== undefined && longitude !== null ? Number(longitude) : 77.594;
+  if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) {
+    return res.status(400).json({ error: 'Both latitude and longitude are required; coordinates are never inferred.' });
+  }
+  const lat = Number(latitude);
+  const lon = Number(longitude);
 
   if (
     typeof lat !== 'number' ||
@@ -2299,41 +2247,28 @@ app.post('/api/spatial/screen-point', authGuard, asyncRoute(async (req, res) => 
   if (pool) {
     try {
       const q = await pool.query(
-        `SELECT id, layer_type, label, ST_X(ST_Centroid(geom)) as lon, ST_Y(ST_Centroid(geom)) as lat
-         FROM spatial_layers WHERE active=true LIMIT 100`
+        `SELECT id, layer_type, label, source_name, source_url, source_date,
+                ST_X(ST_Centroid(geom)) as lon, ST_Y(ST_Centroid(geom)) as lat
+         FROM spatial_layers
+         WHERE active=true
+           AND data_status='verified'
+           AND source_name IS NOT NULL AND source_url IS NOT NULL AND source_date IS NOT NULL
+           AND layer_type IN ('swd_primary', 'swd_secondary', 'swd_tertiary', 'waterbody')
+         LIMIT 100`
       );
       layers = q.rows.map((r: any) => ({
         id: r.id,
         layerType: r.layer_type as SpatialLayerType,
         label: r.label,
+        sourceName: r.source_name,
+        sourceUrl: r.source_url,
+        sourceDate: r.source_date ? new Date(r.source_date).toISOString().slice(0, 10) : null,
         coords: [Number(r.lon), Number(r.lat)],
       }));
-    } catch { /* fallback */ }
+    } catch {
+      return res.status(503).json({ error: 'Spatial layer data are unavailable; screening was not performed.', code: 'SPATIAL_DATA_UNAVAILABLE' });
+    }
   }
-
-  if (layers.length === 0) {
-    layers = [
-      {
-        id: 'demo_swd_primary',
-        layerType: 'swd_primary',
-        label: 'Koramangala-Challaghatta Valley Primary SWD (Rajakaluve)',
-        coords: [lon + 0.00055, lat + 0.00035],
-      },
-      {
-        id: 'demo_swd_secondary',
-        layerType: 'swd_secondary',
-        label: 'Secondary Feeder Halla Drain',
-        coords: [lon - 0.00060, lat + 0.00050],
-      },
-      {
-        id: 'demo_waterbody',
-        layerType: 'waterbody',
-        label: 'Hulimavu Lake Periphery Wetland Buffer',
-        coords: [lon + 0.0035, lat - 0.0025],
-      },
-    ];
-  }
-
   const result = screenSpatialBuffers({ latitude: lat, longitude: lon }, layers);
   res.json({
     latitude: lat,
@@ -2428,9 +2363,9 @@ app.get('/api/properties/:id/report', authGuard, asyncRoute(async (req, res) => 
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
-  const docs = await pool.query('SELECT original_filename, mime_type, size_bytes, sha256, processing_status, created_at FROM documents WHERE property_id=? AND tenant_id=? ORDER BY created_at', [req.params.id, req.user?.tenantId]);
+  const docs = await pool.query('SELECT id, original_filename, mime_type, size_bytes, sha256, processing_status, extracted_fields, created_at FROM documents WHERE property_id=? AND tenant_id=? ORDER BY created_at', [req.params.id, req.user?.tenantId]);
   const findings = await pool.query('SELECT code, title, severity, points, explanation, evidence_status, next_action, created_at FROM risk_findings WHERE property_id=? AND tenant_id=? ORDER BY created_at', [req.params.id, req.user?.tenantId]);
-  const body = { reportVersion: '0.1', generatedAt: new Date().toISOString(), property: p.rows[0], documents: docs.rows, findings: findings.rows, reviewNotice: 'This report is an evidence-organising aid and is not a legal opinion, ownership certificate, encumbrance certificate, or government verification. Confirm findings against current official records and qualified professional advice.', dataLimitations: ['Government integrations are not enabled in the starter build.', 'Uploaded documents have not been OCR processed.', 'Any demo spatial layers are illustrative and non-authoritative.'] };
+  const body = { reportVersion: '0.1', generatedAt: new Date().toISOString(), generatedAtTimezone: 'UTC', property: p.rows[0], documents: docs.rows.map((document:any) => ({ ...document, evidenceUrl: `/api/properties/${encodeURIComponent(req.params.id)}/documents/${encodeURIComponent(document.id)}/file` })), findings: findings.rows, reviewNotice: 'This report is an evidence-organising aid and is not a legal opinion, ownership certificate, encumbrance certificate, or government verification. Confirm findings against current official records and qualified professional advice.', dataLimitations: ['Government integrations are not enabled.', 'Uploaded documents require human review unless a configured OCR provider result is recorded.', 'Spatial conclusions require active permitted datasets and are unknown when none are available.'] };
   res.setHeader('Content-Disposition', `attachment; filename="ojix-property-report-${p.rows[0].id}.json"`);
   res.type('application/json').send(JSON.stringify(body, null, 2));
 }));
@@ -2507,17 +2442,12 @@ app.post('/api/properties/:id/due-diligence-snapshot', authGuard, writeGuard, as
   }));
   const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0]);
 
-  const lat = p.rows[0].latitude !== null && p.rows[0].latitude !== undefined ? Number(p.rows[0].latitude) : 12.9716;
-  const lon = p.rows[0].longitude !== null && p.rows[0].longitude !== undefined ? Number(p.rows[0].longitude) : 77.5946;
-  const spatialScreening = screenSpatialBuffers({ latitude: lat, longitude: lon }, []);
-
   const snapshot = createDueDiligenceSnapshot({
     property: p.rows[0],
     documents: docs.rows,
     titleTimeline,
     titleGaps,
     discrepancies,
-    spatialScreening,
   });
 
   await audit(req.user?.uid || 'unknown', req.user?.tenantId, 'report.snapshot_created', 'property', req.params.id, {
@@ -2561,17 +2491,12 @@ app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(a
     extractedFields: typeof r.extracted_fields === 'string' ? JSON.parse(r.extracted_fields) : (r.extracted_fields || {}),
   }));
   const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0]);
-  const lat = p.rows[0].latitude !== null && p.rows[0].latitude !== undefined ? Number(p.rows[0].latitude) : 12.9716;
-  const lon = p.rows[0].longitude !== null && p.rows[0].longitude !== undefined ? Number(p.rows[0].longitude) : 77.5946;
-  const spatialScreening = screenSpatialBuffers({ latitude: lat, longitude: lon }, []);
-
   const snapshot = createDueDiligenceSnapshot({
     property: p.rows[0],
     documents: docs.rows,
     titleTimeline,
     titleGaps,
     discrepancies,
-    spatialScreening,
   });
 
   const report = generateDueDiligenceReport(snapshot);
@@ -2583,52 +2508,10 @@ app.get('/api/properties/:id/due-diligence-report/pdf', authGuard, asyncRoute(as
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
-
-  const docs = await pool.query('SELECT * FROM documents WHERE property_id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
-  const eventsResult = await pool.query('SELECT * FROM title_events WHERE property_id=? AND tenant_id=? ORDER BY event_date ASC', [req.params.id, req.user?.tenantId]);
-  const titleTimeline: TitleEvent[] = eventsResult.rows.map((row: any) => ({
-    id: row.id,
-    propertyId: row.property_id,
-    documentId: row.document_id || '',
-    sequenceOrder: Number(row.sequence_order),
-    eventDate: row.event_date instanceof Date ? row.event_date.toISOString().slice(0, 10) : String(row.event_date),
-    registrationDate: row.registration_date ? (row.registration_date instanceof Date ? row.registration_date.toISOString().slice(0, 10) : String(row.registration_date)) : undefined,
-    deedType: row.deed_type,
-    fromParties: typeof row.from_parties === 'string' ? JSON.parse(row.from_parties) : (row.from_parties || []),
-    toParties: typeof row.to_parties === 'string' ? JSON.parse(row.to_parties) : (row.to_parties || []),
-    extentSqFt: Number(row.extent_sq_ft),
-    extentRaw: row.extent_raw || '',
-    consideration: Number(row.consideration),
-    status: row.status,
-    disputeRationale: row.dispute_rationale || undefined,
-    reviewedBy: row.reviewed_by || undefined,
-    encumbranceStatus: row.encumbrance_status || 'none',
-  }));
-
-  const titleGaps = detectTitleGaps(titleTimeline);
-  const docItems = docs.rows.map(r => ({
-    id: r.id,
-    originalFilename: r.original_filename,
-    extractedFields: typeof r.extracted_fields === 'string' ? JSON.parse(r.extracted_fields) : (r.extracted_fields || {}),
-  }));
-  const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0]);
-  const lat = p.rows[0].latitude !== null && p.rows[0].latitude !== undefined ? Number(p.rows[0].latitude) : 12.9716;
-  const lon = p.rows[0].longitude !== null && p.rows[0].longitude !== undefined ? Number(p.rows[0].longitude) : 77.5946;
-  const spatialScreening = screenSpatialBuffers({ latitude: lat, longitude: lon }, []);
-
-  const snapshot = createDueDiligenceSnapshot({
-    property: p.rows[0],
-    documents: docs.rows,
-    titleTimeline,
-    titleGaps,
-    discrepancies,
-    spatialScreening,
+  return res.status(501).json({
+    error: 'PDF report generation is not configured. Use the HTML evidence report until a validated PDF renderer is installed.',
+    code: 'PDF_RENDERER_NOT_CONFIGURED',
   });
-
-  const report = generateDueDiligenceReport(snapshot);
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="due-diligence-report-${p.rows[0].id}.pdf"`);
-  res.send(report.pdfBytesMock);
 }));
 
 /* ==========================================================================
@@ -2845,13 +2728,13 @@ app.post('/api/source-registry/properties/:id/verify/:registryName', authGuard, 
 app.post('/api/source-registry/query', authGuard, asyncRoute(async (req, res) => {
   const {
     registry = 'all',
-    district = 'Bengaluru Urban',
-    taluk = 'Bengaluru South',
-    hobli = 'Begur',
-    village = 'Arakere',
-    surveyNumber = '34',
-    subdivision = 'A',
-    sroOffice = 'Jayanagar',
+    district,
+    taluk,
+    hobli,
+    village,
+    surveyNumber,
+    subdivision,
+    sroOffice,
     pidNumber,
     reraNumber,
     latitude,
@@ -2859,14 +2742,18 @@ app.post('/api/source-registry/query', authGuard, asyncRoute(async (req, res) =>
     ownerNameQuery
   } = req.body || {};
 
+  const required = [district, taluk, hobli, village, surveyNumber];
+  if (required.some(value => typeof value !== 'string' || !value.trim())) {
+    return res.status(400).json({ error: 'District, taluk, hobli, village and survey number are required. Search values are never assumed.' });
+  }
   const queryParams: DirectRegistryQueryParams = {
     registry,
     district: String(district).trim(),
     taluk: String(taluk).trim(),
     hobli: String(hobli).trim(),
     village: String(village).trim(),
-    surveyNumber: String(surveyNumber).trim() || '34',
-    subdivision: String(subdivision).trim() || 'A',
+    surveyNumber: String(surveyNumber).trim(),
+    subdivision: subdivision ? String(subdivision).trim() : undefined,
     sroOffice: sroOffice ? String(sroOffice).trim() : undefined,
     pidNumber: pidNumber ? String(pidNumber).trim() : undefined,
     reraNumber: reraNumber ? String(reraNumber).trim() : undefined,
@@ -2974,7 +2861,7 @@ app.patch('/api/admin/documents/:id/manual-review',authGuard,adminGuard,asyncRou
 
 for(const action of ['reject','delete'] as const){const method=action==='delete'?'delete':'post';(app as any)[method](`/api/admin/documents/:id${action==='reject'?'/reject':''}`,authGuard,adminGuard,asyncRoute(async(req:AuthenticatedRequest,res:Response)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A reason is required.'});const status=action==='reject'?'rejected':'quarantined';const result=await pool!.query("UPDATE documents SET governance_status=?,governance_reason=?,governance_by_uid=?,governance_at=NOW(6),manual_review_status='required' WHERE id=? AND tenant_id=?",[status,parsed.data.reason,req.user?.uid,req.params.id,req.user?.tenantId]);if(!result.rowCount)return res.status(404).json({error:'Document not found.'});await audit(req.user?.uid||'unknown',req.user?.tenantId,`admin.document_${status}`,'document',req.params.id,{reason:parsed.data.reason,softDelete:true});res.json({success:true,softDelete:true});}));}
 
-app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Private document storage',state:process.env.GCS_BUCKET?'configured':'local_development',testSupported:false},{id:'ocr',label:'OCR and extraction',state:process.env.GOOGLE_CLOUD_PROJECT?'configured':'not_configured',testSupported:false},{id:'email',label:'OTP email delivery',state:process.env.RESEND_API_KEY&&process.env.OTP_FROM_EMAIL?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false},{id:'gis',label:'GIS / spatial data',state:'demo_only',testSupported:false}]});}));
+app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:'local_development',testSupported:false,detail:'GCS_BUCKET is not evidence of an active storage adapter.'},{id:'ocr',label:'OCR and extraction',state:'not_implemented',testSupported:false},{id:'email',label:'OTP email delivery',state:process.env.RESEND_API_KEY&&process.env.OTP_FROM_EMAIL?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false}]});}));
 app.post('/api/admin/integrations/:id/test',authGuard,adminGuard,asyncRoute(async(req,res)=>{if(req.params.id!=='mariadb')return res.status(501).json({error:'A live connection test is unsupported for this integration.'});await pool!.query('SELECT 1');await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.integration_tested','integration','mariadb',{result:'connected'});res.json({state:'connected',checkedAt:new Date().toISOString()});}));
 
 app.get('/api/admin/sessions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT s.id,s.user_uid,s.created_at,s.last_activity_at,s.expires_at,s.ip_address,s.user_agent,m.email,m.role FROM authentication_sessions s LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid WHERE s.tenant_id=? AND s.revoked_at IS NULL AND s.expires_at>NOW(6) ORDER BY s.last_activity_at DESC',[req.user?.tenantId]);res.json({items:result.rows});}));

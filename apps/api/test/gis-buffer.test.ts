@@ -160,11 +160,11 @@ test('F11 Tier 2: Simultaneous Primary and Tertiary SWD within buffers flags hig
   assert.ok(result.findings.some(f => f.severity === 'critical'));
 });
 
-test('F11 Tier 2: Empty layers array returns clear status with 0 findings', () => {
+test('F11 Tier 2: Empty layers array returns unknown status with 0 findings', () => {
   const propertyPoint = { latitude: 12.90, longitude: 77.60 };
   const result = screenSpatialBuffers(propertyPoint, []);
-  assert.equal(result.drainClearanceStatus, 'clear');
-  assert.equal(result.lakeClearanceStatus, 'clear');
+  assert.equal(result.drainClearanceStatus, 'unknown');
+  assert.equal(result.lakeClearanceStatus, 'unknown');
   assert.equal(result.findings.length, 0);
 });
 
@@ -309,39 +309,11 @@ test('F12 Tier 2: Distance rounding to 1 decimal place', () => {
 // FEATURE 13: MapLibre Cadastral Parcel Visualizer (R3)
 // ============================================================================
 
-test('F13 Tier 1: Generates valid GeoJSON Polygon for property cadastral parcel', () => {
-  const propertyPoint = { latitude: 12.9716, longitude: 77.5946 };
-  const result = screenSpatialBuffers(propertyPoint, []);
-  const geojson = result.cadastralParcelGeoJSON;
-  assert.ok(geojson);
-  assert.equal(geojson.type, 'Feature');
-  assert.equal(geojson.geometry.type, 'Polygon');
-  assert.equal(validateCadastralGeoJSON(geojson), true);
-});
-
-test('F13 Tier 1: Cadastral polygon coordinate ring is closed (first coord == last coord)', () => {
-  const propertyPoint = { latitude: 12.9716, longitude: 77.5946 };
-  const result = screenSpatialBuffers(propertyPoint, []);
-  const ring = result.cadastralParcelGeoJSON.geometry.coordinates[0];
-  assert.ok(ring.length >= 4);
-  assert.deepEqual(ring[0], ring[ring.length - 1]);
-});
-
-test('F13 Tier 1: Cadastral parcel includes survey number and village properties', () => {
-  const propertyPoint = { latitude: 12.9716, longitude: 77.5946 };
-  const result = screenSpatialBuffers(propertyPoint, []);
-  assert.ok(result.cadastralParcelGeoJSON.properties.surveyNumber);
-  assert.ok(result.cadastralParcelGeoJSON.properties.village);
-});
-
-test('F13 Tier 1: Coordinates lie within valid Karnataka bounding box', () => {
-  const propertyPoint = { latitude: 12.9716, longitude: 77.5946 };
-  const result = screenSpatialBuffers(propertyPoint, []);
-  const ring = result.cadastralParcelGeoJSON.geometry.coordinates[0];
-  for (const [lon, lat] of ring) {
-    assert.ok(lat >= 11.5 && lat <= 18.5); // Karnataka latitude
-    assert.ok(lon >= 74.0 && lon <= 78.6); // Karnataka longitude
-  }
+test('F13 Tier 1: Missing survey geometry remains unavailable', () => {
+  const result = screenSpatialBuffers({ latitude: 12.9716, longitude: 77.5946 }, []);
+  assert.deepEqual(result.cadastralParcelGeoJSON, { type: 'FeatureCollection', features: [] });
+  assert.equal(result.drainClearanceStatus, 'unknown');
+  assert.equal(result.lakeClearanceStatus, 'unknown');
 });
 
 test('F13 Tier 1: Validator accepts FeatureCollection structure', () => {
@@ -442,11 +414,11 @@ test('F14 Tier 1: Includes CRS WGS 84 (EPSG:4326) coordinate reference system', 
   assert.match(meta.crs, /EPSG:4326/);
 });
 
-test('F14 Tier 1: Snapshot output contains valid base64 PNG data URL', () => {
-  const propertyPoint = { latitude: 12.9716, longitude: 77.5946 };
-  const result = screenSpatialBuffers(propertyPoint, []);
+test('F14 Tier 1: Snapshot image is unavailable until a real renderer is configured', () => {
+  const result = screenSpatialBuffers({ latitude: 12.9716, longitude: 77.5946 }, []);
   assert.ok(result.georeferencedSnapshot);
-  assert.ok(result.georeferencedSnapshot.imagePngBase64.startsWith('data:image/png;base64,'));
+  assert.equal(result.georeferencedSnapshot.imagePngBase64, '');
+  assert.equal(result.georeferencedSnapshot.metadata.hasNorthArrow, true);
 });
 
 test('F14 Tier 2: Scale calculation varies inversely with zoom level', () => {
@@ -500,13 +472,13 @@ test('Tier 3 Pairwise: Primary SWD Buffer (35 pts) + Lake Buffer (35 pts) Multi-
   assert.equal(risk.band, 'high_attention');
 });
 
-test('Tier 3 Pairwise: Cadastral Parcel Geometry + Georeferenced Snapshot Cartography', () => {
+test('Tier 3 Pairwise: Missing cadastral geometry is not inferred in snapshot metadata', () => {
   const propertyPoint = { latitude: 12.9716, longitude: 77.5946 };
   const result = screenSpatialBuffers(propertyPoint, []);
   const geojson = result.cadastralParcelGeoJSON;
   const snapshot = result.georeferencedSnapshot;
 
-  assert.equal(validateCadastralGeoJSON(geojson), true);
+  assert.deepEqual(geojson, { type: 'FeatureCollection', features: [] });
   assert.ok(snapshot);
   assert.equal(snapshot.metadata.hasNorthArrow, true);
   assert.deepEqual(snapshot.metadata.center, [propertyPoint.longitude, propertyPoint.latitude]);

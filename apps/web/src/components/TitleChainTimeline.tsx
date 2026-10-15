@@ -371,14 +371,14 @@ export const TitleChainTimeline: React.FC<TitleChainTimelineProps> = ({
         </div>
 
         <div className="dag-metric-card">
-          <div className={`metric-icon ${gaps.length > 0 ? 'amber' : 'green'}`}>
+          <div className={`metric-icon ${gaps.length > 0 || events.length === 0 ? 'amber' : 'green'}`}>
             <ShieldAlert size={17} />
           </div>
           <div className="dag-metric-content">
             <span className="metric-label">Title Gaps & Anomalies</span>
             <strong className="metric-val">{gaps.length} Finding{gaps.length === 1 ? '' : 's'}</strong>
             <span className="metric-hint">
-              {gaps.length === 0 ? 'Chain intact (30-yr window)' : 'Attention required'}
+              {events.length === 0 ? 'No title records to assess' : gaps.length === 0 ? 'No detected gaps in recorded events' : 'Attention required'}
             </span>
           </div>
         </div>
@@ -429,6 +429,19 @@ export const TitleChainTimeline: React.FC<TitleChainTimelineProps> = ({
                 </div>
               );
             })}
+          </div>
+        </div>
+      ) : events.length === 0 ? (
+        <div className="gaps-panel" role="status">
+          <div className="gaps-panel-head">
+            <div className="gaps-head-title">
+              <HelpCircle size={18} className="gap-alert-icon" />
+              <div>
+                <h3>Title chain cannot be assessed</h3>
+                <p>No title events are recorded. An empty record is not evidence of an unbroken chain.</p>
+              </div>
+            </div>
+            <span className="gaps-badge">UNKNOWN</span>
           </div>
         </div>
       ) : (

@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
-import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, BriefcaseBusiness, Scale, BadgeCheck, Activity } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark } from 'lucide-react';
+import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
+import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
 import type { UserAccount, UserRole } from '../types';
 
 interface LoginPageProps {
@@ -8,11 +10,14 @@ interface LoginPageProps {
 }
 
 export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
-  const [mode, setMode] = useState<'login'|'login-otp'|'register'|'otp'|'verified'>('login');
+  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
+    const path = window.location.pathname.replace(/\/$/, '');
+    return path === '/register' ? 'register' : path === '/login' ? 'login' : 'landing';
+  });
   const [dummyAccounts, setDummyAccounts] = useState<UserAccount[]>([]);
-  const [selectedUid, setSelectedUid] = useState<string>('user-owner');
-  const [email, setEmail] = useState<string>('owner@ojix.local');
-  const [password, setPassword] = useState<string>('ojix123');
+  const [selectedUid, setSelectedUid] = useState<string>('');
+  const [email, setEmail] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
@@ -25,6 +30,42 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
   const [developmentOtp, setDevelopmentOtp] = useState('');
   const [serviceStatus, setServiceStatus] = useState<'checking'|'ready'|'unavailable'>('checking');
   const [serviceMessage, setServiceMessage] = useState('Checking API and database…');
+
+  const navigateAuth = (next: 'landing'|'login'|'register') => {
+    setMode(next);
+    setError('');
+    setOtp('');
+    const path = next === 'register' ? '/register' : next === 'login' ? '/login' : '/';
+    if (window.location.pathname !== path) window.history.pushState({ auth: next }, '', path);
+  };
+
+  useEffect(() => {
+    const syncRoute = () => {
+      const path = window.location.pathname.replace(/\/$/, '');
+      const next = path === '/register' ? 'register' : path === '/login' ? 'login' : 'landing';
+      setMode(current => current === 'login-otp' || current === 'otp' || current === 'verified' ? current : next);
+    };
+    window.addEventListener('popstate', syncRoute);
+    return () => window.removeEventListener('popstate', syncRoute);
+  }, []);
+
+  useEffect(() => {
+    if (mode !== 'landing') return;
+    const targets = document.querySelectorAll<HTMLElement>('.reveal-on-scroll');
+    if (!('IntersectionObserver' in window)) {
+      targets.forEach(target => target.classList.add('is-visible'));
+      return;
+    }
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add('is-visible');
+        observer.unobserve(entry.target);
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -36px 0px' });
+    targets.forEach(target => observer.observe(target));
+    return () => observer.disconnect();
+  }, [mode]);
 
   useEffect(() => {
     fetch(`${apiUrl}/health`)
@@ -46,92 +87,7 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
           setDummyAccounts(data.accounts);
         }
       })
-      .catch(() => {
-        // Fallback dummy accounts if API is booting
-        setDummyAccounts([
-          {
-            uid: 'user-owner',
-            email: 'owner@ojix.local',
-            name: 'Rajesh Sharma',
-            designation: 'Managing Partner',
-            role: 'owner',
-            avatar: 'RS',
-            description: 'Workspace Owner — full tenant and governance administration, deletion, and system authorization.'
-          },
-          {
-            uid: 'user-admin',
-            email: 'admin@ojix.local',
-            name: 'Priya Nair',
-            designation: 'Firm Administrator',
-            role: 'admin',
-            avatar: 'PN',
-            description: 'Firm Administrator — workspace settings, GIS configurations, member governance, and data export.'
-          },
-          {
-            uid: 'user-lawyer',
-            email: 'lawyer@ojix.local',
-            name: 'Adv. Anand Rao',
-            designation: 'Senior Legal Reviewer',
-            role: 'lawyer',
-            avatar: 'AR',
-            description: 'Senior Legal Counsel — dispute/verify title chain events, override OCR extractions, and sign off reports.'
-          },
-          {
-            uid: 'user-analyst',
-            email: 'analyst@ojix.local',
-            name: 'Kavita Reddy',
-            designation: 'Due Diligence Analyst',
-            role: 'analyst',
-            avatar: 'KR',
-            description: 'Due Diligence Analyst — case intake, document upload, trigger preliminary analyses, and run registry sync.'
-          },
-          {
-            uid: 'user-operations',
-            email: 'operations@ojix.local',
-            name: 'Meera Kulkarni',
-            designation: 'Document Intake Specialist',
-            role: 'operations',
-            avatar: 'MK',
-            description: 'Paralegal / Operations — bulk document intake, property assignment, metadata checks, and processing follow-up.'
-          },
-          {
-            uid: 'user-consultant',
-            email: 'consultant@ojix.local',
-            name: 'Sanjay Hegde',
-            designation: 'Property Consultant',
-            role: 'consultant',
-            avatar: 'SH',
-            description: 'Property Consultant — matter access, client-ready dossier preparation, issue-list review, and approved exports.'
-          },
-          {
-            uid: 'user-support',
-            email: 'support@ojix.local',
-            name: 'Nikhil Dev',
-            designation: 'OJIX Support Engineer',
-            role: 'support',
-            avatar: 'ND',
-            description: 'OJIX Support — time-limited, read-only diagnostics with no business-data access by default.'
-          },
-          {
-            uid: 'user-data-steward',
-            email: 'steward@ojix.local',
-            name: 'Asha Iyer',
-            designation: 'OJIX Data Steward',
-            role: 'data_steward',
-            avatar: 'AI',
-            description: 'OJIX Data Steward — source mappings, rule configuration, ingestion quality, and reference-data governance.'
-          },
-          {
-            uid: 'user-viewer',
-            email: 'viewer@ojix.local',
-            name: 'Vikram Mehta',
-            designation: 'Client / Audit Inspector',
-            role: 'viewer',
-            avatar: 'VM',
-            description: 'External Auditor / Read-Only Client — inspect evidence, view map layers and reports (all mutations blocked).'
-          }
-        ]);
-      });
+      .catch(() => setDummyAccounts([]));
   }, [apiUrl]);
 
   const selectAccount = (acc: UserAccount) => {
@@ -238,22 +194,22 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
     description: 'Verified read-only workspace member'
   });
 
-  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card"><div className="executive-brand-mark otp"><span>O</span><i/></div><span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span><h1>Confirm your secure sign-in</h1><p>Enter the six-digit code for <strong>{email}</strong>. It expires in 10 minutes and can be used only once.</p>{developmentOtp&&<div className="executive-development-otp"><span>LOCAL DEVELOPMENT CODE</span><strong>{developmentOtp}</strong><small>Configure RESEND_API_KEY and a real email address for email delivery.</small></div>}{error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}<form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form><div className="executive-otp-actions"><button onClick={()=>{setMode('login');setOtp('');setError('');}}>Back to sign in</button><button onClick={handleLogin as any}>Send a new code</button></div><p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p></section></main>;
+  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card"><img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/><span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span><h1>Confirm your secure sign-in</h1><p>Enter the six-digit code for <strong>{email}</strong>. It expires in 10 minutes and can be used only once.</p>{developmentOtp&&<div className="executive-development-otp"><span>LOCAL DEVELOPMENT CODE</span><strong>{developmentOtp}</strong><small>Configure RESEND_API_KEY and a real email address for email delivery.</small></div>}{error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}<form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form><div className="executive-otp-actions"><button onClick={()=>{setMode('login');setOtp('');setError('');}}>Back to sign in</button><button onClick={handleLogin as any}>Send a new code</button></div><p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p></section></main>;
 
-  if (mode !== 'login') {
+  if (mode !== 'login' && mode !== 'landing') {
     const isOtp = mode === 'otp';
     const isVerified = mode === 'verified';
     return (
-      <div style={{minHeight:'100vh',display:'grid',placeItems:'center',background:'radial-gradient(ellipse at 50% 20%, #1e293b 0%, #0f172a 100%)',padding:24,fontFamily:'Inter, system-ui, sans-serif'}}>
-        <div style={{width:'100%',maxWidth:520,background:'#fff',borderRadius:16,padding:36,boxShadow:'0 25px 50px -12px rgba(0,0,0,.4)'}}>
-          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:24}}><div style={{width:38,height:38,borderRadius:9,background:'linear-gradient(135deg,#1e3a8a,#2563eb)',color:'#fff',display:'grid',placeItems:'center',fontWeight:900}}>O</div><div><strong style={{display:'block',color:'#0f172a'}}>OJIX Property Intelligence</strong><span style={{fontSize:11,color:'#64748b'}}>SECURE MEMBER ONBOARDING</span></div></div>
+      <main className="portal-auth-page"><header className="portal-masthead"><div className="portal-brand-lockup"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><div><strong>Property Intelligence</strong><span>Karnataka due diligence workspace</span></div></div><div className="portal-head-actions"><button type="button" className="portal-login-tab" onClick={()=>navigateAuth('login')}>Login</button><button type="button" className="portal-register-tab active" onClick={()=>navigateAuth('register')}>Register</button></div></header><section className="portal-auth-main">
+        <div className="portal-auth-card" style={{width:'100%',maxWidth:520,background:'#fff',borderRadius:16,padding:36,boxShadow:'0 25px 50px -12px rgba(0,0,0,.4)'}}>
+          <div className="portal-auth-card-brand"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><span>SECURE MEMBER ONBOARDING</span></div>
           <div style={{display:'flex',gap:8,marginBottom:24}}>{['Account','Verify OTP','Sign in'].map((label,index)=>{const active=isVerified?2:isOtp?1:0;return <div key={label} style={{flex:1,fontSize:11,fontWeight:700,color:index<=active?'#1d4ed8':'#94a3b8'}}><div style={{height:3,borderRadius:3,background:index<=active?'#2563eb':'#e2e8f0',marginBottom:7}}/>{index+1}. {label}</div>})}</div>
           <h2 style={{margin:'0 0 6px',fontSize:22,color:'#0f172a'}}>{isVerified?'Account verified':isOtp?'Verify your email':'Create your account'}</h2>
           <p style={{margin:'0 0 22px',fontSize:13,color:'#64748b',lineHeight:1.5}}>{isVerified?'Registration is complete. Continue to the sign-in page using your new password.':isOtp?`Enter the six-digit code sent for ${registerEmail}. The code expires in 10 minutes.`:'First-time users must register and verify their email before signing in.'}</p>
           {error&&<div style={{background:'#fef2f2',border:'1px solid #fecaca',color:'#991b1b',padding:'10px 12px',borderRadius:8,fontSize:12,marginBottom:16}}>{error}</div>}
           {developmentOtp&&isOtp&&<div style={{background:'#eff6ff',border:'1px solid #bfdbfe',color:'#1e40af',padding:'12px',borderRadius:8,fontSize:12,marginBottom:16}}><strong>Development OTP:</strong> <code style={{fontSize:16,letterSpacing:3}}>{developmentOtp}</code><br/><span style={{fontSize:10}}>In production this code will be delivered by email or SMS and will not appear here.</span></div>}
-          {isVerified ? <button onClick={()=>{setMode('login');setError('');}} style={{width:'100%',padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>Continue to Sign In <ArrowRight size={16} style={{verticalAlign:'middle',marginLeft:6}}/></button> : isOtp ? (
-            <form onSubmit={verifyOtp} style={{display:'grid',gap:15}}><label style={{fontSize:11,fontWeight:700,color:'#334155'}}>SIX-DIGIT OTP<input autoFocus inputMode="numeric" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:7,padding:13,border:'1px solid #cbd5e1',borderRadius:8,fontSize:20,letterSpacing:8,textAlign:'center'}}/></label><button disabled={loading||otp.length!==6} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Verifying…':'Verify and Activate Account'}</button><button type="button" onClick={()=>{setMode('register');setOtp('');setError('');}} style={{border:0,background:'transparent',color:'#2563eb',cursor:'pointer'}}>Change registration details</button></form>
+          {isVerified ? <button onClick={()=>{navigateAuth('login');}} style={{width:'100%',padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>Continue to Sign In <ArrowRight size={16} style={{verticalAlign:'middle',marginLeft:6}}/></button> : isOtp ? (
+            <form onSubmit={verifyOtp} style={{display:'grid',gap:15}}><label style={{fontSize:11,fontWeight:700,color:'#334155'}}>SIX-DIGIT OTP<input autoFocus inputMode="numeric" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:7,padding:13,border:'1px solid #cbd5e1',borderRadius:8,fontSize:20,letterSpacing:8,textAlign:'center'}}/></label><button disabled={loading||otp.length!==6} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Verifying…':'Verify and Activate Account'}</button><button type="button" onClick={()=>{navigateAuth('register');}} style={{border:0,background:'transparent',color:'#2563eb',cursor:'pointer'}}>Change registration details</button></form>
           ) : (
             <form onSubmit={requestOtp} style={{display:'grid',gap:14}}>
               <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>FULL NAME<input value={registerName} onChange={e=>setRegisterName(e.target.value)} required minLength={2} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
@@ -261,43 +217,48 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
               <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>CREATE PASSWORD<input type="password" value={registerPassword} onChange={e=>setRegisterPassword(e.target.value)} required minLength={8} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/><small style={{display:'block',marginTop:5,color:'#64748b',fontWeight:400}}>Minimum 8 characters with uppercase, lowercase and a number.</small></label>
               <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>CONFIRM PASSWORD<input type="password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} required style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
               <button disabled={loading} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Creating OTP…':'Register and Send OTP'}</button>
-              <button type="button" onClick={()=>{setMode('login');setError('');}} style={{border:0,background:'transparent',color:'#2563eb',cursor:'pointer'}}>Already registered? Sign in</button>
+              <button type="button" onClick={()=>{navigateAuth('login');}} style={{border:0,background:'transparent',color:'#2563eb',cursor:'pointer'}}>Already registered? Sign in</button>
             </form>
           )}
-        </div>
-      </div>
+        </div></section></main>
     );
   }
 
   const isOwner = currentAccount?.role === 'owner';
   const ownerAccount = dummyAccounts.find(account => account.role === 'owner');
 
+  if (mode === 'landing') return <PropertyIntelligenceLanding onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')}/>;
+
   if (mode === 'login') return (
     <main className="executive-login-shell">
-      <section className="executive-login-brand" aria-label="OJIX Property Intelligence">
-        <div className="executive-brand-mark"><span>O</span><i/></div>
-        <div className="executive-brand-name"><strong>OJIX</strong><span>PROPERTY INTELLIGENCE</span></div>
-        <div className="executive-brand-copy">
-          <div className="executive-kicker"><ShieldCheck size={14}/> EVIDENCE-FIRST LEGAL WORKSPACE</div>
-          <h1>Command every property matter with clarity.</h1>
-          <p>A controlled workspace for Karnataka property due diligence, document evidence, review assignments and auditable legal decisions.</p>
+      <header className="portal-masthead">
+        <div className="portal-brand-lockup"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><div><strong>OJIX Property Intelligence</strong><span>Karnataka Property Due Diligence Workspace</span></div></div>
+        <div className="portal-head-actions"><span><i className={`portal-state ${serviceStatus}`}/>{serviceStatus==='checking'?'Connecting':serviceStatus==='ready'?'Services available':'Service unavailable'}</span><button type="button" className="portal-login-tab active" onClick={()=>navigateAuth('login')}>Login</button><button type="button" className="portal-register-tab" onClick={()=>navigateAuth('register')}>Register</button></div>
+      </header>
+      <section className="portal-login-main portal-login-only">
+        <div className="login-motion-scene" aria-hidden="true">
+          <span className="login-motion-orbit orbit-one"/>
+          <span className="login-motion-orbit orbit-two"/>
+          <span className="login-motion-glow glow-one"/>
+          <span className="login-motion-glow glow-two"/>
+          <span className="login-motion-scan"/>
         </div>
-        <div className="executive-feature-grid">
-          <article><BriefcaseBusiness/><div><strong>Portfolio command</strong><span>Applications, deadlines and team ownership</span></div></article>
-          <article><Scale/><div><strong>Legal review controls</strong><span>Evidence-linked findings and approvals</span></div></article>
-          <article><BadgeCheck/><div><strong>Release safeguards</strong><span>Verification required before completion</span></div></article>
-          <article><Activity/><div><strong>Complete audit trail</strong><span>Accountable workflow and change history</span></div></article>
-        </div>
-        <div className="executive-trust-note"><Lock size={15}/><span><strong>Private organisation workspace</strong>Access is role-controlled and every privileged action is recorded.</span></div>
-      </section>
-
-      <section className="executive-login-access">
-        <div className="executive-access-card">
-          <div className="executive-access-topline"><span className="executive-secure-pill"><ShieldCheck size={13}/> Secure access</span><span className={`executive-service ${serviceStatus}`}><i/>{serviceStatus==='checking'?'Checking services':serviceStatus==='ready'?'Systems available':'Service unavailable'}</span></div>
-          <div className="executive-user-heading">
-            <div className="executive-avatar">{currentAccount?.avatar||'RS'}</div>
-            <div><span>{isOwner?'MANAGING PARTNER ACCESS':'WORKSPACE ACCESS'}</span><h2>{isOwner?'Welcome back, Rajesh':`Welcome, ${currentAccount?.name}`}</h2><p>{isOwner?'Sign in to the Owner command centre.':currentAccount?.designation}</p></div>
+        <div className="portal-welcome login-welcome-panel">
+          <span className="portal-eyebrow">KARNATAKA PROPERTY DUE DILIGENCE</span>
+          <h1>Property intelligence.<br/><em>Clarity in every detail.</em></h1>
+          <p>Organise property records, review documents and track due-diligence findings in one workspace. Keep important information connected to its source and ready for professional review.</p>
+          <PropertyIntelligenceHero/>
+          <div className="portal-welcome-points" aria-label="Property intelligence capabilities">
+            <article><img src="/images/ojix-property-records.webp" alt="" width="1254" height="1254" loading="lazy" decoding="async"/><span>Property Records</span></article>
+            <article><img src="/images/ojix-document-review.webp" alt="" width="1254" height="1254" loading="lazy" decoding="async"/><span>Document Review</span></article>
+            <article><img src="/images/ojix-risk-assessment.webp" alt="" width="1254" height="1254" loading="lazy" decoding="async"/><span>Risk Assessment</span></article>
           </div>
+          <div className="login-review-note"><ShieldCheck size={17}/><span><strong>Built for careful review</strong><small>Important conclusions remain subject to qualified professional review.</small></span></div>
+        </div>
+        <div className="executive-login-access portal-login-card-wrap">
+        <div className="executive-access-card portal-login-card">
+          <div className="executive-access-topline"><span className="executive-secure-pill"><ShieldCheck size={13}/> Secure access</span><span className={`executive-service ${serviceStatus}`}><i/>{serviceStatus==='checking'?'Checking services':serviceStatus==='ready'?'Systems available':'Service unavailable'}</span></div>
+          <div className="executive-user-heading"><div><span>OJIX PROPERTY INTELLIGENCE</span><h2>Welcome back</h2><p>Sign in to continue to your workspace.</p></div></div>
 
           {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
           {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
@@ -305,21 +266,23 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
           <form className="executive-login-form" onSubmit={handleLogin}>
             <label><span>Work email</span><div className="executive-input"><UserCheck/><input type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
             <label><span>Password</span><div className="executive-input"><Lock/><input type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff/>:<Eye/>}</button></div></label>
-            <div className="executive-form-meta"><label><input type="checkbox"/> Keep me signed in</label><button type="button" onClick={()=>setError('Password recovery is not enabled in this local development workspace.')}>Forgot password?</button></div>
+            <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/> Email verification code required</span><button type="button" onClick={()=>setError('Password reset is not available yet. Please contact your workspace administrator.')}>Forgot password?</button></div>
             <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'}>{loading?<><span className="executive-spinner"/> Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
           </form>
 
-          <div className="executive-local-access">
-            <div><strong>Local development access</strong><span>Use the configured demonstration identities to test role permissions.</span></div>
-            <select aria-label="Select demonstration account" value={selectedUid} onChange={event=>{const account=dummyAccounts.find(item=>item.uid===event.target.value);if(account)selectAccount(account);}}>
-              {dummyAccounts.map(account=><option value={account.uid} key={account.uid}>{account.name} — {account.designation}</option>)}
-            </select>
-            {ownerAccount&&selectedUid!=='user-owner'&&<button type="button" onClick={()=>selectAccount(ownerAccount)}>Return to Owner login</button>}
-            <small>Local password: <code>ojix123</code></small>
-          </div>
+          {import.meta.env.DEV && dummyAccounts.length > 0 && <details className="executive-local-access">
+            <summary><strong>Development access</strong><span>Demo sign-in options</span></summary>
+            <div className="development-access-content">
+              <select aria-label="Select demonstration account" value={selectedUid} onChange={event=>{const account=dummyAccounts.find(item=>item.uid===event.target.value);if(account)selectAccount(account);}}>
+                <option value="" disabled>Select an account</option>
+                {dummyAccounts.map(account=><option value={account.uid} key={account.uid}>{account.name} — {account.designation}</option>)}
+              </select>
+              {ownerAccount&&selectedUid!=='user-owner'&&<button type="button" onClick={()=>selectAccount(ownerAccount)}>Return to Owner login</button>}
+              <small>Local password: <code>ojix123</code></small>
+            </div>
+          </details>}
 
-          <button className="executive-register-link" type="button" onClick={()=>{setMode('register');setError('');}}>New authorised member? Register and verify access <ArrowRight size={13}/></button>
-          <p className="executive-legal">By continuing, you acknowledge that OJIX supports professional review and does not independently certify title, ownership or government records.</p>
+        </div>
         </div>
       </section>
     </main>
@@ -479,7 +442,7 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
             <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
               Selected Identity: <strong style={{ color: '#1e293b' }}>{currentAccount?.name}</strong> ({currentAccount?.role?.toUpperCase()})
             </p>
-            <button type="button" onClick={()=>{setMode('register');setError('');}} style={{marginTop:10,border:0,background:'transparent',padding:0,color:'#2563eb',fontSize:12,fontWeight:700,cursor:'pointer'}}>First time here? Register and verify OTP</button>
+            <button type="button" onClick={()=>{navigateAuth('register');}} style={{marginTop:10,border:0,background:'transparent',padding:0,color:'#2563eb',fontSize:12,fontWeight:700,cursor:'pointer'}}>First time here? Register and verify OTP</button>
           </div>
 
           <div

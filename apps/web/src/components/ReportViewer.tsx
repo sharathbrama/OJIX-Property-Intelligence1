@@ -71,7 +71,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
 
   const handleDownloadPdf = async () => {
     const response=await authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-report/pdf`);
-    if(!response.ok)return alert(`PDF download failed (${response.status})`);
+    if(!response.ok)return alert('PDF export is unavailable because no validated PDF renderer is configured. Use Printable HTML.');
     const url=URL.createObjectURL(await response.blob());
     const anchor=document.createElement('a');anchor.href=url;anchor.download=`${property.name.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}-approved-report.pdf`;anchor.click();
     window.setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -94,7 +94,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
             Due Diligence & Title Audit Report (R5)
           </h2>
           <p style={{ margin: '4px 0 0', color: '#718096', fontSize: '0.875rem' }}>
-            Official 7-section Karnataka land due-diligence report with immutable snapshots and evidence appendix.
+            Draft evidence-organising report. Values remain unverified unless linked to reviewed source documents.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -135,6 +135,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
           </button>
           <button
             onClick={handleDownloadPdf}
+            disabled
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -149,7 +150,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
               fontSize: '0.875rem',
             }}
           >
-            <Download size={16} /> Download Signed PDF
+            <Download size={16} /> PDF unavailable
           </button>
         </div>
       </div>
@@ -170,9 +171,9 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
           <div>✔ 3. Title Chain & Gap Detection</div>
           <div>✔ 4. Discrepancy Matrix (1% tolerance)</div>
           <div>✔ 5. GIS Buffer Screening (SWD & Lakes)</div>
-          <div>✔ 6. Evidence Appendix with SHA-256</div>
+          <div>6. Evidence appendix; anchors appear only when recorded</div>
           <div>✔ 7. Statutory Disclaimers & Notice</div>
-          <div>✔ True North Arrow & Dynamic Metric Scale</div>
+          <div>Map scale and north orientation shown only when available</div>
         </div>
       </div>
 
@@ -180,13 +181,13 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
       <div style={{ border: '1px solid #cbd5e0', borderRadius: '8px', overflow: 'hidden' }}>
         <div style={{ background: '#edf2f7', padding: '8px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', fontWeight: 600, color: '#4a5568' }}>
           <span>LIVE REPORT PREVIEW CONTAINER</span>
-          <span>FORMAT: HTML5 / PLAYWRIGHT PDF</span>
+          <span>FORMAT: HTML evidence view</span>
         </div>
         {previewUrl?<iframe
           src={previewUrl}
           title="Due Diligence Report Preview"
           style={{ width: '100%', height: '560px', border: 'none', background: '#fff' }}
-        />:<div style={{padding:'48px',textAlign:'center',color:'#64748b'}}>Approved report preview is unavailable.</div>}
+        />:<div style={{padding:'48px',textAlign:'center',color:'#64748b'}}>Report preview is unavailable.</div>}
       </div>
     </div>
   );

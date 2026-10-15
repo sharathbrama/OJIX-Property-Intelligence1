@@ -760,7 +760,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
                     id="form-field-village"
                     label="Village"
                     value={fields.propertySchedule.village}
-                    confidence={0.90}
+                    confidence={fields.fieldConfidence?.village}
                     isFocused={focusedFieldId === 'village'}
                     onClick={() => handleFieldFocus('village')}
                     onEdit={() => openOverrideDialog('propertySchedule.village', 'Village', fields.propertySchedule.village)}

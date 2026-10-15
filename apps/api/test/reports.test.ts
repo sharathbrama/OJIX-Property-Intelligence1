@@ -230,6 +230,16 @@ test('F20 Tier 1: Includes Executive Summary with score and property identity', 
   assert.match(report.html, /Survey No: 34\/2/);
 });
 
+test('F20 Tier 1: Renders persisted snake_case property fields and escapes untrusted values', () => {
+  const snapshot = createDueDiligenceSnapshot({
+    property: { id: 'db-property', name: '<script>alert(1)</script>', survey_number: '34/2', subdivision: 'A', village: 'Arakere' },
+  });
+  const report = generateDueDiligenceReport(snapshot);
+  assert.match(report.html, /34\/2/);
+  assert.match(report.html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(report.html, /<script>alert\(1\)<\/script>/);
+});
+
 test('F20 Tier 1: Includes Title Chain timeline and identified title gaps', () => {
   const snapshot = createDueDiligenceSnapshot({
     property: { id: 'p1' },
@@ -251,23 +261,27 @@ test('F20 Tier 1: Includes GIS Screening section with North arrow and scale text
   const snapshot = createDueDiligenceSnapshot({ property: { id: 'p1' } });
   const report = generateDueDiligenceReport(snapshot);
   assert.match(report.html, /<section id="gis-screening">/);
-  assert.match(report.html, /True North: YES/);
-  assert.equal(report.hasNorthArrow, true);
+  assert.match(report.html, /Map orientation: not available; no map snapshot was rendered/);
+  assert.equal(report.hasNorthArrow, false);
 });
 
-test('F20 Tier 1: Produces valid binary mock PDF with %PDF header', () => {
+test('F20 Tier 1: Does not claim or return a PDF until a real renderer is configured', () => {
   const snapshot = createDueDiligenceSnapshot({ property: { id: 'p1' } });
   const report = generateDueDiligenceReport(snapshot);
-  assert.ok(report.pdfBytesMock.length > 0);
-  assert.ok(report.pdfBytesMock.toString('ascii').startsWith('%PDF-1.4'));
+  assert.equal('pdfBytesMock' in report, false);
+  assert.equal(report.hasNorthArrow, false);
+  assert.match(report.html, /Map orientation: not available; no map snapshot was rendered/);
 });
 
-test('F20 Tier 2: Renders clean title layout report with 0 score gracefully', () => {
+test('F20 Tier 2: Labels zero-score report incomplete when evidence is absent', () => {
   const snapshot = createDueDiligenceSnapshot({
     property: { id: 'clean', surveyNumber: '1', village: 'CleanVillage' },
   });
   const report = generateDueDiligenceReport(snapshot);
-  assert.match(report.html, /Score: 0 \/ 100 \(preliminary\)/);
+  assert.match(report.html, /Risk score: 0 \/ 100 \(preliminary\) — INCOMPLETE · NOT CLEARED/);
+  assert.match(report.html, /A low or zero risk score does not mean the property is safe or legally clear/);
+  assert.match(report.html, /Coordinates are not recorded; spatial screening was not run\./);
+  assert.match(report.html, /Drain Screening: <strong>UNKNOWN<\/strong>/);
 });
 
 test('F20 Tier 2: Renders high attention report with score >= 70', () => {
@@ -279,7 +293,7 @@ test('F20 Tier 2: Renders high attention report with score >= 70', () => {
     ],
   });
   const report = generateDueDiligenceReport(snapshot);
-  assert.match(report.html, /Score: 70 \/ 100 \(high_attention\)/);
+  assert.match(report.html, /Risk score: 70 \/ 100 \(high_attention\) — INCOMPLETE · NOT CLEARED/);
 });
 
 test('F20 Tier 2: Report contains statutory disclaimer notice', () => {
@@ -471,7 +485,7 @@ test('Tier 3 Pairwise: Due Diligence Snapshot Creation -> PDF Report Generation'
 
   const report = generateDueDiligenceReport(snapshot);
   assert.equal(report.sectionsPresent.length, 7);
-  assert.ok(report.pdfBytesMock.length > 50);
+  assert.equal('pdfBytesMock' in report, false);
 });
 
 test('Tier 3 Pairwise: Spatial Screening Map Snapshot -> Report GIS Section Embedding', () => {
@@ -480,7 +494,7 @@ test('Tier 3 Pairwise: Spatial Screening Map Snapshot -> Report GIS Section Embe
   });
 
   const report = generateDueDiligenceReport(snapshot);
-  assert.match(report.html, /True North: YES/);
+  assert.match(report.html, /Map orientation: not available; no map snapshot was rendered/);
   assert.match(report.html, /<section id="gis-screening">/);
 });
 

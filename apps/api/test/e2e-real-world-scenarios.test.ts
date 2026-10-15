@@ -492,7 +492,7 @@ test('Scenario 5: Lake Buffer Violation & Unreleased Bank Mortgage (Score = 70, 
   // 6. Generate PDF Report with Mandatory Structural Sections
   const report = generateDueDiligenceReport(snapshot);
   assert.equal(report.sectionsPresent.length, 7);
-  assert.equal(report.hasNorthArrow, true);
+  assert.equal(report.hasNorthArrow, false);
   assert.equal(report.hasEvidenceAppendix, true);
   assert.match(report.html, /Score: 70 \/ 100 \(high_attention\)/);
   assert.match(report.html, /Simple Mortgage for Rs\. 50,00,000 in favor of Canara Bank/);

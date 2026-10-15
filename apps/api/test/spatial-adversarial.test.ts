@@ -449,35 +449,27 @@ test('ADVERSARIAL-4.4: Boundary checks avoid premature rounding across all SWD b
 // SUITE 5: ARBITRARY COORDINATES & TOPOLOGICAL INTEGRITY
 // ============================================================================
 
-test('ADVERSARIAL-5.1: screenSpatialBuffers with NaN coordinates produces clear status safely', () => {
-  // Screen property point with NaN coordinates
+test('ADVERSARIAL-5.1: screenSpatialBuffers with NaN coordinates returns unknown and performs no screening', () => {
+  // Invalid coordinates must never be presented as a clear result.
   const res = screenSpatialBuffers({ latitude: NaN, longitude: NaN }, [
     { id: 'swd_1', layerType: 'swd_primary' as const, label: 'Nearby Drain', coords: [77.60, 12.90] },
   ]);
 
-  assert.equal(res.drainClearanceStatus, 'clear');
+  assert.equal(res.drainClearanceStatus, 'unknown');
+  assert.equal(res.lakeClearanceStatus, 'unknown');
+  assert.equal(res.screeningStatus, 'missing_coordinates');
   assert.equal(res.findings.length, 0);
-  assert.match(res.georeferencedSnapshot.metadata.scaleText, /1 cm = NaN m/);
+  assert.match(res.message || '', /Valid coordinates are required/);
 });
 
-test('ADVERSARIAL-5.2: Cadastral parcel geometry generation and custom geometry support', () => {
+test('ADVERSARIAL-5.2: Does not infer cadastral geometry; preserves only supplied geometry', () => {
   const propertyPoint = { latitude: 12.9716, longitude: 77.5946 };
   const res = screenSpatialBuffers(propertyPoint, []);
+  assert.deepEqual(res.cadastralParcelGeoJSON, { type: 'FeatureCollection', features: [] });
 
-  const ring = res.cadastralParcelGeoJSON.geometry.coordinates[0];
-  assert.equal(ring.length, 5);
-  assert.equal(ring[0][0], propertyPoint.longitude - 0.0005);
-  assert.equal(ring[0][1], propertyPoint.latitude - 0.0005);
-  assert.equal(res.cadastralParcelGeoJSON.properties.surveyNumber, '34/2');
-  assert.equal(res.cadastralParcelGeoJSON.properties.village, 'Arakere');
-
-  // Verify custom parcel geometry is preserved when provided
   const customGeoJSON = {
     type: 'Feature',
-    geometry: {
-      type: 'Polygon',
-      coordinates: [[[77.59, 12.97], [77.60, 12.97], [77.60, 12.98], [77.59, 12.98], [77.59, 12.97]]],
-    },
+    geometry: { type: 'Polygon', coordinates: [[[77.59, 12.97], [77.60, 12.97], [77.60, 12.98], [77.59, 12.98], [77.59, 12.97]]] },
     properties: { surveyNumber: '99/Custom' },
   };
   const customRes = screenSpatialBuffers(propertyPoint, [], customGeoJSON);
@@ -495,6 +487,9 @@ test('ADVERSARIAL-5.3: POST /api/spatial/screen-point preserves valid 0.0 latitu
   const data = await response.json();
   assert.equal(data.latitude, 0, 'Latitude 0 preserved');
   assert.equal(data.longitude, 0, 'Longitude 0 preserved');
+  assert.equal(data.screeningStatus, 'unavailable', 'seed/demo and unprovenanced layers must not count as a screening source');
+  assert.equal(data.drainClearanceStatus, 'unknown');
+  assert.equal(data.lakeClearanceStatus, 'unknown');
 });
 
 test('ADVERSARIAL-5.4: POST /api/properties/:id/parcel-geometry accepts standard MultiPolygon with 200 OK', async () => {

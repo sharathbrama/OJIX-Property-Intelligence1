@@ -36,7 +36,7 @@ export interface SpatialFinding {
 }
 
 export interface CartographicMetadata {
-  center: [number, number];
+  center: [number, number] | null;
   zoom: number;
   scaleText: string;
   hasNorthArrow: boolean;
@@ -46,9 +46,11 @@ export interface CartographicMetadata {
 }
 
 export interface SpatialScreeningResult {
-  drainClearanceStatus: 'clear' | 'buffer_zone' | 'encroached';
-  lakeClearanceStatus: 'clear' | 'buffer_zone' | 'encroached';
+  drainClearanceStatus: 'clear' | 'buffer_zone' | 'encroached' | 'unknown';
+  lakeClearanceStatus: 'clear' | 'buffer_zone' | 'encroached' | 'unknown';
   findings: SpatialFinding[];
+  screeningStatus?: 'complete' | 'partial' | 'unavailable' | 'missing_coordinates';
+  message?: string;
   cadastralParcelGeoJSON?: any;
   georeferencedSnapshot?: {
     imagePngBase64: string;
@@ -83,28 +85,6 @@ async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-/**
- * Creates a circular polygon GeoJSON feature given a center point and radius in meters.
- */
-function createGeoCircle(center: [number, number], radiusMeters: number, points = 64) {
-  const [lon, lat] = center;
-  const coords: [number, number][] = [];
-  const latR = radiusMeters / 111139;
-  const lonR = radiusMeters / (111139 * Math.cos((lat * Math.PI) / 180));
-  for (let i = 0; i <= points; i++) {
-    const theta = (i / points) * (2 * Math.PI);
-    coords.push([lon + lonR * Math.cos(theta), lat + latR * Math.sin(theta)]);
-  }
-  return {
-    type: 'Feature' as const,
-    geometry: {
-      type: 'Polygon' as const,
-      coordinates: [coords],
-    },
-    properties: { radiusMeters },
-  };
-}
-
 export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdated, readOnly = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -131,8 +111,8 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
   // Snapshot modal / zoom
   const [showSnapshotModal, setShowSnapshotModal] = useState<boolean>(false);
 
-  const centerLat = property.latitude ?? 12.9716;
-  const centerLon = property.longitude ?? 77.5946;
+  const centerLat = property.latitude ?? 0;
+  const centerLon = property.longitude ?? 0;
   const hasCoordinates = property.latitude !== null && property.longitude !== null;
 
   // Load spatial screening data from API
@@ -145,84 +125,9 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
       );
       setScreeningResult(data);
     } catch (err: any) {
-      console.warn('API spatial-screening failed, generating fallback mock screening:', err);
-      // Fallback client-side screening calculation
-      const fallbackResult: SpatialScreeningResult = {
-        drainClearanceStatus: 'buffer_zone',
-        lakeClearanceStatus: 'clear',
-        findings: [
-          {
-            code: 'SPATIAL_SWD_PRIMARY_BUFFER',
-            layerType: 'swd_primary',
-            distanceM: 18.0,
-            bufferM: 50,
-            severity: 'critical',
-            isEncroached: false,
-            isInsideBuffer: true,
-            points: 35,
-          },
-          {
-            code: 'SPATIAL_SWD_SECONDARY_BUFFER',
-            layerType: 'swd_secondary',
-            distanceM: 20.0,
-            bufferM: 25,
-            severity: 'high',
-            isEncroached: false,
-            isInsideBuffer: true,
-            points: 25,
-          },
-          {
-            code: 'SPATIAL_SWD_TERTIARY_BUFFER',
-            layerType: 'swd_tertiary',
-            distanceM: 12.5,
-            bufferM: 15,
-            severity: 'high',
-            isEncroached: false,
-            isInsideBuffer: true,
-            points: 25,
-          },
-          {
-            code: 'SPATIAL_WATERBODY_PROXIMITY',
-            layerType: 'waterbody',
-            distanceM: 45.0,
-            bufferM: 30,
-            severity: 'medium',
-            isEncroached: false,
-            isInsideBuffer: false,
-            points: 15,
-          },
-        ],
-        cadastralParcelGeoJSON: {
-          type: 'Feature',
-          geometry: {
-            type: 'Polygon',
-            coordinates: [[
-              [centerLon - 0.0005, centerLat - 0.0005],
-              [centerLon + 0.0005, centerLat - 0.0005],
-              [centerLon + 0.0005, centerLat + 0.0005],
-              [centerLon - 0.0005, centerLat + 0.0005],
-              [centerLon - 0.0005, centerLat - 0.0005],
-            ]],
-          },
-          properties: {
-            surveyNumber: property.survey_number || '34/2',
-            village: property.village || 'Arakere',
-          },
-        },
-        georeferencedSnapshot: {
-          imagePngBase64: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-          metadata: {
-            center: [centerLon, centerLat],
-            zoom: 16,
-            scaleText: `1 cm = ${Math.round((156543.03392 * Math.cos((centerLat * Math.PI) / 180) / Math.pow(2, 16)) * 37.795)} m (Zoom 16)`,
-            hasNorthArrow: true,
-            sources: ['BDA Revised Master Plan SWD Layer v2.1 (2023)', 'Bhoomi Cadastral Survey (2024)'],
-            timestamp: new Date().toISOString(),
-            crs: 'EPSG:4326 (WGS 84)',
-          },
-        },
-      };
-      setScreeningResult(fallbackResult);
+      console.error('Spatial screening unavailable:', err);
+      setScreeningResult(null);
+      setError(err.message || 'Spatial screening is unavailable. No map findings were generated.');
     } finally {
       setLoading(false);
     }
@@ -262,145 +167,24 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
       ctx.stroke();
     }
 
+    ctx.fillStyle = '#475569';
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Map overlays unavailable; no geometry is being inferred.', width / 2, height / 2);
+    return;
+
     const cx = width / 2;
     const cy = height / 2;
 
-    // Buffer rings scale: 1 meter ≈ 2 pixels
-    const mToPx = 2.2;
-
-    // Buffer rings
-    if (showPrimarySwd) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, 50 * mToPx, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(230, 57, 70, 0.12)';
-      ctx.fill();
-      ctx.strokeStyle = '#e63946';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([4, 4]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    if (showLakeBuffer) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, 30 * mToPx, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(69, 123, 157, 0.14)';
-      ctx.fill();
-      ctx.strokeStyle = '#457b9d';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    if (showSecondarySwd) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, 25 * mToPx, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(244, 162, 97, 0.15)';
-      ctx.fill();
-      ctx.strokeStyle = '#f4a261';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([3, 3]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    if (showTertiarySwd) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, 15 * mToPx, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(233, 196, 106, 0.2)';
-      ctx.fill();
-      ctx.strokeStyle = '#e9c46a';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    // Cadastral Parcel Polygon
-    if (showCadastralParcel) {
-      const pSize = 44;
-      ctx.beginPath();
-      ctx.rect(cx - pSize / 2, cy - pSize / 2, pSize, pSize);
-      ctx.fillStyle = 'rgba(67, 97, 238, 0.3)';
-      ctx.fill();
-      ctx.strokeStyle = '#4361ee';
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
-
-      // Parcel label
-      ctx.fillStyle = '#1e293b';
-      ctx.font = 'bold 11px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(`Sy. ${property.survey_number || '34/2'}`, cx, cy - 4);
-      ctx.font = '9px system-ui, sans-serif';
-      ctx.fillStyle = '#64748b';
-      ctx.fillText(property.village || 'Arakere', cx, cy + 10);
-    }
-
-    // Center point marker pin
-    ctx.beginPath();
-    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
-    ctx.fillStyle = '#d90429';
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // True North Arrow indicator (Top Right)
-    const arrowX = width - 40;
-    const arrowY = 40;
-    ctx.save();
-    ctx.translate(arrowX, arrowY);
-    ctx.beginPath();
-    ctx.moveTo(0, -18);
-    ctx.lineTo(6, 6);
-    ctx.lineTo(0, 2);
-    ctx.lineTo(-6, 6);
-    ctx.closePath();
-    ctx.fillStyle = '#e63946';
-    ctx.fill();
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.fillStyle = '#1e293b';
-    ctx.font = 'bold 11px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('N', 0, -22);
-    ctx.restore();
-
-    // Metric Scale Bar (Bottom Left)
-    const scaleX = 24;
-    const scaleY = height - 26;
-    const barWidth = 60; // ≈ 30 meters
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(scaleX, scaleY);
-    ctx.lineTo(scaleX + barWidth, scaleY);
-    ctx.moveTo(scaleX, scaleY - 4);
-    ctx.lineTo(scaleX, scaleY + 4);
-    ctx.moveTo(scaleX + barWidth, scaleY - 4);
-    ctx.lineTo(scaleX + barWidth, scaleY + 4);
-    ctx.stroke();
-
-    ctx.fillStyle = '#1e293b';
-    ctx.font = '10px system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText('0', scaleX - 3, scaleY - 7);
-    ctx.fillText('30 m', scaleX + barWidth - 10, scaleY - 7);
-    ctx.font = '9px system-ui, sans-serif';
-    ctx.fillStyle = '#64748b';
-    ctx.fillText('1 cm ≈ 38 m', scaleX, scaleY + 16);
-  }, [
-    showPrimarySwd,
-    showSecondarySwd,
-    showTertiarySwd,
-    showLakeBuffer,
-    showCadastralParcel,
-    property.survey_number,
-    property.village,
-  ]);
+  }, []);
 
   // Initialize MapLibre GL map or fallback to canvas
   useEffect(() => {
     if (!containerRef.current) return;
+    if (!hasCoordinates) {
+      setError('Property coordinates are not recorded. The map is not centered on an assumed location.');
+      return;
+    }
 
     let mapInstance: MapLibreMap | null = null;
     let cancelled = false;
@@ -430,23 +214,7 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
         if (cancelled || !mapInstance) return;
 
         // Cadastral Parcel Source
-        const parcelGeoJSON = screeningResult?.cadastralParcelGeoJSON || {
-          type: 'Feature',
-          geometry: {
-            type: 'Polygon',
-            coordinates: [[
-              [centerLon - 0.0005, centerLat - 0.0005],
-              [centerLon + 0.0005, centerLat - 0.0005],
-              [centerLon + 0.0005, centerLat + 0.0005],
-              [centerLon - 0.0005, centerLat + 0.0005],
-              [centerLon - 0.0005, centerLat - 0.0005],
-            ]],
-          },
-          properties: {
-            surveyNumber: property.survey_number || '34/2',
-            village: property.village || 'Arakere',
-          },
-        };
+        const parcelGeoJSON = screeningResult?.cadastralParcelGeoJSON || { type: 'FeatureCollection', features: [] };
 
         mapInstance.addSource('cadastral-parcel', {
           type: 'geojson',
@@ -456,19 +224,19 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
         // Add Buffer Sources (50m, 30m, 25m, 15m)
         mapInstance.addSource('primary-swd-buffer', {
           type: 'geojson',
-          data: createGeoCircle([centerLon, centerLat], 50),
+          data: { type: 'FeatureCollection', features: [] },
         });
         mapInstance.addSource('lake-buffer', {
           type: 'geojson',
-          data: createGeoCircle([centerLon, centerLat], 30),
+          data: { type: 'FeatureCollection', features: [] },
         });
         mapInstance.addSource('secondary-swd-buffer', {
           type: 'geojson',
-          data: createGeoCircle([centerLon, centerLat], 25),
+          data: { type: 'FeatureCollection', features: [] },
         });
         mapInstance.addSource('tertiary-swd-buffer', {
           type: 'geojson',
-          data: createGeoCircle([centerLon, centerLat], 15),
+          data: { type: 'FeatureCollection', features: [] },
         });
 
         // Add Layers with Colors
@@ -546,8 +314,8 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
         new maplibregl.Marker({ color: '#d90429' })
           .setLngLat([centerLon, centerLat])
           .setPopup(
-            new maplibregl.Popup().setHTML(
-              `<strong>${property.name}</strong><br/>Survey No: ${property.survey_number || '34/2'}<br/>Coords: ${centerLat.toFixed(5)}, ${centerLon.toFixed(5)}`
+            new maplibregl.Popup().setText(
+              `${property.name} | Survey No: ${property.survey_number || 'Not recorded'} | Coordinates: ${centerLat.toFixed(5)}, ${centerLon.toFixed(5)}`
             )
           )
           .addTo(mapInstance);
@@ -771,14 +539,14 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
             <div>
               <h3>Interactive Cadastral & Buffer Overlay</h3>
               <p>
-                Survey ParcelSy. {property.survey_number || '34/2'} ·{' '}
-                {property.village || 'Arakere'} ({centerLat.toFixed(5)}, {centerLon.toFixed(5)})
+                Survey Parcel {property.survey_number || 'Not recorded'} ·{' '}
+                {property.village || 'Village not recorded'} · {hasCoordinates ? `${centerLat.toFixed(5)}, ${centerLon.toFixed(5)}` : 'Coordinates not recorded'}
               </p>
             </div>
             <div className="gis-panel-badges">
               <span className="source-pill">EPSG:4326 (WGS 84)</span>
               {usingFallbackCanvas ? (
-                <span className="demo-badge">2D CANVAS ENGINE</span>
+                <span className="demo-badge">BASEMAP FALLBACK</span>
               ) : (
                 <span className="demo-badge">MAPLIBRE GL</span>
               )}
@@ -798,26 +566,11 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
               />
             )}
 
-            {/* Floating Compass / True North Arrow Widget */}
-            <div className="gis-north-arrow-widget" title="True North Indicator (EPSG:4326)">
-              <div className="north-arrow-icon">
-                <Navigation size={22} className="north-needle" />
-                <span className="north-label">N</span>
+            {snapshotMeta?.scaleText && (
+              <div className="gis-scale-bar-widget" aria-label="Map scale">
+                <div className="scale-bar-text">{snapshotMeta.scaleText}</div>
               </div>
-              <small>TRUE NORTH</small>
-            </div>
-
-            {/* Floating Metric Scale Bar */}
-            <div className="gis-scale-bar-widget">
-              <div className="scale-bar-line" />
-              <div className="scale-bar-labels">
-                <span>0</span>
-                <span>30 m</span>
-              </div>
-              <div className="scale-bar-text">
-                {snapshotMeta?.scaleText || '1 cm ≈ 38 m (Zoom 16)'}
-              </div>
-            </div>
+            )}
 
             {/* Layer Control Toggle Pill Panel */}
             <div className="gis-layer-toggles">
@@ -872,12 +625,11 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
             <div className="gis-disclaimer">
               <AlertTriangle size={14} />
               <span>
-                Statutory screening overlays are algorithmic due-diligence aids based on BDA Revised
-                Master Plan and Bhoomi Survey records. Field DGPS demarcation is mandatory.
+                Screening requires property coordinates and active, permitted spatial source data. Missing results are not clearance.
               </span>
             </div>
             <div className="gis-map-attribution">
-              Source: BDA RMP SWD v2.1 (2023) · Bhoomi (2024)
+              Only imported layers with recorded source metadata can be reviewed here. No official dataset is bundled.
             </div>
           </div>
         </div>
@@ -911,10 +663,12 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
                   </strong>
                   <p>
                     {screeningResult?.drainClearanceStatus === 'clear'
-                      ? 'No SWD primary, secondary, or tertiary drain within statutory buffer.'
+                      ? 'No findings in the loaded drain layers; this is not an authority clearance.'
                       : screeningResult?.drainClearanceStatus === 'encroached'
-                      ? 'Direct drain canal encroachment detected.'
-                      : 'Property boundary falls inside the statutory buffer zone.'}
+                      ? 'Possible geometry intersection; qualified review is required.'
+                      : screeningResult?.drainClearanceStatus === 'buffer_zone'
+                      ? 'Loaded geometry is within its configured threshold; verify source and rule.'
+                      : 'Unknown: coordinates or applicable drain layers are missing.'}
                   </p>
                 </div>
               </div>
@@ -942,10 +696,12 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
                   </strong>
                   <p>
                     {screeningResult?.lakeClearanceStatus === 'clear'
-                      ? 'No lake or waterbody boundary within the 30m statutory buffer zone.'
+                      ? 'No findings in the loaded waterbody layers; this is not an authority clearance.'
                       : screeningResult?.lakeClearanceStatus === 'encroached'
-                      ? 'Direct waterbody or lake bed encroachment detected.'
-                      : 'Property point falls inside the 30m lake protection buffer band.'}
+                      ? 'Possible geometry intersection; qualified review is required.'
+                      : screeningResult?.lakeClearanceStatus === 'buffer_zone'
+                      ? 'Loaded waterbody geometry is within its configured threshold; verify source and rule.'
+                      : 'Unknown: coordinates or a waterbody layer are missing.'}
                   </p>
                 </div>
               </div>
@@ -986,7 +742,7 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
                     </div>
                     <div className="finding-desc">
                       {f.isEncroached ? (
-                        <span className="encroach-warn">Direct alignment intersection (0.0 m)</span>
+                        <span className="encroach-warn">Direct alignment intersection ({Number(f.distanceM).toFixed(1)} m)</span>
                       ) : f.isInsideBuffer ? (
                         <span className="buffer-warn">Inside prohibited statutory buffer band</span>
                       ) : (
@@ -999,8 +755,8 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
             ) : (
               <div className="empty-findings">
                 <CheckCircle2 size={24} className="green-icon" />
-                <strong>All Buffer Clearances Passed</strong>
-                <p>No storm-water drains or lakes detected within active screening thresholds.</p>
+                <strong>{screeningResult && screeningResult.screeningStatus !== 'unavailable' && screeningResult.drainClearanceStatus === 'clear' && screeningResult.lakeClearanceStatus === 'clear' ? 'No findings in loaded layers' : 'Screening unavailable or incomplete'}</strong>
+                <p>{screeningResult?.message || 'No source-backed result is available. This is not a clearance.'}</p>
               </div>
             )}
           </div>
@@ -1010,7 +766,7 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
             <div className="panel-head">
               <div>
                 <h3>Cartographic Snapshot Export</h3>
-                <p>Georeferenced legal evidence snapshot</p>
+                <p>Source-backed map export; unavailable until a map renderer and source geometry are configured</p>
               </div>
               <button
                 className="icon-btn"
@@ -1034,10 +790,10 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
                     <span>CRS:</span> <b>{snapshotMeta?.crs || 'EPSG:4326 (WGS 84)'}</b>
                   </div>
                   <div className="snapshot-meta-item">
-                    <span>Scale:</span> <b>{snapshotMeta?.scaleText || '1 cm ≈ 38 m'}</b>
+                    <span>Scale:</span> <b>{snapshotMeta?.scaleText || 'Unavailable'}</b>
                   </div>
                   <div className="snapshot-meta-item">
-                    <span>True North:</span> <b>Verified (0.0° deviation)</b>
+                    <span>True North:</span> <b>{snapshotMeta?.hasNorthArrow ? 'Shown' : 'Unavailable'}</b>
                   </div>
                   <div className="snapshot-sources-list">
                     <span>Datasets Cited:</span>
@@ -1053,9 +809,7 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
                 </button>
               </div>
             ) : (
-              <div className="loading-state">
-                <RefreshCw size={18} className="spin" /> Generating cartographic snapshot…
-              </div>
+              <div className="empty-findings"><strong>Snapshot unavailable</strong><p>A valid map snapshot requires source geometry and a configured renderer.</p></div>
             )}
           </div>
         </div>
@@ -1071,7 +825,7 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
                 <h2>Attach Cadastral Parcel GeoJSON</h2>
                 <p>
                   Paste or upload a valid closed GeoJSON Polygon representing the survey parcel
-                  boundary for Sy. {property.survey_number || '34/2'}.
+                  boundary for Sy. {property.survey_number || 'the recorded survey number'}.
                 </p>
               </div>
               <button className="icon-btn" onClick={() => setShowGeoJsonModal(false)}>
@@ -1088,7 +842,7 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
                     required
                     value={geoJsonInput}
                     onChange={(e) => setGeoJsonInput(e.target.value)}
-                    placeholder={`{\n  "type": "Feature",\n  "geometry": {\n    "type": "Polygon",\n    "coordinates": [\n      [[77.5941, 12.8865], [77.5951, 12.8865], [77.5951, 12.8875], [77.5941, 12.8875], [77.5941, 12.8865]]\n    ]\n  },\n  "properties": { "surveyNumber": "${property.survey_number || '34/2'}" }\n}`}
+                    placeholder={'Paste a GeoJSON Feature or FeatureCollection for the actual parcel geometry.'}
                   />
                 </label>
 

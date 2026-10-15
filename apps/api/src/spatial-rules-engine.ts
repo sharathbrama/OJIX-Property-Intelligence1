@@ -6,7 +6,6 @@
  * Feature 14: Georeferenced Cartographic Snapshot Exporter with Scale Bar & North Arrow
  */
 
-import zlib from 'node:zlib';
 
 export type SpatialLayerType = 'swd_primary' | 'swd_secondary' | 'swd_tertiary' | 'waterbody';
 
@@ -19,10 +18,13 @@ export interface SpatialScreeningFinding {
   isEncroached: boolean;
   isInsideBuffer: boolean;
   points: number;
+  sourceName?: string;
+  sourceUrl?: string;
+  sourceDate?: string;
 }
 
 export interface CartographicMetadata {
-  center: [number, number];
+  center: [number, number] | null;
   zoom: number;
   scaleText: string;
   hasNorthArrow: boolean;
@@ -32,9 +34,11 @@ export interface CartographicMetadata {
 }
 
 export interface SpatialScreeningResult {
-  drainClearanceStatus: 'clear' | 'buffer_zone' | 'encroached';
-  lakeClearanceStatus: 'clear' | 'buffer_zone' | 'encroached';
+  drainClearanceStatus: 'clear' | 'buffer_zone' | 'encroached' | 'unknown';
+  lakeClearanceStatus: 'clear' | 'buffer_zone' | 'encroached' | 'unknown';
   findings: SpatialScreeningFinding[];
+  screeningStatus?: 'complete' | 'partial' | 'unavailable' | 'missing_coordinates';
+  message?: string;
   cadastralParcelGeoJSON: {
     type: 'Feature';
     geometry: {
@@ -57,6 +61,9 @@ export interface SpatialScreeningLayerInput {
   id: string;
   layerType: SpatialLayerType;
   label: string;
+  sourceName?: string | null;
+  sourceUrl?: string | null;
+  sourceDate?: string | null;
   coords?: [number, number]; // [lon, lat]
   distanceM?: number;
 }
@@ -206,149 +213,6 @@ function validateMultiPolygonCoordinates(coordinates: any): boolean {
 }
 
 /**
- * Genuine PNG encoder in pure Node.js using built-in node:zlib.
- * Draws a clean cartographic raster image representing the property
- * and its spatial buffers, north arrow, and metric scale indication.
- */
-function createCartographicMapPng(
-  center: [number, number],
-  width = 128,
-  height = 128
-): string {
-  const rowBytes = 1 + width * 4;
-  const raw = Buffer.alloc(height * rowBytes);
-
-  // Background color #f3f6fa (RGB 243, 246, 250)
-  for (let y = 0; y < height; y++) {
-    const rowOffset = y * rowBytes;
-    raw[rowOffset] = 0; // Filter byte 0 (None)
-    for (let x = 0; x < width; x++) {
-      const px = rowOffset + 1 + x * 4;
-      // Grid lines every 16 pixels
-      const isGrid = x % 16 === 0 || y % 16 === 0;
-      if (isGrid) {
-        raw[px] = 224;
-        raw[px + 1] = 230;
-        raw[px + 2] = 238;
-      } else {
-        raw[px] = 245;
-        raw[px + 1] = 248;
-        raw[px + 2] = 252;
-      }
-      raw[px + 3] = 255;
-    }
-  }
-
-  // Draw cadastral parcel box in center (32x32 px)
-  const cx = Math.floor(width / 2);
-  const cy = Math.floor(height / 2);
-  const half = 16;
-  for (let y = cy - half; y <= cy + half; y++) {
-    if (y < 0 || y >= height) continue;
-    const rowOffset = y * rowBytes;
-    for (let x = cx - half; x <= cx + half; x++) {
-      if (x < 0 || x >= width) continue;
-      const isBorder = x === cx - half || x === cx + half || y === cy - half || y === cy + half;
-      const px = rowOffset + 1 + x * 4;
-      if (isBorder) {
-        raw[px] = 40;     // R
-        raw[px + 1] = 110; // G
-        raw[px + 2] = 200; // B
-        raw[px + 3] = 255;
-      } else {
-        // Semi-transparent blue fill
-        raw[px] = 180;
-        raw[px + 1] = 210;
-        raw[px + 2] = 245;
-        raw[px + 3] = 255;
-      }
-    }
-  }
-
-  // Center marker pin (red dot, 4x4 px)
-  for (let dy = -2; dy <= 2; dy++) {
-    const y = cy + dy;
-    if (y < 0 || y >= height) continue;
-    const rowOffset = y * rowBytes;
-    for (let dx = -2; dx <= 2; dx++) {
-      const x = cx + dx;
-      if (x < 0 || x >= width) continue;
-      if (dx * dx + dy * dy <= 4) {
-        const px = rowOffset + 1 + x * 4;
-        raw[px] = 220;   // R
-        raw[px + 1] = 40; // G
-        raw[px + 2] = 30; // B
-        raw[px + 3] = 255;
-      }
-    }
-  }
-
-  // Draw True North indicator at top-right (arrow pointing up)
-  const nx = width - 14;
-  const ny = 14;
-  for (let h = 0; h < 8; h++) {
-    const y = ny - 4 + h;
-    if (y < 0 || y >= height) continue;
-    const rowOffset = y * rowBytes;
-    const px = rowOffset + 1 + nx * 4;
-    raw[px] = 30;
-    raw[px + 1] = 40;
-    raw[px + 2] = 55;
-    raw[px + 3] = 255;
-  }
-
-  // Compress using node:zlib
-  const compressed = zlib.deflateSync(raw);
-
-  // CRC32 implementation
-  const CRC_TABLE = new Uint32Array(256);
-  for (let i = 0; i < 256; i++) {
-    let c = i;
-    for (let k = 0; k < 8; k++) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    CRC_TABLE[i] = c >>> 0;
-  }
-
-  function crc32(buf: Buffer): number {
-    let c = 0xffffffff;
-    for (let i = 0; i < buf.length; i++) {
-      c = (c >>> 8) ^ CRC_TABLE[(c ^ buf[i]) & 0xff];
-    }
-    return (c ^ 0xffffffff) >>> 0;
-  }
-
-  function chunk(type: string, data: Buffer): Buffer {
-    const len = Buffer.alloc(4);
-    len.writeUInt32BE(data.length, 0);
-    const typeBuf = Buffer.from(type, 'ascii');
-    const crcBuf = Buffer.concat([typeBuf, data]);
-    const crcVal = Buffer.alloc(4);
-    crcVal.writeUInt32BE(crc32(crcBuf), 0);
-    return Buffer.concat([len, typeBuf, data, crcVal]);
-  }
-
-  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // RGBA
-  ihdr[10] = 0; // compression
-  ihdr[11] = 0; // filter
-  ihdr[12] = 0; // interlace
-
-  const png = Buffer.concat([
-    sig,
-    chunk('IHDR', ihdr),
-    chunk('IDAT', compressed),
-    chunk('IEND', Buffer.alloc(0)),
-  ]);
-
-  return `data:image/png;base64,${png.toString('base64')}`;
-}
-
-/**
  * Screen spatial buffers against Karnataka Rajakaluve / SWD and waterbodies:
  * - Primary SWD (50m buffer)
  * - Secondary SWD (25m buffer)
@@ -363,10 +227,20 @@ export function screenSpatialBuffers(
   const findings: SpatialScreeningFinding[] = [];
   let minDrainDist = Infinity;
   let minLakeDist = Infinity;
-  let drainStatus: SpatialScreeningResult['drainClearanceStatus'] = 'clear';
-  let lakeStatus: SpatialScreeningResult['lakeClearanceStatus'] = 'clear';
+  const hasValidPoint = Number.isFinite(propertyPoint.latitude) && Number.isFinite(propertyPoint.longitude) &&
+    propertyPoint.latitude >= -90 && propertyPoint.latitude <= 90 &&
+    propertyPoint.longitude >= -180 && propertyPoint.longitude <= 180;
+  const usableLayers = hasValidPoint ? layers.filter(layer =>
+    (Number.isFinite(layer.distanceM) && Number(layer.distanceM) >= 0) ||
+    (Array.isArray(layer.coords) && layer.coords.length === 2 && layer.coords.every(Number.isFinite) &&
+      layer.coords[0] >= -180 && layer.coords[0] <= 180 && layer.coords[1] >= -90 && layer.coords[1] <= 90)
+  ) : [];
+  const hasDrainLayer = usableLayers.some(layer => layer.layerType.startsWith('swd_'));
+  const hasWaterbodyLayer = usableLayers.some(layer => layer.layerType === 'waterbody');
+  let drainStatus: SpatialScreeningResult['drainClearanceStatus'] = hasDrainLayer ? 'clear' : 'unknown';
+  let lakeStatus: SpatialScreeningResult['lakeClearanceStatus'] = hasWaterbodyLayer ? 'clear' : 'unknown';
 
-  for (const layer of layers) {
+  for (const layer of usableLayers) {
     const rawDist =
       layer.distanceM !== undefined
         ? layer.distanceM
@@ -377,8 +251,9 @@ export function screenSpatialBuffers(
             layer.coords[1],
             layer.coords[0]
           )
-        : 500;
+        : Number.NaN;
 
+    if (!Number.isFinite(rawDist) || rawDist < 0) continue;
     let bufferM = 0;
     let severity: SpatialScreeningFinding['severity'] = 'low';
     let points = 5;
@@ -473,48 +348,30 @@ export function screenSpatialBuffers(
         isEncroached,
         isInsideBuffer,
         points,
+        sourceName: layer.sourceName || undefined,
+        sourceUrl: layer.sourceUrl || undefined,
+        sourceDate: layer.sourceDate || undefined,
       });
     }
   }
 
+  const sourceLabels = [...new Set(usableLayers.map(layer => layer.label).filter(Boolean))];
   const snapshotMetadata = generateCartographicSnapshotMetadata(
-    [propertyPoint.longitude, propertyPoint.latitude],
-    16,
-    ['BDA Revised Master Plan SWD Layer v2.1 (2023)', 'Bhoomi Cadastral Survey (2024)']
+    [propertyPoint.longitude, propertyPoint.latitude], 16, sourceLabels
   );
-
-  const pngBase64 = createCartographicMapPng([
-    propertyPoint.longitude,
-    propertyPoint.latitude,
-  ]);
 
   return {
     drainClearanceStatus: drainStatus,
     lakeClearanceStatus: lakeStatus,
     findings,
-    cadastralParcelGeoJSON: customParcelGeoJSON || {
-      type: 'Feature',
-      geometry: {
-        type: 'Polygon',
-        coordinates: [
-          [
-            [propertyPoint.longitude - 0.0005, propertyPoint.latitude - 0.0005],
-            [propertyPoint.longitude + 0.0005, propertyPoint.latitude - 0.0005],
-            [propertyPoint.longitude + 0.0005, propertyPoint.latitude + 0.0005],
-            [propertyPoint.longitude - 0.0005, propertyPoint.latitude + 0.0005],
-            [propertyPoint.longitude - 0.0005, propertyPoint.latitude - 0.0005],
-          ],
-        ],
-      },
-      properties: {
-        surveyNumber: '34/2',
-        village: 'Arakere',
-      },
-    },
-    georeferencedSnapshot: {
-      imagePngBase64: pngBase64,
-      metadata: snapshotMetadata,
-    },
+    screeningStatus: hasValidPoint ? (usableLayers.length ? (hasDrainLayer && hasWaterbodyLayer ? 'complete' : 'partial') : 'unavailable') : 'missing_coordinates',
+    message: !hasValidPoint
+      ? 'Valid coordinates are required; spatial screening was not performed.'
+      : usableLayers.length
+        ? 'Results are limited to the verified spatial layers supplied for this screening.'
+        : 'No verified, provenance-complete source geometry or distance is available; clearance cannot be determined.',
+    cadastralParcelGeoJSON: customParcelGeoJSON || { type: 'FeatureCollection', features: [] } as any,
+    georeferencedSnapshot: { imagePngBase64: '', metadata: snapshotMetadata },
   };
 }
 
