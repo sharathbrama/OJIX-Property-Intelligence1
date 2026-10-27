@@ -472,7 +472,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
             )}
             <div className="executive-form-meta">
               <span className="executive-otp-hint"><ShieldCheck size={13} />Code expires in 10 minutes</span>
-              <button type="button" onClick={() => setError('Contact workspace administrator for assistance.')}>Need help?</button>
+              <button type="button" onClick={() => setError('Password reset is not available yet. Please contact your workspace administrator.')}>Forgot password?</button>
             </div>
             <button className="executive-submit" type="submit" disabled={loading || serviceStatus === 'checking'}>
               {loading ? (
