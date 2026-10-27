@@ -12,5 +12,7 @@ coverage
 database-backups/
 output/
 outputs/
+playwright-report/
+test-results/
 tmp/
 apps/api/src/*-backup.ts

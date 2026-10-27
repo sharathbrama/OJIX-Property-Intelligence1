@@ -34,6 +34,7 @@
 | Migration inventory | 22 migration files (`004-025`) | INSPECTION |
 | API test inventory | 19 files; 402 top-level declarations | INSPECTION |
 | Web test inventory | 1 file; 3 executed tests | PASS / INSPECTION |
+| `npm run test:e2e` | 12 passed, 0 failed in 65.0 seconds; desktop Chrome and Pixel 7 mobile profile | PASS |
 
 ## Security audit detail
 
@@ -49,7 +50,7 @@ Direct packages appearing in affected dependency paths include `maplibre-gl`, `f
 ## Limitations
 
 - No live API/database assertions can be counted as passed.
-- No browser automation framework is configured in the repository.
+- Playwright covers the public authentication experience only; authenticated workflows require the unavailable API and database.
 - No coverage instrumentation produced statement, branch, route or requirement automation percentages.
 - Historical test counts in prior documentation were not substituted for current execution.
 - No destructive database, volume or reset command was run.

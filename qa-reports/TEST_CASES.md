@@ -7,11 +7,11 @@
 
 | Status | Count |
 |---|---:|
-| PASS | 7 |
+| PASS | 13 |
 | FAIL | 2 |
 | BLOCKED | 4 |
 | NOT TESTED | 5 |
-| Total | 18 |
+| Total | 24 |
 
 ## Detailed cases
 
@@ -172,10 +172,52 @@
 - **Actual:** 99 registered routes and 8 documented paths.
 - **Status:** PASS as an inspection; coverage gap recorded as BUG-003.
 
+### TC-QA-019 - Playwright login landing
+
+- **Scenario:** Render the public login landing page in desktop and mobile Chrome profiles.
+- **Expected:** Primary heading and login/register actions are visible.
+- **Actual:** Passed on desktop Chrome and Pixel 7 profiles.
+- **Status:** PASS (2 browser executions)
+
+### TC-QA-020 - Playwright login controls
+
+- **Scenario:** Open secure login and inspect required controls.
+- **Expected:** Email, password and submit controls are available.
+- **Actual:** Passed on desktop Chrome and Pixel 7 profiles.
+- **Status:** PASS (2 browser executions)
+
+### TC-QA-021 - Playwright service-outage handling
+
+- **Scenario:** Load login while the API/database is unavailable.
+- **Expected:** Outage feedback is displayed without hiding the login form.
+- **Actual:** Passed on desktop Chrome and Pixel 7 profiles.
+- **Status:** PASS (2 browser executions)
+
+### TC-QA-022 - Playwright password visibility
+
+- **Scenario:** Toggle password masking from the login form.
+- **Expected:** Input changes between password and visible text states.
+- **Actual:** Passed on desktop Chrome and Pixel 7 profiles.
+- **Status:** PASS (2 browser executions)
+
+### TC-QA-023 - Playwright registration navigation
+
+- **Scenario:** Navigate to registration and inspect required account fields.
+- **Expected:** Registration route loads and required inputs are displayed.
+- **Actual:** Passed on desktop Chrome and Pixel 7 profiles.
+- **Status:** PASS (2 browser executions)
+
+### TC-QA-024 - Playwright responsive overflow
+
+- **Scenario:** Check document width at the configured desktop and mobile viewports.
+- **Expected:** No horizontal page overflow.
+- **Actual:** Passed on desktop Chrome and Pixel 7 profiles.
+- **Status:** PASS (2 browser executions)
+
 ## Proposed automated regression additions
 
 - Add a root `test:web` command and include it in CI.
-- Add browser E2E for authentication, property creation, upload, review and report export.
+- Extend Playwright coverage to authenticated property creation, upload, review and report export.
 - Add schema migration tests for clean install and sequential upgrade.
 - Add OpenAPI-versus-route coverage validation.
 - Add dependency audit or an equivalent policy-controlled security scanner to CI.
