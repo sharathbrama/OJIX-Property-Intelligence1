@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, Clock } from 'lucide-react';
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
 import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
 import type { UserAccount, UserRole } from '../types';
@@ -12,6 +12,19 @@ interface LoginPageProps {
 
 const roleLoginCopy:Record<string,{label:string;description:string}>={
   'super-admin':{label:'Super Admin',description:'Authorized platform administrators only.'},owner:{label:'Workspace Owner',description:'Manage workspace operations and property matters.'},admin:{label:'Organization Admin',description:'Manage organization members, workflows and records.'},lawyer:{label:'Legal Reviewer',description:'Review title evidence and due-diligence findings.'},analyst:{label:'Evidence Analyst',description:'Analyze property records and prepare assigned matters.'},operations:{label:'Document Operations',description:'Manage document intake and processing queues.'},consultant:{label:'Consultant',description:'Review assigned client dossiers and evidence.'},support:{label:'Support',description:'Access authorized workspace diagnostics.'},data_steward:{label:'Data Steward',description:'Maintain source data and reference records.'},viewer:{label:'Viewer',description:'Access approved read-only workspace records.'}
+};
+
+export const ROLE_PASSWORDS: Record<string, string> = {
+  'super-admin': 'SuperAdmin@3126',
+  'owner': 'Owner@3126',
+  'admin': 'Admin@3126',
+  'lawyer': 'Lawyer@3126',
+  'analyst': 'Analyst@3126',
+  'operations': 'Operations@3126',
+  'consultant': 'Consultant@3126',
+  'support': 'Support@3126',
+  'data_steward': 'Steward@3126',
+  'viewer': 'Viewer@3126'
 };
 export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
   const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'phone-otp'|'verified'>(() => {
@@ -39,8 +52,24 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const [deliveryChannel, setDeliveryChannel] = useState<'email'|'sms'>('email');
   const [selectedRole, setSelectedRole] = useState(expectedRole || '');
   const [otpDeliveryTarget, setOtpDeliveryTarget] = useState('');
+  const [timeLeft, setTimeLeft] = useState(600);
   const [serviceStatus, setServiceStatus] = useState<'checking'|'ready'|'unavailable'>('checking');
   const [serviceMessage, setServiceMessage] = useState('Checking API and database…');
+
+  useEffect(() => {
+    if (mode !== 'login-otp') return;
+    setTimeLeft(600);
+    const interval = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [mode, challengeId]);
 
   const navigateAuth = (next: 'landing'|'login'|'register') => {
     setMode(next);
@@ -115,9 +144,10 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     // The local Owner is also the development Super Admin. Preserve the
     // dedicated portal selection instead of downgrading it to Owner when the
     // account chooser fills the credentials.
-    setSelectedRole(expectedRole === 'super-admin' && acc.role === 'owner' ? 'super-admin' : acc.role);
+    const roleKey = expectedRole === 'super-admin' && acc.role === 'owner' ? 'super-admin' : acc.role;
+    setSelectedRole(roleKey);
     setEmail(acc.email);
-    setPassword('ojix123');
+    setPassword(ROLE_PASSWORDS[roleKey] || 'ojix123');
     setError('');
   };
 
@@ -136,7 +166,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       const res = await fetch(`${apiUrl}${isLocalDemoAccount ? '/api/auth/login' : '/api/auth/login/request-otp'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, channel: deliveryChannel, expectedRole:requestedRole })
+        body: JSON.stringify({ email, password, channel: deliveryChannel, expectedRole: requestedRole })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -144,7 +174,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       }
 
       if (isLocalDemoAccount) {
-        if(!matchesRequestedRole(data.user,requestedRole))throw new Error(`This account cannot access the ${roleLoginCopy[requestedRole]?.label||'selected'} sign-in page.`);
+        if (!matchesRequestedRole(data.user, requestedRole)) throw new Error(`This account cannot access the ${roleLoginCopy[requestedRole]?.label || 'selected'} sign-in page.`);
         onLoginSuccess(data.token, data.user, requestedRole);
         return;
       }
@@ -153,7 +183,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       setChallengeRole(requestedRole);
       setOtpDeliveryTarget(data.deliveryTarget || email);
       setDevelopmentOtp(data.developmentOtp || '');
-      setOtp(data.developmentOtp || '');
+      setOtp(''); // Leaves verification input empty so user enters the generated OTP
       setMode('login-otp');
     } catch (err: any) {
       setError(err.message || 'Login failed. Please check credentials.');
@@ -254,7 +284,66 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   });
   const isLocalDemoLogin = email.trim().toLowerCase() === 'developer@localhost';
 
-  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card"><img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/><span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span><h1>Confirm your secure sign-in</h1>{developmentOtp?<><p>Development mode generated a one-time code locally. It expires in 10 minutes.</p><div className="development-otp-code"><span>DEMO OTP</span><strong>{developmentOtp}</strong></div></>:<p>Enter the six-digit code sent by {deliveryChannel==='email'?'email':'SMS'} to <strong>{otpDeliveryTarget || email}</strong>. It expires in 10 minutes and can be used only once.</p>}{error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}<form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form><div className="executive-otp-actions"><button onClick={()=>{setMode('login');setOtp('');setDevelopmentOtp('');setError('');}}>Back to sign in</button><button onClick={handleLogin as any}>Generate a new code</button></div><p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p></section></main>;
+  if (mode === 'login-otp') return (
+    <main className="executive-otp-shell">
+      <section className="executive-otp-card">
+        <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence" />
+        <span className="executive-secure-pill"><ShieldCheck size={13} /> TWO-STEP VERIFICATION</span>
+        <h1>Confirm your secure sign-in</h1>
+        <p>
+          Enter the six-digit sign-in code sent by {deliveryChannel === 'email' ? 'email' : 'SMS'} to <strong>{otpDeliveryTarget || email}</strong>. Check your inbox on your phone or computer.
+        </p>
+
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px',
+          padding: '8px 16px',
+          borderRadius: '9999px',
+          background: timeLeft < 60 ? '#fef2f2' : '#f0fdf4',
+          border: `1px solid ${timeLeft < 60 ? '#fca5a5' : '#bbf7d0'}`,
+          color: timeLeft < 60 ? '#dc2626' : '#15803d',
+          fontSize: '13px',
+          fontWeight: 600,
+          margin: '12px auto 18px auto',
+          width: 'fit-content'
+        }}>
+          <Clock size={16} />
+          <span>
+            {timeLeft > 0
+              ? `Code expires in: ${String(Math.floor(timeLeft / 60)).padStart(2, '0')}:${String(timeLeft % 60).padStart(2, '0')}`
+              : 'Code expired — please generate a new code'}
+          </span>
+        </div>
+
+        {error && <div className="executive-alert error"><AlertCircle size={16} /><span>{error}</span></div>}
+        <form onSubmit={verifyLoginOtp}>
+          <label>
+            Verification code
+            <input
+              autoFocus
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              pattern="\d{6}"
+              value={otp}
+              onChange={event => setOtp(event.target.value.replace(/\D/g, ''))}
+              placeholder="Enter 6-digit OTP"
+            />
+          </label>
+          <button className="executive-submit" disabled={loading || otp.length !== 6 || timeLeft === 0}>
+            {loading ? <><span className="executive-spinner" /> Verifying…</> : <>Verify and enter workspace <ArrowRight /></>}
+          </button>
+        </form>
+        <div className="executive-otp-actions">
+          <button onClick={() => { setMode('login'); setOtp(''); setDevelopmentOtp(''); setError(''); }}>Back to sign in</button>
+          <button onClick={handleLogin as any}>Generate a new code</button>
+        </div>
+        <p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p>
+      </section>
+    </main>
+  );
 
   if (mode !== 'login' && mode !== 'landing') {
     const isOtp = mode === 'otp';
@@ -319,12 +408,79 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
           {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
 
           <form className="executive-login-form" onSubmit={handleLogin}>
-            <label><span>Which role do you want to access?</span><select required value={selectedRole} onChange={event=>{setSelectedRole(event.target.value);setError('');}} style={{width:'100%',height:44,padding:'0 11px',border:'1px solid #d2dbe6',borderRadius:8,background:'#fff',color:'#172334'}}><option value="" disabled>Select your assigned role</option>{Object.entries(roleLoginCopy).map(([value,copy])=><option key={value} value={value}>{copy.label}</option>)}</select></label>
-            <label><span>Work email</span><div className="executive-input"><UserCheck/><input type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
-            <label><span>Password</span><div className="executive-input"><Lock/><input type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff/>:<Eye/>}</button></div></label>
-            {!isLocalDemoLogin&&<label><span>Send verification code by</span><select value={deliveryChannel} onChange={event=>setDeliveryChannel(event.target.value as 'email'|'sms')} style={{width:'100%',height:44,padding:'0 11px',border:'1px solid #d2dbe6',borderRadius:8,background:'#fff',color:'#172334'}}><option value="email">Email</option><option value="sms">SMS to verified phone</option></select></label>}
-            <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/>{isLocalDemoLogin?'Local demo login': 'Code expires in 10 minutes'}</span><button type="button" onClick={()=>setError('Password reset is not available yet. Please contact your workspace administrator.')}>Forgot password?</button></div>
-            <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'}>{loading?<><span className="executive-spinner"/>{isLocalDemoLogin?'Signing in…':'Sending secure code…'}</>:<>{isLocalDemoLogin?'Sign in':'Continue with '+(deliveryChannel==='email'?'email':'SMS')+' OTP'} <ArrowRight/></>}</button>
+            <label>
+              <span>Which role do you want to access?</span>
+              <select
+                required
+                value={selectedRole}
+                onChange={event => {
+                  const roleKey = event.target.value;
+                  setSelectedRole(roleKey);
+                  setError('');
+                }}
+                style={{ width: '100%', height: 44, padding: '0 11px', border: '1px solid #d2dbe6', borderRadius: 8, background: '#fff', color: '#172334' }}
+              >
+                <option value="" disabled>Select your assigned role</option>
+                {Object.entries(roleLoginCopy).map(([value, copy]) => (
+                  <option key={value} value={value}>{copy.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Password</span>
+              <div className="executive-input">
+                <Lock />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={event => setPassword(event.target.value)}
+                  required
+                  placeholder={selectedRole ? `Enter password for ${roleLoginCopy[selectedRole]?.label || 'role'}` : 'Enter assigned role password'}
+                />
+                <button type="button" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword(value => !value)}>
+                  {showPassword ? <EyeOff /> : <Eye />}
+                </button>
+              </div>
+            </label>
+            <label>
+              <span>Work email</span>
+              <div className="executive-input">
+                <UserCheck />
+                <input
+                  type="email"
+                  autoComplete="username"
+                  value={email}
+                  onChange={event => setEmail(event.target.value)}
+                  required
+                  placeholder="name@organisation.com"
+                />
+              </div>
+            </label>
+            {!isLocalDemoLogin && (
+              <label>
+                <span>Send verification code by</span>
+                <select
+                  value={deliveryChannel}
+                  onChange={event => setDeliveryChannel(event.target.value as 'email' | 'sms')}
+                  style={{ width: '100%', height: 44, padding: '0 11px', border: '1px solid #d2dbe6', borderRadius: 8, background: '#fff', color: '#172334' }}
+                >
+                  <option value="email">Email</option>
+                  <option value="sms">SMS to verified phone</option>
+                </select>
+              </label>
+            )}
+            <div className="executive-form-meta">
+              <span className="executive-otp-hint"><ShieldCheck size={13} />Code expires in 10 minutes</span>
+              <button type="button" onClick={() => setError('Contact workspace administrator for assistance.')}>Need help?</button>
+            </div>
+            <button className="executive-submit" type="submit" disabled={loading || serviceStatus === 'checking'}>
+              {loading ? (
+                <><span className="executive-spinner" />Sending verification code…</>
+              ) : (
+                <>Continue with {deliveryChannel === 'email' ? 'email' : 'SMS'} OTP <ArrowRight /></>
+              )}
+            </button>
           </form>
 
         </div>

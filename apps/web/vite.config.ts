@@ -19,7 +19,11 @@ export default defineConfig(async ({ mode }) => {
     plugins: [react()],
     server: {
       port: 5173,
-      proxy: { '/api': { target, changeOrigin: true } },
+      proxy: {
+        '/api': { target, changeOrigin: true },
+        '/health': { target, changeOrigin: true },
+        '/uploads': { target, changeOrigin: true },
+      },
     },
   };
 });

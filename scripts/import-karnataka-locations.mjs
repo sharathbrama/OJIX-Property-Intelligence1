@@ -5,8 +5,7 @@ import mysql from 'mysql2/promise';
 const [, , sourcePath, ...flags] = process.argv;
 if (!sourcePath) throw new Error('Usage: node scripts/import-karnataka-locations.mjs <kaveri.json> [--replace]');
 const replace = flags.includes('--replace');
-const databaseUrl = process.env.DATABASE_URL || 'mysql://ojix:ojix_local_only@127.0.0.1:3306/ojix_property_mysql';
-const sourceUrl = 'https://kaveri.karnataka.gov.in/landing-page';
+const databaseUrl = process.env.DATABASE_URL || 'mysql://ojix:ojix_local_only@127.0.0.1:3308/ojix_property_mysql';const sourceUrl = 'https://kaveri.karnataka.gov.in/landing-page';
 const sourceDate = '2026-10-08';
 
 const rows = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
