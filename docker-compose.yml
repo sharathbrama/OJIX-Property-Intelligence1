@@ -8,7 +8,7 @@ services:
       MARIADB_PASSWORD: ojix_local_only
       MARIADB_ROOT_PASSWORD: root_local_only
     ports:
-      - "${DB_PORT:-3306}:3306"
+      - "${DB_PORT:-3307}:3306"
     volumes:
       - ojix_db_data:/var/lib/mysql
       - ./database/mysql-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
@@ -29,14 +29,26 @@ services:
     container_name: ojix-api
     restart: unless-stopped
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 4000
       DATABASE_URL: mysql://ojix:ojix_local_only@db:3306/ojix_property_mysql
       CORS_ORIGIN: "http://localhost:5173,http://localhost:8080,http://web:8080"
+      SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      OTP_FROM_EMAIL: ${OTP_FROM_EMAIL:-}
+      DEMO_OTP_EMAIL: ${DEMO_OTP_EMAIL:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
+      DEMO_OTP_PHONE: ${DEMO_OTP_PHONE:-}
       UPLOAD_DIR: /app/uploads
       MAX_UPLOAD_MB: 25
+      OCR_LANGUAGES: kan+eng
+      OCR_MAX_PAGES: 5
+      OCR_TIMEOUT_MS: 120000
     ports:
-      - "4000:4000"
+      - "${API_PORT:-4001}:4000"
     volumes:
       - ojix_uploads:/app/uploads
     depends_on:
@@ -65,7 +77,7 @@ services:
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5

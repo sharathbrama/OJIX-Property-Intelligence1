@@ -1,11 +1,11 @@
 # P0 Gap Register — OJIX Property Intelligence
 
-**Baseline:** 14 October 2026 (Asia/Kolkata); revalidated 15 October 2026, 11:30 IST.  
-**Assessment source:** repository inspection, code changes in this working tree, and executed commands recorded in `FINAL-VALIDATION-REPORT.md`.  
-**Release status:** RED — no external client-data pilot or public production use.  
-**Latest evidence:** local API health reported MariaDB connected; `npm test` passed 427/427; `npm run typecheck` and `npm run build` passed. A read-only browser map check returned unknown with no verified source data, and the responsive map layout was visually checked. The prior 14 October note about unavailable services is historical, not the current service status. These results do not establish a complete browser workflow or production readiness.
+**Baseline:** repository audit started 14 October 2026; revalidated 18 October 2026 (Asia/Kolkata).  
+**Assessment source:** current working-tree inspection and commands recorded in `FINAL-VALIDATION-REPORT.md`.  
+**Release status:** RED — no external client-data pilot or public production use is evidenced.  
+**Latest evidence:** `npm run typecheck` passed on 18 October. A fresh `npm test` run was attempted but failed with integration/API assertion failures; see validation report. Build started but did not finish within the command window, so it is not counted as a current pass. The 15 October health/browser results below remain historical and were not re-run.
 
-**Remaining evidence limitation:** browser-to-database workflow, production identity, positive licensed GIS case, cloud/private storage, real PDF output, backup/restore, and release approval have not been verified. See `END-TO-END-TEST-PLAN.md` for current per-scenario status.
+**Remaining evidence limitation:** browser-to-database workflow, production identity, positive licensed GIS case, cloud/private storage, real PDF output, backup/restore, and release approval have not been verified. See `END-TO-END-TEST-PLAN.md` for per-scenario status. TAB0 baseline audit is populated, but closure is not claimed while current test/build evidence and external/runtime acceptance remain incomplete.
 
 ## Findings
 

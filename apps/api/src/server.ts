@@ -48,6 +48,7 @@ import {
 import { legalResearchEngine, type StatutoryProvision } from './legal-research-engine.js';
 import { sourceRegistryEngine, type RegistryName, type RegistryVerificationResult, type DirectRegistryQueryParams } from './source-registry-engine.js';
 import { retrieveRtc, rtcSearchSchema } from './rtc-retrieval-service.js';
+import { runLocalOcr } from './local-ocr.js';
 
 
 dotenv.config();
@@ -88,7 +89,7 @@ function pendingDocumentFields(_documentId: string, documentType: string, classi
     extractionMetadata: {
       source: 'pending',
       status: 'manual_review',
-      message: 'No OCR provider output is available. Review the original document and enter facts with a rationale.',
+      message: 'Local Kannada and English OCR is ready. Extracted facts still require reviewer confirmation.',
     },
     reviewState: { isVerified: false, overrides: {} },
   };
@@ -157,6 +158,20 @@ const pool = mysqlPool
       async end() {
         await mysqlPool.end();
       },
+      async getConnection() {
+        const connection=await mysqlPool.getConnection();
+        return {
+          async beginTransaction(){await connection.beginTransaction();},
+          async commit(){await connection.commit();},
+          async rollback(){await connection.rollback();},
+          async query(sql:string,params:any[]=[]):Promise<DbResult>{
+            const [rows]=await connection.query(sql,params);
+            if(Array.isArray(rows))return{rows:parseMariaDbJsonRows(rows),rowCount:rows.length};
+            const result=rows as any;return{rows:[],rowCount:result.affectedRows??0};
+          },
+          release(){connection.release();}
+        };
+      },
     }
   : null;
 // Schema changes are managed by database/mysql-schema.sql. Startup deliberately
@@ -200,8 +215,8 @@ const rtcRateLimit = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeade
 export const DUMMY_ACCOUNTS = [
   {
     uid: 'user-owner',
-    email: 'owner@ojix.local',
-    name: 'Rajesh Sharma',
+    email: 'mrsharath3126@gmail.com',
+    name: 'Sharath — Owner',
     designation: 'Managing Partner',
     role: 'owner',
     avatar: 'RS',
@@ -209,8 +224,8 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-admin',
-    email: 'admin@ojix.local',
-    name: 'Priya Nair',
+    email: 'mrsharath3126@gmail.com',
+    name: 'Sharath — Admin',
     designation: 'Firm Administrator',
     role: 'admin',
     avatar: 'PN',
@@ -218,8 +233,8 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-lawyer',
-    email: 'lawyer@ojix.local',
-    name: 'Adv. Anand Rao',
+    email: 'mrsharath3126@gmail.com',
+    name: 'Sharath — Lawyer',
     designation: 'Senior Legal Reviewer',
     role: 'lawyer',
     avatar: 'AR',
@@ -227,8 +242,8 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-analyst',
-    email: 'analyst@ojix.local',
-    name: 'Kavita Reddy',
+    email: 'mrsharath3126@gmail.com',
+    name: 'Sharath — Analyst',
     designation: 'Due Diligence Analyst',
     role: 'analyst',
     avatar: 'KR',
@@ -236,8 +251,8 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-operations',
-    email: 'operations@ojix.local',
-    name: 'Meera Kulkarni',
+    email: 'mrsharath3126@gmail.com',
+    name: 'Sharath — Operations',
     designation: 'Document Intake Specialist',
     role: 'operations',
     avatar: 'MK',
@@ -245,8 +260,8 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-consultant',
-    email: 'consultant@ojix.local',
-    name: 'Sanjay Hegde',
+    email: 'mrsharath3126@gmail.com',
+    name: 'Sharath — Consultant',
     designation: 'Property Consultant',
     role: 'consultant',
     avatar: 'SH',
@@ -254,8 +269,8 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-support',
-    email: 'support@ojix.local',
-    name: 'Nikhil Dev',
+    email: 'mrsharath3126@gmail.com',
+    name: 'Sharath — Support',
     designation: 'OJIX Support Engineer',
     role: 'support',
     avatar: 'ND',
@@ -263,8 +278,8 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-data-steward',
-    email: 'steward@ojix.local',
-    name: 'Asha Iyer',
+    email: 'mrsharath3126@gmail.com',
+    name: 'Sharath — Data Steward',
     designation: 'OJIX Data Steward',
     role: 'data_steward',
     avatar: 'AI',
@@ -272,14 +287,32 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-viewer',
-    email: 'viewer@ojix.local',
-    name: 'Vikram Mehta',
+    email: 'mrsharath3126@gmail.com',
+    name: 'Sharath — Viewer',
     designation: 'Client / Audit Inspector',
     role: 'viewer',
     avatar: 'VM',
     description: 'External Auditor / Read-Only Client — inspect evidence, view map layers and reports (all mutations blocked).'
   }
 ];
+
+const DEMO_PASSWORDS: Record<string, string> = {
+  'user-owner': 'Owner@3126',
+  'user-admin': 'Admin@3126',
+  'user-lawyer': 'Lawyer@3126',
+  'user-analyst': 'Analyst@3126',
+  'user-operations': 'Operations@3126',
+  'user-consultant': 'Consultant@3126',
+  'user-support': 'Support@3126',
+  'user-data-steward': 'Steward@3126',
+  'user-viewer': 'Viewer@3126',
+  'local-developer': 'ojix123'
+};
+
+function validDemoPassword(uid: string, password: string, expectedRole?: string) {
+  if (expectedRole === 'super-admin' && uid === 'user-owner') return password === 'SuperAdmin@3126';
+  return password === DEMO_PASSWORDS[uid];
+}
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -288,6 +321,7 @@ export interface AuthenticatedRequest extends Request {
     name?: string;
     tenantId?: string;
     role?: string;
+    isSuperAdmin?: boolean;
   };
 }
 const supportSessions = new Map<string, number>();
@@ -312,16 +346,37 @@ function verifyPassword(password: string, stored: string) {
 
 const hashOtp = (email: string, otp: string) => crypto.createHash('sha256').update(`${email.toLowerCase()}:${otp}`).digest('hex');
 
+class OtpDeliveryError extends Error {
+  constructor(message: string) { super(message); this.name = 'OtpDeliveryError'; }
+}
+
 async function deliverOtpEmail(email:string, name:string, otp:string, purpose:'login'|'registration') {
   const apiKey=process.env.RESEND_API_KEY?.trim();
   const from=process.env.OTP_FROM_EMAIL?.trim();
-  if (!apiKey || !from || email.endsWith('.local')) {
-    if (process.env.NODE_ENV === 'production') throw new Error('OTP email delivery is not configured for this account.');
-    return { delivered:false, mode:'development' as const };
-  }
+  if (!apiKey || !from) throw new OtpDeliveryError('Email OTP delivery is not configured. Set RESEND_API_KEY and OTP_FROM_EMAIL, then restart the API.');
   const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({from,to:[email],subject:purpose==='login'?'Your OJIX secure sign-in code':'Verify your OJIX account',html:`<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h2 style="color:#234A83">OJIX Property Intelligence</h2><p>Hello ${name.replace(/[<>&"']/g,'')},</p><p>Your secure verification code is:</p><div style="font-size:30px;font-weight:800;letter-spacing:8px;color:#234A83;padding:18px;background:#f3f6fa;border-radius:8px;text-align:center">${otp}</div><p>This code expires in 10 minutes and can be used only once. If you did not request it, do not share it.</p></div>`})});
-  if (!response.ok) throw new Error('The verification email could not be delivered.');
+  if (!response.ok) throw new OtpDeliveryError('The verification email could not be delivered. Check the sender domain and Resend account configuration.');
   return { delivered:true, mode:'email' as const };
+}
+
+async function deliverOtpSms(phone:string, name:string, otp:string, purpose:'login'|'registration') {
+  const accountSid=process.env.TWILIO_ACCOUNT_SID?.trim();
+  const authToken=process.env.TWILIO_AUTH_TOKEN?.trim();
+  const from=process.env.TWILIO_FROM_NUMBER?.trim();
+  const messagingServiceSid=process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
+  if (!accountSid || !authToken || (!from && !messagingServiceSid)) {
+    throw new OtpDeliveryError('SMS OTP delivery is not configured. Set Twilio credentials and a sender, then restart the API.');
+  }
+  const body=new URLSearchParams({To:phone,Body:`OJIX ${purpose==='login'?'sign-in':'verification'} code for ${name}: ${otp}. Expires in 10 minutes. Do not share this code.`});
+  if (messagingServiceSid) body.set('MessagingServiceSid',messagingServiceSid);
+  else body.set('From',from!);
+  const response=await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,{
+    method:'POST',
+    headers:{Authorization:`Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,'Content-Type':'application/x-www-form-urlencoded'},
+    body
+  });
+  if (!response.ok) throw new OtpDeliveryError('The verification SMS could not be delivered. Check your Twilio sender and account configuration.');
+  return { delivered:true, mode:'sms' as const };
 }
 
 async function authGuard(req: Request, res: Response, next: NextFunction) {
@@ -417,7 +472,9 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
     ...identity,
     email: membership.rows[0].email || identity.email,
     tenantId: membership.rows[0].organization_id,
-    role: membership.rows[0].role
+    role: membership.rows[0].role,
+    isSuperAdmin: (process.env.NODE_ENV !== 'production' && dummyIdentity?.role === 'owner') ||
+      (process.env.SUPER_ADMIN_EMAILS || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean).includes((membership.rows[0].email || identity.email || '').toLowerCase())
   };
   next();
 }
@@ -680,6 +737,7 @@ app.get('/api/auth/dummy-accounts', (_req, res) => {
 const registrationSchema = z.object({
   name: z.string().trim().min(2).max(160),
   email: z.string().trim().email().max(255).transform(value => value.toLowerCase()),
+  phone: z.string().trim().regex(/^\+[1-9]\d{7,14}$/, 'Enter a phone number with country code, such as +14155552671.').optional().or(z.literal('')).transform(value => value || undefined),
   password: z.string().min(8).max(128)
     .regex(/[A-Z]/, 'Password must contain an uppercase letter.')
     .regex(/[a-z]/, 'Password must contain a lowercase letter.')
@@ -690,7 +748,7 @@ app.post('/api/auth/register/request-otp', asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed = registrationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration details.' });
-  const { name, email, password } = parsed.data;
+  const { name, email, password, phone } = parsed.data;
   if (DUMMY_ACCOUNTS.some(account => account.email.toLowerCase() === email)) return res.status(409).json({ error: 'This email already belongs to a workspace account. Please sign in.' });
   const existing = await pool.query('SELECT id, email_verified FROM user_accounts WHERE email=? LIMIT 1', [email]);
   if (existing.rowCount && existing.rows[0].email_verified) return res.status(409).json({ error: 'An account already exists for this email. Please sign in.' });
@@ -698,24 +756,40 @@ app.post('/api/auth/register/request-otp', asyncRoute(async (req, res) => {
   const userId = existing.rows[0]?.id || crypto.randomUUID();
   const passwordHash = hashPassword(password);
   if (existing.rowCount) {
-    await pool.query('UPDATE user_accounts SET full_name=?, password_hash=?, status=\'pending\' WHERE id=?', [name, passwordHash, userId]);
+    await pool.query('UPDATE user_accounts SET full_name=?, password_hash=?, phone_e164=?, phone_verified_at=NULL, status=\'pending\' WHERE id=?', [name, passwordHash, phone || null, userId]);
   } else {
-    await pool.query('INSERT INTO user_accounts (id,email,full_name,password_hash,email_verified,status) VALUES (?,?,?,?,FALSE,\'pending\')', [userId, email, name, passwordHash]);
+    await pool.query('INSERT INTO user_accounts (id,email,full_name,password_hash,email_verified,status,phone_e164) VALUES (?,?,?,?,FALSE,\'pending\',?)', [userId, email, name, passwordHash, phone || null]);
   }
   await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE email=? AND purpose=\'registration\' AND consumed_at IS NULL', [email]);
   const otp = String(crypto.randomInt(100000, 1000000));
   const challengeId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + OTP_TTL_MS);
   await pool.query('INSERT INTO otp_challenges (id,email,purpose,otp_hash,expires_at) VALUES (?,?,\'registration\',?,?)', [challengeId, email, hashOtp(email, otp), expiresAt]);
-  const delivery=await deliverOtpEmail(email,name,otp,'registration');
+  let phoneChallengeId: string | undefined;
+  let delivery;
+  try {
+    delivery=await deliverOtpEmail(email,name,otp,'registration');
+    if (phone) {
+      const phoneOtp=String(crypto.randomInt(100000,1000000));
+      phoneChallengeId=crypto.randomUUID();
+      await pool.query("INSERT INTO otp_challenges (id,email,purpose,otp_hash,expires_at) VALUES (?,?, 'registration_phone',?,?)",[phoneChallengeId,email,hashOtp(email,phoneOtp),expiresAt]);
+      await deliverOtpSms(phone,name,phoneOtp,'registration');
+    }
+  }
+  catch (error) {
+    await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?',[challengeId]);
+    if (phoneChallengeId) await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?',[phoneChallengeId]);
+    throw error;
+  }
   await audit(userId, DEFAULT_ORGANIZATION_ID, 'auth.registration_otp_requested', 'user_account', userId, { email });
   res.status(201).json({
     challengeId,
+    phoneChallengeId,
+    phone,
     email,
     expiresAt: expiresAt.toISOString(),
     deliveryMode: delivery.mode,
-    message: 'Verification code created. Enter the six-digit OTP to activate your account.',
-    ...(process.env.NODE_ENV !== 'production' ? { developmentOtp: otp } : {})
+    message: phone ? 'Verification codes were sent to your email and phone.' : 'A six-digit verification code was sent to your email.'
   });
 }));
 
@@ -732,56 +806,94 @@ app.post('/api/auth/register/verify-otp', asyncRoute(async (req, res) => {
     await pool.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=?', [challengeId]);
     return res.status(400).json({ error: 'Incorrect OTP. Please check the six-digit code.' });
   }
-  const account = await pool.query('SELECT id, full_name FROM user_accounts WHERE email=? LIMIT 1', [email]);
+  const account = await pool.query('SELECT id, full_name, phone_e164 FROM user_accounts WHERE email=? LIMIT 1', [email]);
   if (!account.rowCount) return res.status(400).json({ error: 'Registration account was not found.' });
   await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?', [challengeId]);
+  if (account.rows[0].phone_e164) {
+    await pool.query('UPDATE user_accounts SET email_verified=TRUE WHERE id=?',[account.rows[0].id]);
+    return res.json({ success:true, phoneVerificationRequired:true, message:'Email verified. Enter the SMS code to finish account setup.' });
+  }
   await pool.query('UPDATE user_accounts SET email_verified=TRUE,status=\'active\' WHERE id=?', [account.rows[0].id]);
   await pool.query('INSERT IGNORE INTO org_memberships (id,organization_id,user_uid,email,role) VALUES (?,?,?,?,\'viewer\')', [crypto.randomUUID(), DEFAULT_ORGANIZATION_ID, account.rows[0].id, email]);
   await audit(account.rows[0].id, DEFAULT_ORGANIZATION_ID, 'auth.registration_verified', 'user_account', account.rows[0].id, { email, assignedRole: 'viewer' });
   res.json({ success: true, message: 'Email verified. Your read-only workspace account is ready; please sign in.' });
 }));
 
+app.post('/api/auth/register/verify-phone-otp', asyncRoute(async (req,res)=>{
+  if (!pool) return res.status(503).json({ error:'Database not configured.' });
+  const parsed=z.object({challengeId:z.string().uuid(),email:z.string().trim().email().transform(v=>v.toLowerCase()),otp:z.string().regex(/^\d{6}$/)}).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({error:'Enter the valid six-digit SMS code.'});
+  const {challengeId,email,otp}=parsed.data;
+  const challenge=await pool.query("SELECT * FROM otp_challenges WHERE id=? AND email=? AND purpose='registration_phone' LIMIT 1",[challengeId,email]);
+  if (!challenge.rowCount||challenge.rows[0].consumed_at) return res.status(400).json({error:'This phone verification request is no longer valid.'});
+  if (new Date(challenge.rows[0].expires_at).getTime()<=Date.now()) return res.status(400).json({error:'The SMS code has expired. Register again to request new codes.'});
+  if (Number(challenge.rows[0].attempts)>=5) return res.status(429).json({error:'Too many incorrect attempts. Register again to request new codes.'});
+  if (challenge.rows[0].otp_hash!==hashOtp(email,otp)) {await pool.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=?',[challengeId]);return res.status(400).json({error:'Incorrect SMS code.'});}
+  const account=await pool.query('SELECT id,email_verified,status FROM user_accounts WHERE email=? LIMIT 1',[email]);
+  if (!account.rowCount||!account.rows[0].email_verified||account.rows[0].status!=='pending') return res.status(403).json({error:'Verify the email code before completing phone verification.'});
+  await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?',[challengeId]);
+  await pool.query('UPDATE user_accounts SET phone_verified_at=NOW(6),email_verified=TRUE,status=\'active\' WHERE id=?',[account.rows[0].id]);
+  await pool.query('INSERT IGNORE INTO org_memberships (id,organization_id,user_uid,email,role) VALUES (?,?,?,?,\'viewer\')',[crypto.randomUUID(),DEFAULT_ORGANIZATION_ID,account.rows[0].id,email]);
+  await audit(account.rows[0].id,DEFAULT_ORGANIZATION_ID,'auth.registration_verified','user_account',account.rows[0].id,{email,phoneVerified:true,assignedRole:'viewer'});
+  res.json({success:true,message:'Email and phone verified. Your workspace account is ready; please sign in.'});
+}));
+
 app.post('/api/auth/login/request-otp', asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const parsed=z.object({email:z.string().trim().email().transform(value=>value.toLowerCase()),password:z.string().min(1).max(128)}).safeParse(req.body);
+  const parsed=z.object({email:z.string().trim().email().transform(value=>value.toLowerCase()),password:z.string().min(1).max(128),channel:z.enum(['email','sms']).default('email'),expectedRole:z.enum(['super-admin','owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional()}).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error:'Enter a valid email and password.' });
-  const {email,password}=parsed.data;
-  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email):undefined;
-  const registered=!dummy?await pool.query('SELECT id,email,full_name,password_hash,email_verified,status FROM user_accounts WHERE email=? LIMIT 1',[email]):{rowCount:0,rows:[]};
+  const {email,password,channel,expectedRole}=parsed.data;
+  const requestedDummyRole=expectedRole==='super-admin'?'owner':expectedRole;
+  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email&&(!requestedDummyRole||account.role===requestedDummyRole)):undefined;
+  const registered=!dummy?await pool.query('SELECT id,email,full_name,password_hash,email_verified,status,phone_e164,phone_verified_at FROM user_accounts WHERE email=? LIMIT 1',[email]):{rowCount:0,rows:[]};
+  const passwordOverride=dummy?await pool.query('SELECT password_hash FROM account_password_overrides WHERE user_uid=? LIMIT 1',[dummy.uid]):{rowCount:0,rows:[]};
   if (!dummy&&!registered.rowCount) return res.status(401).json({ error:'Invalid email or password.' });
-  if (dummy?password!=='ojix123':!verifyPassword(password,registered.rows[0].password_hash)) return res.status(401).json({ error:'Invalid email or password.' });
+  const validPassword=dummy?(passwordOverride.rowCount?verifyPassword(password,passwordOverride.rows[0].password_hash):validDemoPassword(dummy.uid,password,expectedRole)):verifyPassword(password,registered.rows[0].password_hash);
+  if (!validPassword) return res.status(401).json({ error:'Invalid email or password.' });
   if (registered.rowCount&&(!registered.rows[0].email_verified||registered.rows[0].status!=='active')) return res.status(403).json({ error:'Complete account verification before signing in.' });
   const uid=dummy?.uid||registered.rows[0].id;
   const name=dummy?.name||registered.rows[0].full_name;
-  const membership=await pool.query('SELECT status FROM org_memberships WHERE user_uid=? LIMIT 1',[uid]);
+  const developmentDemoLogin=process.env.NODE_ENV!=='production'&&Boolean(dummy)&&!process.env.DEMO_OTP_EMAIL?.trim();
+  const deliveryTarget=channel==='email'
+    ? (dummy?(process.env.DEMO_OTP_EMAIL?.trim()||''):email)
+    : (dummy?(process.env.DEMO_OTP_PHONE?.trim()||''):(registered.rows[0].phone_verified_at?registered.rows[0].phone_e164:''));
+  if (!deliveryTarget&&!developmentDemoLogin) return res.status(400).json({error:channel==='email'?'Email delivery address is not configured for this demo account.':'Add and verify a phone number before choosing SMS.'});
+  const membership=await pool.query('SELECT status,role FROM org_memberships WHERE user_uid=? LIMIT 1',[uid]);
   if (!membership.rowCount||membership.rows[0].status!=='active') return res.status(403).json({error:'This workspace membership is not active.'});
+  const isSuperAdmin=(process.env.NODE_ENV!=='production'&&membership.rows[0].role==='owner')||(process.env.SUPER_ADMIN_EMAILS||'').split(',').map(value=>value.trim().toLowerCase()).filter(Boolean).includes(email);
+  if(expectedRole&&(expectedRole==='super-admin'?!isSuperAdmin:membership.rows[0].role!==expectedRole))return res.status(403).json({error:`This account is not authorized for the ${expectedRole==='super-admin'?'Super Admin':expectedRole.replace('_',' ')} sign-in portal.`});
   await pool.query("UPDATE otp_challenges SET consumed_at=NOW(6) WHERE email=? AND purpose='login' AND consumed_at IS NULL",[email]);
   const otp=String(crypto.randomInt(100000,1000000));
   const challengeId=crypto.randomUUID();
   const expiresAt=new Date(Date.now()+OTP_TTL_MS);
   await pool.query("INSERT INTO otp_challenges (id,email,purpose,otp_hash,expires_at) VALUES (?,?, 'login',?,?)",[challengeId,email,hashOtp(email,otp),expiresAt]);
-  const delivery=await deliverOtpEmail(email,name,otp,'login');
+  let delivery;
+  try { delivery=developmentDemoLogin?{delivered:true,mode:'development' as const}:channel==='email'?await deliverOtpEmail(deliveryTarget,name,otp,'login'):await deliverOtpSms(deliveryTarget,name,otp,'login'); }
+  catch (error) { await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?',[challengeId]); throw error; }
   await audit(uid,DEFAULT_ORGANIZATION_ID,'auth.login_otp_requested','user_account',uid,{email,deliveryMode:delivery.mode});
-  res.status(201).json({challengeId,email,expiresAt:expiresAt.toISOString(),deliveryMode:delivery.mode,message:delivery.delivered?'A six-digit code was sent to your email.':'Development code created.',...(process.env.NODE_ENV!=='production'?{developmentOtp:otp}:{})});
+  res.status(201).json({challengeId,email,channel,deliveryTarget,expiresAt:expiresAt.toISOString(),deliveryMode:delivery.mode,message:developmentDemoLogin?'A local development OTP was generated.':`A six-digit sign-in code was sent by ${channel==='email'?'email':'SMS'}.`,...(developmentDemoLogin?{developmentOtp:otp}:{})});
 }));
 
 app.post('/api/auth/login/verify-otp', asyncRoute(async (req,res)=>{
   if (!pool) return res.status(503).json({ error:'Database not configured.' });
-  const parsed=z.object({challengeId:z.string().uuid(),email:z.string().trim().email().transform(value=>value.toLowerCase()),otp:z.string().regex(/^\d{6}$/)}).safeParse(req.body);
+  const parsed=z.object({challengeId:z.string().uuid(),email:z.string().trim().email().transform(value=>value.toLowerCase()),otp:z.string().regex(/^\d{6}$/),expectedRole:z.enum(['super-admin','owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional()}).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error:'Enter the valid six-digit sign-in code.' });
-  const {challengeId,email,otp}=parsed.data;
+  const {challengeId,email,otp,expectedRole}=parsed.data;
   const challenge=await pool.query("SELECT * FROM otp_challenges WHERE id=? AND email=? AND purpose='login' LIMIT 1",[challengeId,email]);
   if (!challenge.rowCount||challenge.rows[0].consumed_at) return res.status(400).json({ error:'This sign-in code is no longer valid.' });
   if (new Date(challenge.rows[0].expires_at).getTime()<=Date.now()) return res.status(400).json({ error:'The sign-in code has expired. Request a new code.' });
   if (Number(challenge.rows[0].attempts)>=5) return res.status(429).json({ error:'Too many incorrect attempts. Request a new code.' });
   if (challenge.rows[0].otp_hash!==hashOtp(email,otp)) {await pool.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=?',[challengeId]);return res.status(400).json({ error:'Incorrect sign-in code.' });}
-  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email):undefined;
+  const requestedDummyRole=expectedRole==='super-admin'?'owner':expectedRole;
+  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email&&(!requestedDummyRole||account.role===requestedDummyRole)):undefined;
   const registered=!dummy?await pool.query("SELECT id,email,full_name FROM user_accounts WHERE email=? AND email_verified=TRUE AND status='active' LIMIT 1",[email]):{rowCount:0,rows:[]};
   if (!dummy&&!registered.rowCount) return res.status(401).json({ error:'The account is no longer active.' });
   const target:any=dummy||{uid:registered.rows[0].id,email:registered.rows[0].email,name:registered.rows[0].full_name,designation:'Registered Reviewer',role:'viewer',avatar:registered.rows[0].full_name.split(/\s+/).slice(0,2).map((part:string)=>part[0]).join('').toUpperCase(),description:'Verified workspace member'};
   const membership=await pool.query('SELECT organization_id,role,status FROM org_memberships WHERE user_uid=? LIMIT 1',[target.uid]);
   if (!membership.rowCount||membership.rows[0].status!=='active') return res.status(403).json({error:'This workspace membership is not active.'});
   const role=membership.rows[0]?.role||target.role;
+  const isSuperAdmin=(process.env.NODE_ENV!=='production'&&role==='owner')||(process.env.SUPER_ADMIN_EMAILS||'').split(',').map(value=>value.trim().toLowerCase()).filter(Boolean).includes(email);
+  if(expectedRole&&(expectedRole==='super-admin'?!isSuperAdmin:role!==expectedRole))return res.status(403).json({error:`This account is not authorized for the ${expectedRole==='super-admin'?'Super Admin':expectedRole.replace('_',' ')} sign-in portal.`});
   const tenantId=membership.rows[0]?.organization_id||DEFAULT_ORGANIZATION_ID;
   const sessionMs=role==='support'?SUPPORT_SESSION_MS:AUTH_SESSION_MS;
   const token=`ojix-${crypto.randomBytes(32).toString('base64url')}`;
@@ -792,12 +904,12 @@ app.post('/api/auth/login/verify-otp', asyncRoute(async (req,res)=>{
   if(role==='support') supportSessions.set(target.uid,expiresAt);
   await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?',[challengeId]);
   await audit(target.uid,tenantId,'auth.login_otp_verified','user_account',target.uid,{email,role});
-  res.json({token,user:{...target,role,tenantId,accessExpiresAt:new Date(expiresAt).toISOString()},message:`Signed in securely as ${target.name} (${String(role).toUpperCase()})`});
+  res.json({token,user:{...target,role,tenantId,isSuperAdmin,accessExpiresAt:new Date(expiresAt).toISOString()},message:`Signed in securely as ${target.name} (${String(role).toUpperCase()})`});
 }));
 
 app.post('/api/auth/login', asyncRoute(async (req, res) => {
   if(process.env.NODE_ENV==='production')return res.status(410).json({error:'Password-only login is disabled. Use the OTP sign-in flow.'});
-  const { email, uid, userUid, password } = req.body || {};
+  const { email, uid, userUid, password, expectedRole } = req.body || {};
   const queryUid = userUid || uid;
   let target = DUMMY_ACCOUNTS.find(a => 
     (email && a.email.toLowerCase() === String(email).toLowerCase()) ||
@@ -825,7 +937,9 @@ app.post('/api/auth/login', asyncRoute(async (req, res) => {
   if (registeredAccount && (!registeredAccount.email_verified || registeredAccount.status !== 'active')) {
     return res.status(403).json({ error: 'Complete OTP verification before signing in.' });
   }
-  if (registeredAccount ? !verifyPassword(String(password || ''), registeredAccount.password_hash) : (process.env.NODE_ENV !== 'test' && password !== 'ojix123')) {
+  const passwordOverride=target&&pool?await pool.query('SELECT password_hash FROM account_password_overrides WHERE user_uid=? LIMIT 1',[target.uid]):{rowCount:0,rows:[]};
+  const dummyPasswordInvalid=passwordOverride.rowCount?!verifyPassword(String(password||''),passwordOverride.rows[0].password_hash):(process.env.NODE_ENV !== 'test'&&!validDemoPassword(target?.uid||'',String(password||''),expectedRole));
+  if (registeredAccount ? !verifyPassword(String(password || ''), registeredAccount.password_hash) : dummyPasswordInvalid) {
     return res.status(401).json({ error: 'Incorrect password. Use the development password shown on the sign-in screen.' });
   }
 
@@ -892,10 +1006,35 @@ app.get('/api/auth/me', authGuard, asyncRoute(async (req, res) => {
     user: {
       ...meta,
       role: u?.role || meta.role,
+      isSuperAdmin: Boolean(u?.isSuperAdmin),
       tenantId: u?.tenantId,
       accessExpiresAt: u?.role === 'support' ? new Date(supportSessions.get(u.uid) || 0).toISOString() : undefined
     }
   });
+}));
+
+app.post('/api/auth/change-password',authGuard,asyncRoute(async(req,res)=>{
+  if(!pool)return res.status(503).json({error:'Database not configured.'});
+  const parsed=z.object({
+    currentPassword:z.string().min(1).max(128),
+    newPassword:z.string().min(8).max(128).regex(/[A-Z]/,'New password must contain an uppercase letter.').regex(/[a-z]/,'New password must contain a lowercase letter.').regex(/[0-9]/,'New password must contain a number.')
+  }).refine(value=>value.currentPassword!==value.newPassword,{message:'New password must be different from the current password.'}).safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:parsed.error.issues[0]?.message||'Enter a valid new password.'});
+  const user=(req as AuthenticatedRequest).user!;
+  const dummy=DUMMY_ACCOUNTS.find(account=>account.uid===user.uid);
+  const registered=await pool.query('SELECT password_hash FROM user_accounts WHERE id=? LIMIT 1',[user.uid]);
+  const override=dummy?await pool.query('SELECT password_hash FROM account_password_overrides WHERE user_uid=? LIMIT 1',[user.uid]):{rowCount:0,rows:[]};
+  const currentValid=registered.rowCount?verifyPassword(parsed.data.currentPassword,registered.rows[0].password_hash):dummy?(override.rowCount?verifyPassword(parsed.data.currentPassword,override.rows[0].password_hash):validDemoPassword(dummy.uid,parsed.data.currentPassword)):false;
+  if(!currentValid)return res.status(401).json({error:'Current password is incorrect.'});
+  const passwordHash=hashPassword(parsed.data.newPassword);
+  if(registered.rowCount)await pool.query('UPDATE user_accounts SET password_hash=?,updated_at=NOW(6) WHERE id=?',[passwordHash,user.uid]);
+  else await pool.query('INSERT INTO account_password_overrides (user_uid,password_hash,changed_at,changed_by_uid) VALUES (?,?,NOW(6),?) ON DUPLICATE KEY UPDATE password_hash=VALUES(password_hash),changed_at=NOW(6),changed_by_uid=VALUES(changed_by_uid)',[user.uid,passwordHash,user.uid]);
+  const rawToken=(req.header('authorization')||'').replace(/^Bearer\s+/i,'').trim();
+  const currentSession=rawToken?authSessions.get(rawToken):undefined;
+  await pool.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE user_uid=? AND id<>? AND revoked_at IS NULL',[user.uid,'Password changed',user.uid,currentSession?.id||'']);
+  for(const[token,session]of authSessions)if(session.uid===user.uid&&session.id!==currentSession?.id)authSessions.delete(token);
+  await audit(user.uid,user.tenantId||DEFAULT_ORGANIZATION_ID,'auth.password_changed','user_account',user.uid,{email:user.email,otherSessionsRevoked:true});
+  res.json({success:true,message:'Password changed successfully. Other sessions were revoked, and Super Admin can see the security event.'});
 }));
 
 app.post('/api/auth/logout', authGuard, (req, res) => {
@@ -1004,7 +1143,7 @@ app.patch('/api/rtc/:id/confirmation', authGuard, rtcLookupGuard, asyncRoute(asy
 
 app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured. Start MariaDB and set DATABASE_URL.' });
-  if (_req.user?.role === 'support') return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:'local_development', ocr:'not_enabled', gisLayers:'unavailable' }, supportScope:'diagnostics_only' });
+  if (_req.user?.role === 'support') return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:'local_development', ocr:'local_tesseract', gisLayers:'unavailable' }, supportScope:'diagnostics_only' });
   const result = await pool.query(
     `SELECT COUNT(*) AS total,
        SUM(CASE WHEN p.status='in_review' THEN 1 ELSE 0 END) AS in_review,
@@ -1058,7 +1197,7 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
     [_req.user?.tenantId]
   );
   const attentionQueue = await pool.query(
-    `SELECT p.id, p.name, p.district, p.village, p.survey_number, p.status, p.updated_at,
+    `SELECT p.id, p.name, p.district, p.village, p.property_type, p.property_identifier, p.property_identifier_type, p.survey_number, p.subdivision, p.status, p.updated_at,
        CASE WHEN NOT EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id) THEN 1 ELSE 0 END AS missing_documents,
        CASE WHEN p.latitude IS NULL OR p.longitude IS NULL THEN 1 ELSE 0 END AS missing_coordinates,
        CASE WHEN p.extent='' THEN 1 ELSE 0 END AS missing_extent,
@@ -1088,7 +1227,7 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
       database: 'connected',
       governmentConnectors: 'not_connected',
       documentStorage: 'local_development',
-      ocr: 'not_enabled',
+      ocr: 'local_tesseract',
       gisLayers: spatialLayerStatus.rows.length ? 'loaded_verified_provenance' : 'unavailable'
     }
   });
@@ -1570,15 +1709,46 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
     try { metadata = JSON.parse(String(req.body.metadata)); } catch { return res.status(400).json({ error: 'Document metadata must be valid JSON.' }); }
     if (!Array.isArray(metadata) || metadata.length !== files.length) return res.status(400).json({ error: 'Provide one metadata entry for each uploaded file.' });
   }
+  const preparedFiles = files.map(file => {
+    const fileBuffer = fs.readFileSync(file.path);
+    return { file, sha256: crypto.createHash('sha256').update(fileBuffer).digest('hex') };
+  });
+  const hashesSeen = new Set<string>();
+  for (const prepared of preparedFiles) {
+    const duplicateInBatch = hashesSeen.has(prepared.sha256);
+    hashesSeen.add(prepared.sha256);
+    const existing = duplicateInBatch
+      ? { rowCount: 0, rows: [] as any[] }
+      : await pool.query(
+          `SELECT id, original_filename, created_at
+           FROM documents
+           WHERE tenant_id=? AND property_id=? AND sha256=? AND governance_status<>'quarantined'
+           ORDER BY created_at DESC LIMIT 1`,
+          [req.user?.tenantId, req.params.id, prepared.sha256]
+        );
+    if (duplicateInBatch || existing.rowCount) {
+      for (const item of preparedFiles) fs.unlink(item.file.path, () => {});
+      await audit(req.user?.uid || 'unknown', req.user?.tenantId, 'document.duplicate_rejected', 'property', req.params.id, {
+        filename: prepared.file.originalname,
+        sha256: prepared.sha256,
+        duplicateDocumentId: existing.rows[0]?.id || null,
+        duplicateInBatch,
+      });
+      return res.status(409).json({
+        error: `Duplicate document rejected: ${prepared.file.originalname} has already been uploaded to this application.`,
+        code: 'DUPLICATE_DOCUMENT',
+        duplicate: existing.rows[0] || { batch: true },
+      });
+    }
+  }
   const inserted = [];
-  for (const [fileIndex, file] of files.entries()) {
+  for (const [fileIndex, prepared] of preparedFiles.entries()) {
+    const { file, sha256 } = prepared;
     const fileMetadata = metadata[fileIndex] || {};
     const selectedType = String(fileMetadata.documentType || requestedDocumentType || '').trim();
     if (selectedType && !allowedDocumentTypes.has(selectedType)) return res.status(400).json({ error: `Unsupported document type for ${file.originalname}.` });
     if (selectedType === 'other' && !String(fileMetadata.customDocumentType || '').trim()) return res.status(400).json({ error: `Enter a custom document type for ${file.originalname}.` });
     if (fileMetadata.classificationConfidence != null && (!Number.isFinite(Number(fileMetadata.classificationConfidence)) || Number(fileMetadata.classificationConfidence) < 0 || Number(fileMetadata.classificationConfidence) > 1)) return res.status(400).json({ error: `Classification confidence for ${file.originalname} must be between 0 and 1.` });
-    const fileBuffer = fs.readFileSync(file.path);
-    const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
     const documentId = crypto.randomUUID();
     const classificationConfidence = fileMetadata.classificationConfidence == null ? (selectedType ? 1 : 0) : Number(fileMetadata.classificationConfidence);
     const initialExtracted = pendingDocumentFields(documentId, selectedType || 'other', classificationConfidence);
@@ -1672,19 +1842,26 @@ app.post('/api/properties/:id/documents/:docId/extract', authGuard, writeGuard, 
   if (!docResult.rowCount) return res.status(404).json({ error: 'Document not found.' });
   const doc = docResult.rows[0];
 
-  const { isTraversal } = resolveSafeUploadPath(doc.storage_key);
-  if (isTraversal) {
+  const { safePath, isTraversal } = resolveSafeUploadPath(doc.storage_key);
+  if (isTraversal || !safePath) {
     return res.status(403).json({ error: 'Access denied: invalid file path traversal.' });
   }
 
-  const suppliedText = usableExtractedText(req.body?.text) || usableExtractedText(doc.extracted_text);
+  let suppliedText = usableExtractedText(req.body?.text) || usableExtractedText(doc.extracted_text);
   const hasProviderPayload = req.body?.jsonPayload && typeof req.body.jsonPayload === 'object';
   const hasOcrTokens = Array.isArray(req.body?.tokens) && req.body.tokens.length > 0;
   if (!suppliedText && !hasProviderPayload && !hasOcrTokens) {
-    return res.status(409).json({
-      error: 'Automatic OCR is not configured for this document. Review the original file and enter corrections with a rationale, or submit authorised OCR/provider output.',
-      code: 'OCR_NOT_CONFIGURED',
-    });
+    if (!fs.existsSync(safePath)) return res.status(404).json({ error: 'Document file not found on disk.' });
+    try {
+      const ocr = await runLocalOcr(safePath, doc.mime_type || 'application/octet-stream');
+      suppliedText = ocr.text;
+    } catch (error) {
+      console.error('Local OCR failed:', error);
+      return res.status(422).json({
+        error: error instanceof Error ? error.message : 'Automatic OCR could not read this document.',
+        code: 'OCR_FAILED',
+      });
+    }
   }
 
   const extractionInput: ExtractionInput = {
@@ -2819,6 +2996,83 @@ const ROLE_PERMISSIONS:Record<string,string[]>={owner:['workspace_admin','member
 const reasonSchema=z.object({reason:z.string().trim().min(3).max(500)});
 const pageSchema=z.object({page:z.coerce.number().int().min(1).default(1),limit:z.coerce.number().int().min(1).max(100).default(25),search:z.string().trim().max(120).optional().default('')});
 
+function superAdminGuard(req: Request, res: Response, next: NextFunction) {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user?.isSuperAdmin) return res.status(403).json({ error: 'Platform super-admin access is required.' });
+  next();
+}
+
+app.get('/api/super-admin/overview',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+  const [organizations,members,properties,documents,sessions,findings,reviews,pendingDocuments,services]=await Promise.all([
+    pool!.query('SELECT COUNT(*) total FROM organizations'),
+    pool!.query("SELECT COUNT(*) total,SUM(status='active') active,SUM(status<>'active') inactive FROM org_memberships"),
+    pool!.query('SELECT COUNT(*) total,SUM(archived_at IS NULL) active FROM properties'),
+    pool!.query("SELECT COUNT(*) total,SUM(governance_status='active') active FROM documents"),
+    pool!.query('SELECT COUNT(*) total FROM authentication_sessions WHERE revoked_at IS NULL AND expires_at>NOW(6)'),
+    pool!.query('SELECT COUNT(*) total,SUM(severity=\'critical\') critical,SUM(severity=\'high\') high FROM risk_findings'),
+    pool!.query('SELECT COUNT(*) total,SUM(status IN (\'pending\',\'in_review\')) pending FROM title_reviews'),
+    pool!.query("SELECT COUNT(*) total FROM documents WHERE governance_status='active' AND (manual_review_status='required' OR processing_status<>'completed')"),
+    pool!.query('SELECT 1 database_connected')
+  ]);
+  res.json({organizations:organizations.rows[0],members:members.rows[0],properties:properties.rows[0],documents:documents.rows[0],sessions:sessions.rows[0],findings:findings.rows[0],reviews:reviews.rows[0],pendingDocuments:pendingDocuments.rows[0],health:{database:services.rowCount?'connected':'unavailable'}});
+}));
+app.get('/api/super-admin/organizations',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+  const result=await pool!.query(`SELECT o.id,o.name,o.slug,o.created_at,
+    (SELECT COUNT(*) FROM org_memberships m WHERE m.organization_id=o.id) member_count,
+    (SELECT COUNT(*) FROM org_memberships m WHERE m.organization_id=o.id AND m.status='active') active_member_count,
+    (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=o.id) property_count
+    FROM organizations o ORDER BY o.created_at DESC LIMIT 500`);
+  res.json({items:result.rows});
+}));
+app.get('/api/super-admin/members',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+  const result=await pool!.query(`SELECT m.id,m.organization_id,m.user_uid,m.email,m.role,m.status,m.created_at,o.name organization_name,u.full_name,u.last_login_at
+    FROM org_memberships m JOIN organizations o ON o.id=m.organization_id LEFT JOIN user_accounts u ON u.id=m.user_uid
+    ORDER BY m.created_at DESC LIMIT 2000`);
+  res.json({items:result.rows});
+}));
+app.patch('/api/super-admin/members/:id',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const normalizeChoice=(value:unknown)=>typeof value==='string'?value.trim().toLowerCase().replace(/[\s-]+/g,'_'):value;
+  const parsed=z.object({status:z.preprocess(normalizeChoice,z.enum(['active','disabled']).optional()),role:z.preprocess(normalizeChoice,z.enum(['owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional()),reason:z.string().trim().min(3).max(500)}).refine(value=>value.status||value.role).safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:'Choose a supported role or status and provide a reason.'});
+  const {status,role,reason}=parsed.data;
+  const conn=await pool!.getConnection();
+  try{
+    await conn.beginTransaction();
+    const current=await conn.query('SELECT id,organization_id,user_uid,email,role,status FROM org_memberships WHERE id=? FOR UPDATE',[req.params.id]);
+    if(!current.rowCount){await conn.rollback();return res.status(404).json({error:'Workspace membership not found.'});}
+    const member=current.rows[0];
+    if(member.user_uid===req.user?.uid&&status==='disabled'){await conn.rollback();return res.status(409).json({error:'You cannot disable your own active membership.'});}
+    if(member.role==='owner'&&member.status==='active'&&(status==='disabled'||(role&&role!=='owner'))){
+      const owners=await conn.query("SELECT id FROM org_memberships WHERE organization_id=? AND role='owner' AND status='active' FOR UPDATE",[member.organization_id]);
+      if(owners.rowCount<=1){await conn.rollback();return res.status(409).json({error:'Each organization must retain at least one active owner.'});}
+    }
+    await conn.query('UPDATE org_memberships SET role=COALESCE(?,role),status=COALESCE(?,status),updated_at=NOW(6) WHERE id=?',[role||null,status||null,member.id]);
+    if(status==='disabled')await conn.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE user_uid=? AND tenant_id=? AND revoked_at IS NULL',[req.user?.uid||'unknown',reason,member.user_uid,member.organization_id]);
+    await audit(req.user?.uid||'unknown',member.organization_id,'super_admin.membership_updated','org_membership',member.id,{email:member.email,previousRole:member.role,role:role||member.role,previousStatus:member.status,status:status||member.status,reason});
+    await conn.commit();res.json({success:true});
+  }catch(error){await conn.rollback();throw error;}finally{conn.release();}
+}));
+app.get('/api/super-admin/sessions',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+  const result=await pool!.query(`SELECT s.id,s.tenant_id,s.user_uid,s.created_at,s.last_activity_at,s.expires_at,s.revoked_at,s.ip_address,s.user_agent,
+    m.email,m.role,o.name organization_name FROM authentication_sessions s
+    LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid
+    LEFT JOIN organizations o ON o.id=s.tenant_id ORDER BY s.created_at DESC LIMIT 500`);
+  res.json({items:result.rows});
+}));
+app.delete('/api/super-admin/sessions/:id',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A session revocation reason is required.'});
+  const result=await pool!.query('SELECT id,tenant_id,user_uid FROM authentication_sessions WHERE id=? AND revoked_at IS NULL',[req.params.id]);
+  if(!result.rowCount)return res.status(404).json({error:'Active session not found.'});
+  const session=result.rows[0];await pool!.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE id=?',[req.user?.uid||'unknown',parsed.data.reason,session.id]);
+  await audit(req.user?.uid||'unknown',session.tenant_id,'super_admin.session_revoked','authentication_session',session.id,{userUid:session.user_uid,reason:parsed.data.reason});
+  res.json({success:true});
+}));
+app.get('/api/super-admin/audit',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+  const result=await pool!.query(`SELECT a.id,a.tenant_id,a.actor_uid,a.action,a.entity_type,a.entity_id,a.details,a.created_at,o.name organization_name
+    FROM audit_events a LEFT JOIN organizations o ON o.id=a.tenant_id ORDER BY a.created_at DESC LIMIT 500`);
+  res.json({items:result.rows});
+}));
+
 app.use('/api/admin',(req,res,next)=>{
   if (!req.header('authorization')&&!req.header('x-user-uid')) return res.status(401).json({error:'Authenticated administrator access is required.'});
   next();
@@ -2861,7 +3115,7 @@ app.patch('/api/admin/documents/:id/manual-review',authGuard,adminGuard,asyncRou
 
 for(const action of ['reject','delete'] as const){const method=action==='delete'?'delete':'post';(app as any)[method](`/api/admin/documents/:id${action==='reject'?'/reject':''}`,authGuard,adminGuard,asyncRoute(async(req:AuthenticatedRequest,res:Response)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A reason is required.'});const status=action==='reject'?'rejected':'quarantined';const result=await pool!.query("UPDATE documents SET governance_status=?,governance_reason=?,governance_by_uid=?,governance_at=NOW(6),manual_review_status='required' WHERE id=? AND tenant_id=?",[status,parsed.data.reason,req.user?.uid,req.params.id,req.user?.tenantId]);if(!result.rowCount)return res.status(404).json({error:'Document not found.'});await audit(req.user?.uid||'unknown',req.user?.tenantId,`admin.document_${status}`,'document',req.params.id,{reason:parsed.data.reason,softDelete:true});res.json({success:true,softDelete:true});}));}
 
-app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:'local_development',testSupported:false,detail:'GCS_BUCKET is not evidence of an active storage adapter.'},{id:'ocr',label:'OCR and extraction',state:'not_implemented',testSupported:false},{id:'email',label:'OTP email delivery',state:process.env.RESEND_API_KEY&&process.env.OTP_FROM_EMAIL?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false}]});}));
+app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:'local_development',testSupported:false,detail:'GCS_BUCKET is not evidence of an active storage adapter.'},{id:'ocr',label:'OCR and extraction',state:'configured',testSupported:false,detail:'Local Tesseract OCR with Kannada and English language models.'},{id:'email',label:'OTP email delivery',state:process.env.RESEND_API_KEY&&process.env.OTP_FROM_EMAIL?'configured':'not_configured',testSupported:false},{id:'sms',label:'OTP SMS delivery',state:process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_AUTH_TOKEN&&(process.env.TWILIO_FROM_NUMBER||process.env.TWILIO_MESSAGING_SERVICE_SID)?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false}]});}));
 app.post('/api/admin/integrations/:id/test',authGuard,adminGuard,asyncRoute(async(req,res)=>{if(req.params.id!=='mariadb')return res.status(501).json({error:'A live connection test is unsupported for this integration.'});await pool!.query('SELECT 1');await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.integration_tested','integration','mariadb',{result:'connected'});res.json({state:'connected',checkedAt:new Date().toISOString()});}));
 
 app.get('/api/admin/sessions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT s.id,s.user_uid,s.created_at,s.last_activity_at,s.expires_at,s.ip_address,s.user_agent,m.email,m.role FROM authentication_sessions s LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid WHERE s.tenant_id=? AND s.revoked_at IS NULL AND s.expires_at>NOW(6) ORDER BY s.last_activity_at DESC',[req.user?.tenantId]);res.json({items:result.rows});}));
@@ -2970,6 +3224,7 @@ if (webDistPath) {
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `File exceeds ${process.env.MAX_UPLOAD_MB || 25} MB limit.` : err.message });
+  if (err instanceof OtpDeliveryError) return res.status(503).json({ error: err.message });
   if (err?.message?.includes('Only PDF')) return res.status(400).json({ error: err.message });
   console.error(err);
   res.status(500).json({ error: 'Internal server error.' });

@@ -155,7 +155,7 @@ test('Consultant workspace is read-only and exposes sanitized evidence metadata'
 });
 
 test('Support session exposes diagnostics but blocks every business-data surface',async()=>{
-  const login=await fetch(`${base}/api/auth/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:'support@ojix.local',uid:'user-support',password:'ojix123'})});
+  const login=await fetch(`${base}/api/auth/login`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:'support@ojix.local',uid:'user-support',password:'Support@3126'})});
   assert.equal(login.status,200);
   const session=await login.json();
   const headers={authorization:`Bearer ${session.token}`,'content-type':'application/json'};

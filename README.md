@@ -11,6 +11,7 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
 - Explainable baseline screening rules for missing survey number, documents and coordinates.
 - Spatial-layer proximity checks against explicitly imported features. The seeded feature is synthetic and labelled demo; it is not an official boundary.
 - JSON evidence report export.
+- Platform Super Admin console for cross-organization oversight, membership controls, session revocation and audit history.
 - Firebase ID-token verification support, activated when `FIREBASE_PROJECT_ID` is set.
 - Unit tests for baseline findings and score behaviour.
 
@@ -19,7 +20,7 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
 - No live Bhoomi, Kaveri 2.0, BBMP/e-Aasthi, BDA or Rajakaluve government integration. The RTC module stores validated lookup attempts and supports an authorised API adapter, but remains in manual-retrieval mode until official credentials are supplied.
 - No Document AI OCR or Vertex AI extraction pipeline yet. Uploads are queued in metadata only; files remain in local `uploads/` for development.
 - No verified survey parcel boundaries, official lake/SWD geometry, buffer-rule engine or official planning notices.
-- No production Cloud Storage adapter, Cloud Tasks/Pub/Sub workers, PDF report renderer, billing or organisation-management UI.
+- No production Cloud Storage adapter, Cloud Tasks/Pub/Sub workers, PDF report renderer or billing.
 - No legal opinion or automated ownership certification.
 
 ## Requirements
@@ -86,6 +87,12 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
 
 6. Open the web app. In local mode, the API uses the seeded `local-developer` identity and demo workspace. This bypass is intentionally limited to development; `NODE_ENV=production` refuses unauthenticated operation.
 
+### Platform Super Admin
+
+In development, the seeded owner account can open **Super Admin** from the sidebar. For production, set `SUPER_ADMIN_EMAILS` in the API environment to a comma-separated allowlist of verified account emails, then restart the API. The server checks this permission for every platform endpoint. Role and membership changes require a reason, are written to the audit log, and cannot leave an organization without an active owner.
+
+In local development, seeded demo accounts sign in with the development password (`ojix123`) without an OTP. Registered accounts and production still use OTP verification.
+
 ### Run the complete stack with Docker
 
 To run MariaDB, the API, and the production web build together:
@@ -97,7 +104,23 @@ docker compose up --build
 - Web: http://localhost:8080
 - API health: http://localhost:4000/health
 
-If an older standalone `ojix-mariadb` container is already using port 3306, stop it first with `docker stop ojix-mariadb`, or start Compose with a different host port using `DB_PORT=3307 docker compose up --build`.
+Compose publishes MariaDB on host port 3307 by default so it can run alongside a local MySQL or MariaDB service already using port 3306. The API connects to MariaDB over the Compose network at `db:3306`; this host port setting does not change that connection. To use another free host port, set `DB_PORT` (for example, `DB_PORT=3308 docker compose up --build`).
+
+Startup and login flow:
+
+1. Run `docker compose up --build` and wait for the `db`, `api`, and `web` services to become healthy.
+2. Open http://localhost:8080. Check http://localhost:4001/health if the page cannot reach the API. The API uses port 4000 inside Compose; set `API_PORT` to another free host port if needed.
+3. Register with a new email and a password containing at least eight characters, uppercase and lowercase letters, and a number.
+4. Configure `RESEND_API_KEY` and `OTP_FROM_EMAIL` in `.env` for real email OTP delivery. For local demo-account sign-in, set `DEMO_OTP_EMAIL` to the inbox that should receive its code. Restart the API after changing `.env`. OTPs are never shown in the UI; requests return a configuration or delivery error if email cannot be sent.
+5. If login reports `Invalid email or password`, confirm the account was verified in this Compose database. Compose persists its database in `ojix_db_data`; deleting that volume removes local accounts and data.
+
+Existing databases need migration 019 for verified phone numbers:
+
+```bash
+docker exec -i ojix-mariadb mariadb -uojix -pojix_local_only ojix_property_mysql < database/migrations/019_phone_otp.sql
+```
+
+To enable SMS OTP, set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and either `TWILIO_FROM_NUMBER` or `TWILIO_MESSAGING_SERVICE_SID` in `.env`. For demo accounts, set `DEMO_OTP_PHONE` in E.164 format. New registrations can add a phone number and must verify it by SMS before the account is activated. Existing accounts can continue using email OTP; SMS is available after their phone number has been verified.
 
 ## Commands
 

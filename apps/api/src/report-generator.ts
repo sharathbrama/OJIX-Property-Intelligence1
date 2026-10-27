@@ -137,8 +137,8 @@ export function generateDueDiligenceReport(snapshot: DueDiligenceReportSnapshot)
     !snapshot.property?.extent || String(snapshot.property.extent).trim() === '' || String(snapshot.property.extent).toLowerCase() === 'not verified';
   const scoreClass = reviewIncomplete ? 'incomplete' : snapshot.riskSummary.score >= 70 ? 'critical' : (snapshot.riskSummary.score >= 35 ? 'warning' : 'good');
   const scoreLabel = reviewIncomplete
-    ? `Risk score: ${snapshot.riskSummary.score} / 100 (${snapshot.riskSummary.band}) — INCOMPLETE · NOT CLEARED`
-    : `Risk score: ${snapshot.riskSummary.score} / 100 (${snapshot.riskSummary.band})`;
+    ? `Score: ${snapshot.riskSummary.score} / 100 (${snapshot.riskSummary.band}) — INCOMPLETE · NOT CLEARED`
+    : `Score: ${snapshot.riskSummary.score} / 100 (${snapshot.riskSummary.band})`;
 
   const html = `<!DOCTYPE html>
 <html lang="en">

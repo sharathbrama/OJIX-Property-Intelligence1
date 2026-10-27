@@ -6,14 +6,19 @@ import type { UserAccount, UserRole } from '../types';
 
 interface LoginPageProps {
   apiUrl: string;
-  onLoginSuccess: (token: string, user: UserAccount) => void;
+  onLoginSuccess: (token: string, user: UserAccount, requestedRole?: string) => void;
+  expectedRole?: string;
 }
 
-export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
-  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
+const roleLoginCopy:Record<string,{label:string;description:string}>={
+  'super-admin':{label:'Super Admin',description:'Authorized platform administrators only.'},owner:{label:'Workspace Owner',description:'Manage workspace operations and property matters.'},admin:{label:'Organization Admin',description:'Manage organization members, workflows and records.'},lawyer:{label:'Legal Reviewer',description:'Review title evidence and due-diligence findings.'},analyst:{label:'Evidence Analyst',description:'Analyze property records and prepare assigned matters.'},operations:{label:'Document Operations',description:'Manage document intake and processing queues.'},consultant:{label:'Consultant',description:'Review assigned client dossiers and evidence.'},support:{label:'Support',description:'Access authorized workspace diagnostics.'},data_steward:{label:'Data Steward',description:'Maintain source data and reference records.'},viewer:{label:'Viewer',description:'Access approved read-only workspace records.'}
+};
+export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
+  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'phone-otp'|'verified'>(() => {
     const path = window.location.pathname.replace(/\/$/, '');
-    return path === '/register' ? 'register' : path === '/login' ? 'login' : 'landing';
+    return path === '/register' ? 'register' : 'login';
   });
+  const [loginCardOpen, setLoginCardOpen] = useState(Boolean(expectedRole));
   const [dummyAccounts, setDummyAccounts] = useState<UserAccount[]>([]);
   const [selectedUid, setSelectedUid] = useState<string>('');
   const [email, setEmail] = useState<string>('');
@@ -23,16 +28,23 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
   const [error, setError] = useState<string>('');
   const [registerName, setRegisterName] = useState('');
   const [registerEmail, setRegisterEmail] = useState('');
+  const [registerPhone, setRegisterPhone] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [otp, setOtp] = useState('');
-  const [challengeId, setChallengeId] = useState('');
   const [developmentOtp, setDevelopmentOtp] = useState('');
+  const [challengeId, setChallengeId] = useState('');
+  const [challengeRole, setChallengeRole] = useState('');
+  const [phoneChallengeId, setPhoneChallengeId] = useState('');
+  const [deliveryChannel, setDeliveryChannel] = useState<'email'|'sms'>('email');
+  const [selectedRole, setSelectedRole] = useState(expectedRole || '');
+  const [otpDeliveryTarget, setOtpDeliveryTarget] = useState('');
   const [serviceStatus, setServiceStatus] = useState<'checking'|'ready'|'unavailable'>('checking');
   const [serviceMessage, setServiceMessage] = useState('Checking API and database…');
 
   const navigateAuth = (next: 'landing'|'login'|'register') => {
     setMode(next);
+    setLoginCardOpen(next === 'login');
     setError('');
     setOtp('');
     const path = next === 'register' ? '/register' : next === 'login' ? '/login' : '/';
@@ -40,10 +52,15 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
   };
 
   useEffect(() => {
+    setSelectedRole(expectedRole || '');
+  }, [expectedRole]);
+
+  useEffect(() => {
     const syncRoute = () => {
       const path = window.location.pathname.replace(/\/$/, '');
-      const next = path === '/register' ? 'register' : path === '/login' ? 'login' : 'landing';
-      setMode(current => current === 'login-otp' || current === 'otp' || current === 'verified' ? current : next);
+      const next = path === '/register' ? 'register' : 'login';
+      setLoginCardOpen(Boolean(path.startsWith('/login/')));
+      setMode(current => current === 'login-otp' || current === 'otp' || current === 'phone-otp' || current === 'verified' ? current : next);
     };
     window.addEventListener('popstate', syncRoute);
     return () => window.removeEventListener('popstate', syncRoute);
@@ -80,6 +97,9 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
         setServiceMessage('API or database unavailable. Start the local stack and retry.');
       });
 
+    // The API exposes this list only when it is itself running in local
+    // development mode. This runtime check also works for the production Vite
+    // build served by the local Docker stack; production APIs return 404.
     fetch(`${apiUrl}/api/auth/dummy-accounts`)
       .then(res => res.json())
       .then(data => {
@@ -92,6 +112,10 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
 
   const selectAccount = (acc: UserAccount) => {
     setSelectedUid(acc.uid);
+    // The local Owner is also the development Super Admin. Preserve the
+    // dedicated portal selection instead of downgrading it to Owner when the
+    // account chooser fills the credentials.
+    setSelectedRole(expectedRole === 'super-admin' && acc.role === 'owner' ? 'super-admin' : acc.role);
     setEmail(acc.email);
     setPassword('ojix123');
     setError('');
@@ -103,19 +127,33 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
     setError('');
 
     try {
-      const res = await fetch(`${apiUrl}/api/auth/login/request-otp`, {
+      const normalizedEmail = email.trim().toLowerCase();
+      const requestedRole = selectedRole;
+      // Only the special developer identity bypasses OTP. Named demo accounts
+      // use the normal OTP request/verification flow and deliver to the
+      // configured demo inbox.
+      const isLocalDemoAccount = normalizedEmail === 'developer@localhost';
+      const res = await fetch(`${apiUrl}${isLocalDemoAccount ? '/api/auth/login' : '/api/auth/login/request-otp'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email, password, channel: deliveryChannel, expectedRole:requestedRole })
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Failed to authenticate');
       }
 
+      if (isLocalDemoAccount) {
+        if(!matchesRequestedRole(data.user,requestedRole))throw new Error(`This account cannot access the ${roleLoginCopy[requestedRole]?.label||'selected'} sign-in page.`);
+        onLoginSuccess(data.token, data.user, requestedRole);
+        return;
+      }
+
       setChallengeId(data.challengeId);
-      setDevelopmentOtp(data.developmentOtp||'');
-      setOtp('');
+      setChallengeRole(requestedRole);
+      setOtpDeliveryTarget(data.deliveryTarget || email);
+      setDevelopmentOtp(data.developmentOtp || '');
+      setOtp(data.developmentOtp || '');
       setMode('login-otp');
     } catch (err: any) {
       setError(err.message || 'Login failed. Please check credentials.');
@@ -127,13 +165,21 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
   const verifyLoginOtp = async (e: React.FormEvent) => {
     e.preventDefault();setLoading(true);setError('');
     try {
-      const res=await fetch(`${apiUrl}/api/auth/login/verify-otp`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId,email,otp})});
+      const requestedRole=challengeRole||selectedRole;
+      const res=await fetch(`${apiUrl}/api/auth/login/verify-otp`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId,email,otp,expectedRole:requestedRole})});
       const data=await res.json();
       if(!res.ok)throw new Error(data.error||'Unable to verify the sign-in code.');
-      onLoginSuccess(data.token,data.user);
+      if(!matchesRequestedRole(data.user,requestedRole))throw new Error(`This account cannot access the ${roleLoginCopy[requestedRole]?.label||'selected'} sign-in page.`);
+      onLoginSuccess(data.token,data.user,requestedRole);
     } catch(err){setError(err instanceof Error?err.message:'OTP verification failed.');}
     finally{setLoading(false);}
   };
+
+  function matchesRequestedRole(user:UserAccount,requestedRole=selectedRole){
+    if(!requestedRole)return true;
+    if(requestedRole==='super-admin')return Boolean(user.isSuperAdmin);
+    return user.role===requestedRole;
+  }
 
   const requestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,13 +189,13 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
     try {
       const res = await fetch(`${apiUrl}/api/auth/register/request-otp`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: registerName, email: registerEmail, password: registerPassword })
+        body: JSON.stringify({ name: registerName, email: registerEmail, phone: registerPhone, password: registerPassword })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Unable to create registration.');
       setChallengeId(data.challengeId);
+      setPhoneChallengeId(data.phoneChallengeId || '');
       setRegisterEmail(data.email);
-      setDevelopmentOtp(data.developmentOtp || '');
       setMode('otp');
     } catch (err) { setError(err instanceof Error ? err.message : 'Registration failed.'); }
     finally { setLoading(false); }
@@ -165,11 +211,24 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'OTP verification failed.');
+      if (data.phoneVerificationRequired) { setOtp(''); setMode('phone-otp'); return; }
       setEmail(registerEmail);
       setPassword(registerPassword);
       setSelectedUid('');
       setMode('verified');
     } catch (err) { setError(err instanceof Error ? err.message : 'OTP verification failed.'); }
+    finally { setLoading(false); }
+  };
+
+  const verifyPhoneOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(''); setLoading(true);
+    try {
+      const res=await fetch(`${apiUrl}/api/auth/register/verify-phone-otp`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId:phoneChallengeId,email:registerEmail,otp})});
+      const data=await res.json();
+      if(!res.ok) throw new Error(data.error||'Phone verification failed.');
+      setEmail(registerEmail); setPassword(registerPassword); setSelectedUid(''); setMode('verified');
+    } catch(err) { setError(err instanceof Error?err.message:'Phone verification failed.'); }
     finally { setLoading(false); }
   };
 
@@ -193,27 +252,31 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
     role: 'viewer' as UserRole, avatar: (registerName || 'RM').split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase(),
     description: 'Verified read-only workspace member'
   });
+  const isLocalDemoLogin = email.trim().toLowerCase() === 'developer@localhost';
 
-  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card"><img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/><span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span><h1>Confirm your secure sign-in</h1><p>Enter the six-digit code for <strong>{email}</strong>. It expires in 10 minutes and can be used only once.</p>{developmentOtp&&<div className="executive-development-otp"><span>LOCAL DEVELOPMENT CODE</span><strong>{developmentOtp}</strong><small>Configure RESEND_API_KEY and a real email address for email delivery.</small></div>}{error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}<form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form><div className="executive-otp-actions"><button onClick={()=>{setMode('login');setOtp('');setError('');}}>Back to sign in</button><button onClick={handleLogin as any}>Send a new code</button></div><p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p></section></main>;
+  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card"><img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/><span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span><h1>Confirm your secure sign-in</h1>{developmentOtp?<><p>Development mode generated a one-time code locally. It expires in 10 minutes.</p><div className="development-otp-code"><span>DEMO OTP</span><strong>{developmentOtp}</strong></div></>:<p>Enter the six-digit code sent by {deliveryChannel==='email'?'email':'SMS'} to <strong>{otpDeliveryTarget || email}</strong>. It expires in 10 minutes and can be used only once.</p>}{error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}<form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form><div className="executive-otp-actions"><button onClick={()=>{setMode('login');setOtp('');setDevelopmentOtp('');setError('');}}>Back to sign in</button><button onClick={handleLogin as any}>Generate a new code</button></div><p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p></section></main>;
 
   if (mode !== 'login' && mode !== 'landing') {
     const isOtp = mode === 'otp';
+    const isPhoneOtp = mode === 'phone-otp';
     const isVerified = mode === 'verified';
     return (
       <main className="portal-auth-page"><header className="portal-masthead"><div className="portal-brand-lockup"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><div><strong>Property Intelligence</strong><span>Karnataka due diligence workspace</span></div></div><div className="portal-head-actions"><button type="button" className="portal-login-tab" onClick={()=>navigateAuth('login')}>Login</button><button type="button" className="portal-register-tab active" onClick={()=>navigateAuth('register')}>Register</button></div></header><section className="portal-auth-main">
         <div className="portal-auth-card" style={{width:'100%',maxWidth:520,background:'#fff',borderRadius:16,padding:36,boxShadow:'0 25px 50px -12px rgba(0,0,0,.4)'}}>
           <div className="portal-auth-card-brand"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><span>SECURE MEMBER ONBOARDING</span></div>
-          <div style={{display:'flex',gap:8,marginBottom:24}}>{['Account','Verify OTP','Sign in'].map((label,index)=>{const active=isVerified?2:isOtp?1:0;return <div key={label} style={{flex:1,fontSize:11,fontWeight:700,color:index<=active?'#1d4ed8':'#94a3b8'}}><div style={{height:3,borderRadius:3,background:index<=active?'#2563eb':'#e2e8f0',marginBottom:7}}/>{index+1}. {label}</div>})}</div>
-          <h2 style={{margin:'0 0 6px',fontSize:22,color:'#0f172a'}}>{isVerified?'Account verified':isOtp?'Verify your email':'Create your account'}</h2>
-          <p style={{margin:'0 0 22px',fontSize:13,color:'#64748b',lineHeight:1.5}}>{isVerified?'Registration is complete. Continue to the sign-in page using your new password.':isOtp?`Enter the six-digit code sent for ${registerEmail}. The code expires in 10 minutes.`:'First-time users must register and verify their email before signing in.'}</p>
+          <div style={{display:'flex',gap:8,marginBottom:24}}>{['Account','Verify email','Verify phone','Sign in'].map((label,index)=>{const active=isVerified?3:isPhoneOtp?2:isOtp?1:0;return <div key={label} style={{flex:1,fontSize:10,fontWeight:700,color:index<=active?'#1d4ed8':'#94a3b8'}}><div style={{height:3,borderRadius:3,background:index<=active?'#2563eb':'#e2e8f0',marginBottom:7}}/>{index+1}. {label}</div>})}</div>
+          <h2 style={{margin:'0 0 6px',fontSize:22,color:'#0f172a'}}>{isVerified?'Account verified':isPhoneOtp?'Verify your phone':isOtp?'Verify your email':'Create your account'}</h2>
+          <p style={{margin:'0 0 22px',fontSize:13,color:'#64748b',lineHeight:1.5}}>{isVerified?'Registration is complete. Continue to the sign-in page using your new password.':isPhoneOtp?`Enter the six-digit SMS code sent to ${registerPhone}.`:isOtp?`Enter the six-digit email code sent to ${registerEmail}. The code expires in 10 minutes.`:'First-time users can add a phone number to enable SMS sign-in.'}</p>
           {error&&<div style={{background:'#fef2f2',border:'1px solid #fecaca',color:'#991b1b',padding:'10px 12px',borderRadius:8,fontSize:12,marginBottom:16}}>{error}</div>}
-          {developmentOtp&&isOtp&&<div style={{background:'#eff6ff',border:'1px solid #bfdbfe',color:'#1e40af',padding:'12px',borderRadius:8,fontSize:12,marginBottom:16}}><strong>Development OTP:</strong> <code style={{fontSize:16,letterSpacing:3}}>{developmentOtp}</code><br/><span style={{fontSize:10}}>In production this code will be delivered by email or SMS and will not appear here.</span></div>}
-          {isVerified ? <button onClick={()=>{navigateAuth('login');}} style={{width:'100%',padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>Continue to Sign In <ArrowRight size={16} style={{verticalAlign:'middle',marginLeft:6}}/></button> : isOtp ? (
+          {isVerified ? <button onClick={()=>{navigateAuth('login');}} style={{width:'100%',padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>Continue to Sign In <ArrowRight size={16} style={{verticalAlign:'middle',marginLeft:6}}/></button> : isPhoneOtp ? (
+            <form onSubmit={verifyPhoneOtp} style={{display:'grid',gap:15}}><label style={{fontSize:11,fontWeight:700,color:'#334155'}}>SIX-DIGIT SMS CODE<input autoFocus inputMode="numeric" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:7,padding:13,border:'1px solid #cbd5e1',borderRadius:8,fontSize:20,letterSpacing:8,textAlign:'center'}}/></label><button disabled={loading||otp.length!==6} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Verifying…':'Verify Phone and Finish'}</button></form>
+          ) : isOtp ? (
             <form onSubmit={verifyOtp} style={{display:'grid',gap:15}}><label style={{fontSize:11,fontWeight:700,color:'#334155'}}>SIX-DIGIT OTP<input autoFocus inputMode="numeric" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:7,padding:13,border:'1px solid #cbd5e1',borderRadius:8,fontSize:20,letterSpacing:8,textAlign:'center'}}/></label><button disabled={loading||otp.length!==6} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Verifying…':'Verify and Activate Account'}</button><button type="button" onClick={()=>{navigateAuth('register');}} style={{border:0,background:'transparent',color:'#2563eb',cursor:'pointer'}}>Change registration details</button></form>
           ) : (
             <form onSubmit={requestOtp} style={{display:'grid',gap:14}}>
               <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>FULL NAME<input value={registerName} onChange={e=>setRegisterName(e.target.value)} required minLength={2} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
               <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>WORK EMAIL<input type="email" value={registerEmail} onChange={e=>setRegisterEmail(e.target.value)} required style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
+              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>PHONE NUMBER (OPTIONAL)<input type="tel" value={registerPhone} onChange={e=>setRegisterPhone(e.target.value)} placeholder="+14155552671" pattern="\+[1-9]\d{7,14}" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/><small style={{display:'block',marginTop:5,color:'#64748b',fontWeight:400}}>Include country code. We will verify email and phone separately.</small></label>
               <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>CREATE PASSWORD<input type="password" value={registerPassword} onChange={e=>setRegisterPassword(e.target.value)} required minLength={8} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/><small style={{display:'block',marginTop:5,color:'#64748b',fontWeight:400}}>Minimum 8 characters with uppercase, lowercase and a number.</small></label>
               <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>CONFIRM PASSWORD<input type="password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} required style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
               <button disabled={loading} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Creating OTP…':'Register and Send OTP'}</button>
@@ -225,7 +288,6 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
   }
 
   const isOwner = currentAccount?.role === 'owner';
-  const ownerAccount = dummyAccounts.find(account => account.role === 'owner');
 
   if (mode === 'landing') return <PropertyIntelligenceLanding onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')}/>;
 
@@ -233,16 +295,9 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
     <main className="executive-login-shell">
       <header className="portal-masthead">
         <div className="portal-brand-lockup"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><div><strong>OJIX Property Intelligence</strong><span>Karnataka Property Due Diligence Workspace</span></div></div>
-        <div className="portal-head-actions"><span><i className={`portal-state ${serviceStatus}`}/>{serviceStatus==='checking'?'Connecting':serviceStatus==='ready'?'Services available':'Service unavailable'}</span><button type="button" className="portal-login-tab active" onClick={()=>navigateAuth('login')}>Login</button><button type="button" className="portal-register-tab" onClick={()=>navigateAuth('register')}>Register</button></div>
+        <div className="portal-head-actions"><span><i className={`portal-state ${serviceStatus}`}/>{serviceStatus==='checking'?'Connecting':serviceStatus==='ready'?'Services available':'Service unavailable'}</span><button type="button" className={`portal-login-tab${loginCardOpen?' active':''}`} aria-expanded={loginCardOpen} onClick={()=>setLoginCardOpen(open=>!open)}>Login</button><button type="button" className="portal-register-tab" onClick={()=>navigateAuth('register')}>Register</button></div>
       </header>
-      <section className="portal-login-main portal-login-only">
-        <div className="login-motion-scene" aria-hidden="true">
-          <span className="login-motion-orbit orbit-one"/>
-          <span className="login-motion-orbit orbit-two"/>
-          <span className="login-motion-glow glow-one"/>
-          <span className="login-motion-glow glow-two"/>
-          <span className="login-motion-scan"/>
-        </div>
+      <section className={`portal-login-main portal-login-only${loginCardOpen?' login-card-open':''}`}>
         <div className="portal-welcome login-welcome-panel">
           <span className="portal-eyebrow">KARNATAKA PROPERTY DUE DILIGENCE</span>
           <h1>Property intelligence.<br/><em>Clarity in every detail.</em></h1>
@@ -255,32 +310,22 @@ export function LoginPage({ apiUrl, onLoginSuccess }: LoginPageProps) {
           </div>
           <div className="login-review-note"><ShieldCheck size={17}/><span><strong>Built for careful review</strong><small>Important conclusions remain subject to qualified professional review.</small></span></div>
         </div>
-        <div className="executive-login-access portal-login-card-wrap">
+        <div className="executive-login-access portal-login-card-wrap" aria-hidden={!loginCardOpen}>
         <div className="executive-access-card portal-login-card">
           <div className="executive-access-topline"><span className="executive-secure-pill"><ShieldCheck size={13}/> Secure access</span><span className={`executive-service ${serviceStatus}`}><i/>{serviceStatus==='checking'?'Checking services':serviceStatus==='ready'?'Systems available':'Service unavailable'}</span></div>
-          <div className="executive-user-heading"><div><span>OJIX PROPERTY INTELLIGENCE</span><h2>Welcome back</h2><p>Sign in to continue to your workspace.</p></div></div>
+          <div className="executive-user-heading"><div><span>OJIX PROPERTY INTELLIGENCE</span><h2>{selectedRole?`${roleLoginCopy[selectedRole]?.label||'Member'} Sign In`:'Welcome back'}</h2><p>{selectedRole?roleLoginCopy[selectedRole]?.description:'Choose the role you need, then sign in to continue.'}</p></div></div>
 
           {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
           {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
 
           <form className="executive-login-form" onSubmit={handleLogin}>
+            <label><span>Which role do you want to access?</span><select required value={selectedRole} onChange={event=>{setSelectedRole(event.target.value);setError('');}} style={{width:'100%',height:44,padding:'0 11px',border:'1px solid #d2dbe6',borderRadius:8,background:'#fff',color:'#172334'}}><option value="" disabled>Select your assigned role</option>{Object.entries(roleLoginCopy).map(([value,copy])=><option key={value} value={value}>{copy.label}</option>)}</select></label>
             <label><span>Work email</span><div className="executive-input"><UserCheck/><input type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
             <label><span>Password</span><div className="executive-input"><Lock/><input type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff/>:<Eye/>}</button></div></label>
-            <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/> Email verification code required</span><button type="button" onClick={()=>setError('Password reset is not available yet. Please contact your workspace administrator.')}>Forgot password?</button></div>
-            <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'}>{loading?<><span className="executive-spinner"/> Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
+            {!isLocalDemoLogin&&<label><span>Send verification code by</span><select value={deliveryChannel} onChange={event=>setDeliveryChannel(event.target.value as 'email'|'sms')} style={{width:'100%',height:44,padding:'0 11px',border:'1px solid #d2dbe6',borderRadius:8,background:'#fff',color:'#172334'}}><option value="email">Email</option><option value="sms">SMS to verified phone</option></select></label>}
+            <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/>{isLocalDemoLogin?'Local demo login': 'Code expires in 10 minutes'}</span><button type="button" onClick={()=>setError('Password reset is not available yet. Please contact your workspace administrator.')}>Forgot password?</button></div>
+            <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'}>{loading?<><span className="executive-spinner"/>{isLocalDemoLogin?'Signing in…':'Sending secure code…'}</>:<>{isLocalDemoLogin?'Sign in':'Continue with '+(deliveryChannel==='email'?'email':'SMS')+' OTP'} <ArrowRight/></>}</button>
           </form>
-
-          {import.meta.env.DEV && dummyAccounts.length > 0 && <details className="executive-local-access">
-            <summary><strong>Development access</strong><span>Demo sign-in options</span></summary>
-            <div className="development-access-content">
-              <select aria-label="Select demonstration account" value={selectedUid} onChange={event=>{const account=dummyAccounts.find(item=>item.uid===event.target.value);if(account)selectAccount(account);}}>
-                <option value="" disabled>Select an account</option>
-                {dummyAccounts.map(account=><option value={account.uid} key={account.uid}>{account.name} — {account.designation}</option>)}
-              </select>
-              {ownerAccount&&selectedUid!=='user-owner'&&<button type="button" onClick={()=>selectAccount(ownerAccount)}>Return to Owner login</button>}
-              <small>Local password: <code>ojix123</code></small>
-            </div>
-          </details>}
 
         </div>
         </div>

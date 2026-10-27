@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     disabled_at DATETIME(6) NULL,
     disabled_by_uid VARCHAR(191) NULL,
     disabled_reason TEXT NULL,
+    phone_e164 VARCHAR(20) NULL,
+    phone_verified_at DATETIME(6) NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
@@ -61,6 +63,14 @@ CREATE TABLE IF NOT EXISTS otp_challenges (
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
     KEY otp_challenges_email_idx (email, purpose, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS account_password_overrides (
+    user_uid VARCHAR(191) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    changed_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    changed_by_uid VARCHAR(191) NOT NULL,
+    PRIMARY KEY (user_uid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS karnataka_districts (

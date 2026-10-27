@@ -278,7 +278,7 @@ test('F20 Tier 2: Labels zero-score report incomplete when evidence is absent', 
     property: { id: 'clean', surveyNumber: '1', village: 'CleanVillage' },
   });
   const report = generateDueDiligenceReport(snapshot);
-  assert.match(report.html, /Risk score: 0 \/ 100 \(preliminary\) — INCOMPLETE · NOT CLEARED/);
+  assert.match(report.html, /Score: 0 \/ 100 \(preliminary\) — INCOMPLETE · NOT CLEARED/);
   assert.match(report.html, /A low or zero risk score does not mean the property is safe or legally clear/);
   assert.match(report.html, /Coordinates are not recorded; spatial screening was not run\./);
   assert.match(report.html, /Drain Screening: <strong>UNKNOWN<\/strong>/);
@@ -293,7 +293,7 @@ test('F20 Tier 2: Renders high attention report with score >= 70', () => {
     ],
   });
   const report = generateDueDiligenceReport(snapshot);
-  assert.match(report.html, /Risk score: 70 \/ 100 \(high_attention\) — INCOMPLETE · NOT CLEARED/);
+  assert.match(report.html, /Score: 70 \/ 100 \(high_attention\) — INCOMPLETE · NOT CLEARED/);
 });
 
 test('F20 Tier 2: Report contains statutory disclaimer notice', () => {

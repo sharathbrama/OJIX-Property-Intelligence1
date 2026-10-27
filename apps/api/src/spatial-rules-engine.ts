@@ -369,7 +369,7 @@ export function screenSpatialBuffers(
       ? 'Valid coordinates are required; spatial screening was not performed.'
       : usableLayers.length
         ? 'Results are limited to the verified spatial layers supplied for this screening.'
-        : 'No verified, provenance-complete source geometry or distance is available; clearance cannot be determined.',
+        : 'Map review completed. Official drain and waterbody GIS layers are not connected, so clearance remains Unknown.',
     cadastralParcelGeoJSON: customParcelGeoJSON || { type: 'FeatureCollection', features: [] } as any,
     georeferencedSnapshot: { imagePngBase64: '', metadata: snapshotMetadata },
   };

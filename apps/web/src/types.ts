@@ -134,4 +134,5 @@ export interface UserAccount {
   description: string;
   tenantId?: string;
   accessExpiresAt?: string;
+  isSuperAdmin?: boolean;
 }

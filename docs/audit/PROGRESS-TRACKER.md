@@ -1,6 +1,6 @@
 # P0 Progress Tracker
 
-**Updated:** 15 October 2026, 11:30 IST
+**Updated:** 18 October 2026, Asia/Kolkata. Current-tree revalidation; test suite failed, typecheck passed, build did not finish within the command window.
 **Status terms:** Not Started / In Progress / Blocked / Ready for Verification / Done. Done requires acceptance artifact and verification evidence.
 
 | ID | Priority / status | Work | Evidence / acceptance | Owner role | Blocker / next checkpoint |
@@ -16,6 +16,8 @@
 | P0-F1 | P0 — Blocked | Real deterministic PDF and report approval | Renderer output; immutable snapshot; evidence appendix; approved template and reviewer record | Report/API + Legal/Product | Renderer/provider and approver/template decision. |
 | P0-G1 | P0 — Blocked | Production target, secrets, monitoring, backups and restore | Architecture record; least-privilege IAM; measured RPO/RTO restore; load and alerts | Tech/Cloud/Platform | Product/Tech decision, cloud project, budget, workload, NFR, RPO/RTO. |
 | P0-H1 | P0 — Not Started | Controlled pilot release gate | One full controlled workflow and signed QA/security/legal acceptance | Product + QA + pilot operator | All P0 prerequisites above. |
+
+| TAB0 | P0 audit — In Progress | Establish and maintain evidence-based baseline gap register | Register populated in `P0-GAP-REGISTER.md`; current `npm run typecheck` passed. Fresh `npm test` produced API integration/assertion failures; current build not confirmed. | Engineering lead + QA | Reconcile integration failures; finish build; verify whether current local API/DB and browser E2E environment are available. TAB0 is not closed until acceptance evidence is attached and reviewer confirms the baseline. |
 
 **Next checkpoint:** Product/Tech confirms decision owners, environment access, pilot scope and engineering capacity; Engineering Manager reforecasts and publishes milestone target dates within two working days after those inputs arrive. Until then, report effort/status and blockers only; do not invent dates.
 

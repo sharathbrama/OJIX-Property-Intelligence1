@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-const API_BASE = 'http://localhost:4000';
+const API_BASE = typeof import.meta.env.VITE_API_URL !== 'undefined' ? import.meta.env.VITE_API_URL : '';
 
 type Endpoint = {
   method: string;

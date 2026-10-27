@@ -1,5 +1,17 @@
 # Final Validation Report — Current Repository Work
 
+## Revalidation — 18 October 2026, Asia/Kolkata
+
+| Command / check | Result | Evidence / limits |
+|---|---|---|
+| `npm run typecheck` from repository root | PASS | API and web TypeScript checks exited 0 against the current working tree. |
+| `npm test` from repository root | FAIL — suite ran with multiple failing API/integration assertions | Initial sandbox run could not create the `tsx` IPC pipe. Elevated rerun executed tests, but many API tests failed (including expected endpoints returning 404 and auth/admin/integration assertions); report test expected `/Score: N / 100/` while current output says `Risk score: 0 / 100 ... INCOMPLETE · NOT CLEARED`. This is not a clean baseline pass. Full output was truncated by the command tool; rerun and capture a full log when fixing these failures. |
+| `npm run build` from repository root | NOT CONFIRMED | API TypeScript build completed; frontend Vite build was still transforming when the command window ended. Do not report this as a current pass. |
+| Git working tree | Existing edits preserved | `apps/api/Dockerfile` and `apps/web/Dockerfile` have pre-existing modifications; `apps/web/.gitignore` is untracked. No audit change overwrote those files. |
+| TAB0 identifier search | No explicit match | No `TAB0`, `TAB 0`, or `TAB-0` reference found in `docs`, README, or `ORIGINAL_REQUEST.md`; this report treats TAB0 as the initial baseline audit described by the attached plan. |
+
+TAB0 status: **In Progress, not cleared**. The gap register is populated, but current test failures, unfinished build evidence, and missing owner/reviewer sign-off prevent closure. No external environment or customer data was accessed.
+
 **Updated:** 15 October 2026, 11:30 IST. Historical baseline entries below are retained; latest revalidation is recorded first.  
 **Release status:** RED — not ready for external client data or public production.  
 **Scope:** repository implementation and available local checks; no live customer, external cloud, official dataset or production environment accessed.
