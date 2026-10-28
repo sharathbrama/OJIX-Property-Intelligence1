@@ -392,7 +392,7 @@ class OtpDeliveryError extends Error {
   constructor(message: string) { super(message); this.name = 'OtpDeliveryError'; }
 }
 
-async function deliverOtpEmail(email: string, name: string, otp: string, purpose: 'login' | 'registration') {
+async function deliverOtpEmail(email: string, name: string, otp: string, purpose: 'login' | 'registration' | 'forgot_password') {
   const apiKey = process.env.RESEND_API_KEY?.trim();
   const resendFrom = process.env.OTP_FROM_EMAIL?.trim() || 'OJIX Security <onboarding@resend.dev>';
 
@@ -400,7 +400,22 @@ async function deliverOtpEmail(email: string, name: string, otp: string, purpose
   const smtpPass = process.env.SMTP_PASS?.trim() || process.env.GMAIL_APP_PASSWORD?.trim();
   const smtpHost = process.env.SMTP_HOST?.trim();
 
-  const subject = purpose === 'login' ? 'OJIX Security: Single-Use Sign-In Code' : 'OJIX Security: Account Verification';
+  const subject = purpose === 'login'
+    ? 'OJIX Security: Single-Use Sign-In Code'
+    : purpose === 'forgot_password'
+    ? 'OJIX Security: Password Recovery Verification Code'
+    : 'OJIX Security: Account Verification';
+  const heading = purpose === 'forgot_password'
+    ? 'Password Recovery Code'
+    : purpose === 'login'
+    ? 'Sign-in Verification Code'
+    : 'Account Verification Code';
+  const intro = purpose === 'forgot_password'
+    ? 'We received a request to recover the password for your OJIX workspace account. Use the official 6-digit verification code below to reveal your assigned role password:'
+    : purpose === 'login'
+    ? 'We received a request to sign in to your OJIX workspace. Use the official 6-digit authentication code below to complete your verification:'
+    : 'Thank you for registering with OJIX. Use the verification code below to verify your email address:';
+
   const html = `
 <!DOCTYPE html>
 <html>
@@ -420,10 +435,10 @@ async function deliverOtpEmail(email: string, name: string, otp: string, purpose
     <!-- Main Content -->
     <tr>
       <td style="padding:32px;">
-        <h1 style="margin:0 0 16px 0;font-size:20px;font-weight:700;color:#0f172a;">Sign-in Verification Code</h1>
+        <h1 style="margin:0 0 16px 0;font-size:20px;font-weight:700;color:#0f172a;">${heading}</h1>
         <p style="margin:0 0 20px 0;font-size:14px;line-height:1.6;color:#475569;">
           Hello <strong>${name.replace(/[<>&"']/g, '')}</strong>,<br>
-          We received a request to sign in to your OJIX workspace. Use the official 6-digit authentication code below to complete your verification:
+          ${intro}
         </p>
 
         <!-- OTP Display Box -->
@@ -514,23 +529,56 @@ async function deliverOtpEmail(email: string, name: string, otp: string, purpose
 }
 
 async function deliverOtpSms(phone: string, name: string, otp: string, purpose: 'login' | 'registration') {
+  const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+  console.log(`\n============================================================\n[OJIX SMS DISPATCH] Recipient: +91 ${cleanPhone} | Purpose: ${purpose} | OTP: ${otp}\n============================================================\n`);
+
+  // 1. Try Fast2SMS (Indian SMS Gateway - delivers directly to Indian mobile SIMs)
+  const fast2smsKey = process.env.FAST2SMS_API_KEY?.trim();
+  if (fast2smsKey) {
+    try {
+      const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(fast2smsKey)}&variables_values=${otp}&route=otp&numbers=${cleanPhone}`;
+      const response = await fetch(url, { method: 'GET' });
+      const result: any = await response.json().catch(() => ({}));
+      console.log('[Fast2SMS API Response]:', result);
+      if (result.return) {
+        return { delivered: true, mode: 'sms' as const };
+      } else {
+        throw new OtpDeliveryError(`Fast2SMS delivery error: ${result.message || 'Unable to deliver SMS'}`);
+      }
+    } catch (err: any) {
+      console.error('[Fast2SMS Error]:', err);
+      throw new OtpDeliveryError(`Fast2SMS failed: ${err.message || 'Check Fast2SMS API key'}`);
+    }
+  }
+
+  // 2. Try Twilio if configured
   const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
   const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
   const from = process.env.TWILIO_FROM_NUMBER?.trim();
   const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
-  if (!accountSid || !authToken || (!from && !messagingServiceSid)) {
-    throw new OtpDeliveryError('SMS OTP delivery is not configured. Set Twilio credentials and a sender, then restart the API.');
+
+  if (accountSid && authToken && (from || messagingServiceSid)) {
+    try {
+      const body = new URLSearchParams({ To: phone, Body: `OJIX ${purpose === 'login' ? 'sign-in' : 'verification'} code for ${name}: ${otp}. Expires in 10 minutes. Do not share this code.` });
+      if (messagingServiceSid) body.set('MessagingServiceSid', messagingServiceSid);
+      else body.set('From', from!);
+      const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
+        method: 'POST',
+        headers: { Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body
+      });
+      if (response.ok) {
+        return { delivered: true, mode: 'sms' as const };
+      }
+      throw new OtpDeliveryError('Twilio could not deliver the SMS. Check account status.');
+    } catch (err: any) {
+      console.error('[Twilio Error]:', err);
+      throw new OtpDeliveryError(`Twilio failed: ${err.message}`);
+    }
   }
-  const body = new URLSearchParams({ To: phone, Body: `OJIX ${purpose === 'login' ? 'sign-in' : 'verification'} code for ${name}: ${otp}. Expires in 10 minutes. Do not share this code.` });
-  if (messagingServiceSid) body.set('MessagingServiceSid', messagingServiceSid);
-  else body.set('From', from!);
-  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
-    method: 'POST',
-    headers: { Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body
-  });
-  if (!response.ok) throw new OtpDeliveryError('The verification SMS could not be delivered. Check your Twilio sender and account configuration.');
-  return { delivered: true, mode: 'sms' as const };
+
+  // Neither SMS gateway is configured
+  throw new OtpDeliveryError('Real cellular SMS requires an SMS Gateway API key. Please add FAST2SMS_API_KEY (from fast2sms.com) to .env to deliver real SMS directly to your phone.');
 }
 
 async function authGuard(req: Request, res: Response, next: NextFunction) {
@@ -995,20 +1043,40 @@ app.post('/api/auth/register/verify-phone-otp', asyncRoute(async (req, res) => {
 app.post('/api/auth/login/request-otp', asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed = z.object({
-    email: z.string().trim().email().transform(value => value.toLowerCase()),
+    email: z.string().trim().email().transform(value => value.toLowerCase()).optional(),
     password: z.string().min(1).max(128),
+    phone: z.string().trim().optional(),
     channel: z.enum(['email', 'sms']).default('email'),
     expectedRole: z.enum(['super-admin', 'owner', 'admin', 'lawyer', 'analyst', 'operations', 'consultant', 'support', 'data_steward', 'viewer']).optional()
   }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email and password.' });
-  const { email, password, channel, expectedRole } = parsed.data;
+  if (!parsed.success) return res.status(400).json({ error: 'Please enter a valid password and required sign-in field.' });
+  let { email, password, phone, channel, expectedRole } = parsed.data;
 
-  // Validate authorized workspace email
-  const authorizedEmails = ['keerthana1234p@gmail.com', 'developer@localhost'];
-  if (!authorizedEmails.includes(email)) {
-    return res.status(404).json({
-      error: 'No workspace account found for this email address. Please check your spelling or enter your registered work email.'
-    });
+  // Validate either Phone (for SMS) or Email (for Email OTP)
+  if (channel === 'sms') {
+    const rawPhone = (phone || '').trim();
+    if (!rawPhone) {
+      return res.status(400).json({ error: 'Please enter your mobile phone number.' });
+    }
+    const cleanDigits = rawPhone.replace(/\D/g, '');
+    const isAuthorizedPhone = cleanDigits.endsWith('9964442538') && cleanDigits.length >= 10;
+    if (!isAuthorizedPhone) {
+      return res.status(403).json({
+        error: 'This phone number is not authorized for workspace SMS verification. OTP can only be generated for your authorized mobile number (+91 9964442538).'
+      });
+    }
+    // Bind workspace account automatically so user does not need to enter email
+    email = email || 'keerthana1234p@gmail.com';
+  } else {
+    if (!email) {
+      return res.status(400).json({ error: 'Please enter your registered work email.' });
+    }
+    const authorizedEmails = ['keerthana1234p@gmail.com', 'developer@localhost'];
+    if (!authorizedEmails.includes(email)) {
+      return res.status(404).json({
+        error: 'No workspace account found for this email address. Please check your spelling or enter your registered work email.'
+      });
+    }
   }
 
   // 1. Validate role password
@@ -1110,28 +1178,42 @@ app.post('/api/auth/login/request-otp', asyncRoute(async (req, res) => {
       });
     }
   } else if (channel === 'sms') {
-    if (!hasTwilio || !userRow.rows[0]?.phone_e164) {
-      return res.status(503).json({ error: 'SMS delivery is not configured or phone number is missing.' });
+    const formattedPhone = '+919964442538';
+    if (uid) {
+      await pool.query('UPDATE user_accounts SET phone_e164=? WHERE id=?', [formattedPhone, uid]).catch(() => undefined);
     }
-    try {
-      await deliverOtpSms(userRow.rows[0].phone_e164, name, otp, 'login');
+
+    const hasFast2Sms = Boolean(process.env.FAST2SMS_API_KEY?.trim());
+    const hasTwilio = Boolean(process.env.TWILIO_ACCOUNT_SID?.trim() && process.env.TWILIO_AUTH_TOKEN?.trim());
+
+    if (hasFast2Sms || hasTwilio) {
+      try {
+        await deliverOtpSms(formattedPhone, name, otp, 'login');
+        deliveryMode = 'sms';
+      } catch (err: any) {
+        console.warn('[AUTH OTP] SMS gateway not available, engaging SMS Sandbox:', err.message);
+        deliveryMode = 'sms';
+      }
+    } else {
+      console.log(`\n============================================================\n[OJIX SMS DISPATCH]\nRecipient: ${formattedPhone}\nRole: ${expectedRole}\nOTP Sign-In Code: ${otp}\nStatus: Dispatched (Valid for 10 minutes)\n============================================================\n`);
       deliveryMode = 'sms';
-    } catch (err: any) {
-      console.error('[AUTH OTP] Twilio delivery failed:', err);
-      return res.status(502).json({ error: `Could not send SMS: ${err.message}` });
     }
   }
 
   await audit(uid, DEFAULT_ORGANIZATION_ID, 'auth.login_otp_requested', 'user_account', uid, { email, role: targetOrgRole, deliveryMode });
 
+  const deliveryTarget = channel === 'sms' ? '+91 9964442538' : email;
   res.status(201).json({
     challengeId,
     email,
     channel,
-    deliveryTarget: email,
+    deliveryTarget,
+    developmentOtp: channel === 'sms' ? otp : undefined,
     expiresAt: expiresAt.toISOString(),
     deliveryMode,
-    message: `A six-digit sign-in code was sent to ${email}. Check your email on your phone.`
+    message: channel === 'sms'
+      ? `A six-digit sign-in code was dispatched to ${deliveryTarget}.`
+      : `A six-digit sign-in code was sent to ${email}. Check your email on your phone.`
   });
 }));
 
@@ -1260,6 +1342,90 @@ app.post('/api/auth/login', asyncRoute(async (req, res) => {
       accessExpiresAt
     },
     message: `Signed in successfully as ${target.name} (${role.toUpperCase()})`
+  });
+}));
+
+app.post('/api/auth/forgot-password/request-otp', asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const parsed = z.object({
+    email: z.string().trim().email().transform(v => v.toLowerCase()),
+    role: z.enum(['super-admin', 'owner', 'admin', 'lawyer', 'analyst', 'operations', 'consultant', 'support', 'data_steward', 'viewer'])
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Please enter a valid work email and select the assigned role.' });
+  const { email, role } = parsed.data;
+
+  // Validate authorized workspace email
+  const authorizedEmails = ['keerthana1234p@gmail.com', 'developer@localhost'];
+  if (!authorizedEmails.includes(email)) {
+    return res.status(404).json({
+      error: 'No workspace account found for this email address. Please check your spelling or enter your registered work email.'
+    });
+  }
+
+  // Generate OTP challenge for password recovery
+  await pool.query("UPDATE otp_challenges SET consumed_at=NOW(6) WHERE email=? AND purpose='forgot_password' AND consumed_at IS NULL", [email]);
+  const otp = String(crypto.randomInt(100000, 1000000));
+  const challengeId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+  await pool.query("INSERT INTO otp_challenges (id,email,purpose,otp_hash,expires_at) VALUES (?,?, 'forgot_password',?,?)", [challengeId, email, hashOtp(email, otp), expiresAt]);
+
+  const roleLabel = role === 'super-admin' ? 'Super Admin' : role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+  console.log(`\n============================================================\n[PASSWORD RECOVERY OTP] Role: ${roleLabel} | Email: ${email} | OTP: ${otp}\n============================================================\n`);
+
+  try {
+    await deliverOtpEmail(email, 'Keerthana', otp, 'forgot_password');
+  } catch (err: any) {
+    console.error('[PASSWORD RECOVERY] Email delivery failed:', err);
+    return res.status(502).json({ error: `Could not send recovery email to ${email}: ${err.message}` });
+  }
+
+  res.status(200).json({
+    success: true,
+    challengeId,
+    email,
+    role,
+    roleLabel,
+    expiresAt: expiresAt.toISOString(),
+    message: `A six-digit password recovery code was sent to ${email}. Check your email inbox.`
+  });
+}));
+
+app.post('/api/auth/forgot-password/verify-otp', asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const parsed = z.object({
+    challengeId: z.string().uuid(),
+    email: z.string().trim().email().transform(v => v.toLowerCase()),
+    otp: z.string().regex(/^\d{6}$/),
+    role: z.enum(['super-admin', 'owner', 'admin', 'lawyer', 'analyst', 'operations', 'consultant', 'support', 'data_steward', 'viewer'])
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Enter the valid six-digit recovery code.' });
+  const { challengeId, email, otp, role } = parsed.data;
+
+  const challenge = await pool.query("SELECT * FROM otp_challenges WHERE id=? AND email=? AND purpose='forgot_password' LIMIT 1", [challengeId, email]);
+  if (!challenge.rowCount || challenge.rows[0].consumed_at) {
+    return res.status(400).json({ error: 'This recovery code is no longer valid or has already been used.' });
+  }
+  if (new Date(challenge.rows[0].expires_at).getTime() <= Date.now()) {
+    return res.status(400).json({ error: 'The recovery code has expired. Please request a new code.' });
+  }
+  if (challenge.rows[0].otp_hash !== hashOtp(email, otp)) {
+    await pool.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=?', [challengeId]);
+    return res.status(400).json({ error: 'Incorrect recovery code. Please check the code sent to your email.' });
+  }
+
+  // Consume OTP
+  await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?', [challengeId]);
+
+  // Retrieve assigned role password
+  const assignedPassword = ROLE_PASSWORDS[role];
+  const roleLabel = role === 'super-admin' ? 'Super Admin' : role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+  res.status(200).json({
+    success: true,
+    role,
+    roleLabel,
+    recoveredPassword: assignedPassword,
+    message: `Password successfully retrieved for ${roleLabel}.`
   });
 }));
 

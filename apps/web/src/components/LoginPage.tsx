@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, Clock } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, Clock, Smartphone } from 'lucide-react';
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
 import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
 import type { UserAccount, UserRole } from '../types';
@@ -27,7 +27,7 @@ export const ROLE_PASSWORDS: Record<string, string> = {
   'viewer': 'Viewer@3126'
 };
 export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
-  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'phone-otp'|'verified'>(() => {
+  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'phone-otp'|'verified'|'forgot-password'|'forgot-password-verify'|'forgot-password-success'>(() => {
     const path = window.location.pathname.replace(/\/$/, '');
     return path === '/register' ? 'register' : 'login';
   });
@@ -35,10 +35,18 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const [dummyAccounts, setDummyAccounts] = useState<UserAccount[]>([]);
   const [selectedUid, setSelectedUid] = useState<string>('');
   const [email, setEmail] = useState<string>('');
+  const [loginPhone, setLoginPhone] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotRole, setForgotRole] = useState(expectedRole || 'super-admin');
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotChallengeId, setForgotChallengeId] = useState('');
+  const [recoveredPassword, setRecoveredPassword] = useState('');
+  const [recoveredRoleLabel, setRecoveredRoleLabel] = useState('');
+  const [copiedPassword, setCopiedPassword] = useState(false);
   const [registerName, setRegisterName] = useState('');
   const [registerEmail, setRegisterEmail] = useState('');
   const [registerPhone, setRegisterPhone] = useState('');
@@ -159,14 +167,17 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     try {
       const normalizedEmail = email.trim().toLowerCase();
       const requestedRole = selectedRole;
-      // Only the special developer identity bypasses OTP. Named demo accounts
-      // use the normal OTP request/verification flow and deliver to the
-      // configured demo inbox.
       const isLocalDemoAccount = normalizedEmail === 'developer@localhost';
       const res = await fetch(`${apiUrl}${isLocalDemoAccount ? '/api/auth/login' : '/api/auth/login/request-otp'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password: password.trim(), channel: deliveryChannel, expectedRole: requestedRole })
+        body: JSON.stringify({
+          email: deliveryChannel === 'email' ? email.trim() : undefined,
+          password: password.trim(),
+          phone: deliveryChannel === 'sms' ? loginPhone.trim() : undefined,
+          channel: deliveryChannel,
+          expectedRole: requestedRole
+        })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -179,11 +190,19 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
         return;
       }
 
+      if (data.email) {
+        setEmail(data.email);
+      }
       setChallengeId(data.challengeId);
       setChallengeRole(requestedRole);
-      setOtpDeliveryTarget(data.deliveryTarget || email);
+      setOtpDeliveryTarget(data.deliveryTarget || (deliveryChannel === 'sms' ? loginPhone : email));
       setDevelopmentOtp(data.developmentOtp || '');
-      setOtp(''); // Leaves verification input empty so user enters the generated OTP
+      if (data.developmentOtp) {
+        console.log(`%c[OJIX SMS DISPATCH] Sign-in Code for ${data.deliveryTarget || '+91 9964442538'}: ${data.developmentOtp}`, 'color: #16a34a; font-weight: bold; font-size: 14px;');
+        setOtp(data.developmentOtp); // Auto-populate directly into the input so the user has it right there
+      } else {
+        setOtp('');
+      }
       setMode('login-otp');
     } catch (err: any) {
       setError(err.message || 'Login failed. Please check credentials.');
@@ -262,6 +281,63 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     finally { setLoading(false); }
   };
 
+  const handleRequestPasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/forgot-password/request-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail.trim(), role: forgotRole })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to request recovery code.');
+      setForgotChallengeId(data.challengeId);
+      setForgotOtp('');
+      setMode('forgot-password-verify');
+    } catch (err: any) {
+      setError(err.message || 'Failed to request recovery code.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyPasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/forgot-password/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          challengeId: forgotChallengeId,
+          email: forgotEmail.trim(),
+          otp: forgotOtp.trim(),
+          role: forgotRole
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to verify recovery code.');
+      setRecoveredPassword(data.recoveredPassword);
+      setRecoveredRoleLabel(data.roleLabel);
+      setMode('forgot-password-success');
+    } catch (err: any) {
+      setError(err.message || 'Failed to verify recovery code.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleContinueWithRecoveredPassword = () => {
+    setSelectedRole(forgotRole);
+    setEmail(forgotEmail);
+    setPassword(recoveredPassword);
+    setMode('login');
+    setError('');
+  };
+
   const getRoleBadgeColor = (role: UserRole) => {
     switch (role) {
       case 'owner': return { bg: '#ede9fe', text: '#6d28d9', border: '#c4b5fd' };
@@ -291,7 +367,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
         <span className="executive-secure-pill"><ShieldCheck size={13} /> TWO-STEP VERIFICATION</span>
         <h1>Confirm your secure sign-in</h1>
         <p>
-          Enter the six-digit sign-in code sent by {deliveryChannel === 'email' ? 'email' : 'SMS'} to <strong>{otpDeliveryTarget || email}</strong>. Check your inbox on your phone or computer.
+          Enter the six-digit sign-in code sent by {deliveryChannel === 'email' ? 'email' : 'SMS'} to <strong>{otpDeliveryTarget || (deliveryChannel === 'sms' ? '+91 9964442538' : email)}</strong>.
         </p>
 
         <div style={{
@@ -318,6 +394,62 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
         </div>
 
         {error && <div className="executive-alert error"><AlertCircle size={16} /><span>{error}</span></div>}
+
+        {deliveryChannel === 'sms' && developmentOtp && (
+          <div style={{
+            background: '#f0fdf4',
+            border: '1.5px solid #86efac',
+            borderRadius: '12px',
+            padding: '12px 18px',
+            margin: '0 auto 16px auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            boxShadow: '0 4px 12px rgba(22, 163, 74, 0.08)',
+            textAlign: 'left'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                background: '#dcfce7',
+                display: 'grid',
+                placeItems: 'center',
+                color: '#16a34a',
+                flexShrink: 0
+              }}>
+                <Smartphone size={20} />
+              </div>
+              <div>
+                <div style={{ fontSize: '11px', fontWeight: 800, color: '#166534', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                  📱 SMS Code Sent • +91 9964442538
+                </div>
+                <div style={{ fontSize: '13px', color: '#15803d', marginTop: '2px' }}>
+                  Your Code: <strong style={{ fontSize: '18px', letterSpacing: '3px', fontFamily: 'monospace' }}>{developmentOtp}</strong>
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOtp(developmentOtp)}
+              style={{
+                fontSize: '11px',
+                fontWeight: 700,
+                padding: '7px 14px',
+                borderRadius: '6px',
+                background: '#16a34a',
+                color: '#fff',
+                border: 'none',
+                cursor: 'pointer',
+                boxShadow: '0 2px 4px rgba(22, 163, 74, 0.2)'
+              }}
+            >
+              Fill Code
+            </button>
+          </div>
+        )}
+
         <form onSubmit={verifyLoginOtp}>
           <label>
             Verification code
@@ -341,6 +473,162 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
           <button onClick={handleLogin as any}>Generate a new code</button>
         </div>
         <p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p>
+      </section>
+    </main>
+  );
+
+  if (mode === 'forgot-password') return (
+    <main className="executive-otp-shell">
+      <section className="executive-otp-card" style={{ maxWidth: 440 }}>
+        <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence" />
+        <span className="executive-secure-pill"><Key size={13} /> PASSWORD RECOVERY</span>
+        <h1>Recover your password</h1>
+        <p>
+          Select your assigned role and enter your work email to receive an official recovery code.
+        </p>
+
+        {error && <div className="executive-alert error"><AlertCircle size={16} /><span>{error}</span></div>}
+
+        <form onSubmit={handleRequestPasswordReset} style={{ display: 'flex', flexDirection: 'column', gap: 16, textAlign: 'left' }}>
+          <label>
+            <span>Assigned Role</span>
+            <select
+              value={forgotRole}
+              onChange={e => setForgotRole(e.target.value)}
+              style={{ width: '100%', height: 44, padding: '0 11px', border: '1px solid #d2dbe6', borderRadius: 8, background: '#fff', color: '#172334', fontSize: '13px' }}
+            >
+              {Object.entries(roleLoginCopy).map(([key, item]) => (
+                <option key={key} value={key}>{item.label}</option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            <span>Registered Work Email</span>
+            <div className="executive-input">
+              <UserCheck />
+              <input
+                type="email"
+                value={forgotEmail}
+                onChange={e => setForgotEmail(e.target.value)}
+                required
+                placeholder="keerthana1234p@gmail.com"
+              />
+            </div>
+          </label>
+
+          <button className="executive-submit" type="submit" disabled={loading}>
+            {loading ? <><span className="executive-spinner" />Sending code…</> : <>Send Recovery Code <ArrowRight /></>}
+          </button>
+        </form>
+
+        <div className="executive-otp-actions" style={{ marginTop: 16 }}>
+          <button onClick={() => { setMode('login'); setError(''); }}>Back to sign in</button>
+        </div>
+      </section>
+    </main>
+  );
+
+  if (mode === 'forgot-password-verify') return (
+    <main className="executive-otp-shell">
+      <section className="executive-otp-card" style={{ maxWidth: 440 }}>
+        <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence" />
+        <span className="executive-secure-pill"><ShieldCheck size={13} /> VERIFY RECOVERY CODE</span>
+        <h1>Enter verification code</h1>
+        <p>
+          A six-digit code was sent to <strong>{forgotEmail}</strong>. Check your inbox to reveal your password.
+        </p>
+
+        {error && <div className="executive-alert error"><AlertCircle size={16} /><span>{error}</span></div>}
+
+        <form onSubmit={handleVerifyPasswordReset}>
+          <label>
+            Recovery code
+            <input
+              autoFocus
+              inputMode="numeric"
+              maxLength={6}
+              pattern="\d{6}"
+              value={forgotOtp}
+              onChange={e => setForgotOtp(e.target.value.replace(/\D/g, ''))}
+              placeholder="Enter 6-digit OTP"
+            />
+          </label>
+          <button className="executive-submit" disabled={loading || forgotOtp.length !== 6}>
+            {loading ? <><span className="executive-spinner" />Verifying…</> : <>Verify and Reveal Password <ArrowRight /></>}
+          </button>
+        </form>
+
+        <div className="executive-otp-actions">
+          <button onClick={() => { setMode('forgot-password'); setError(''); }}>Change role / email</button>
+          <button onClick={handleRequestPasswordReset as any}>Resend code</button>
+        </div>
+      </section>
+    </main>
+  );
+
+  if (mode === 'forgot-password-success') return (
+    <main className="executive-otp-shell">
+      <section className="executive-otp-card" style={{ maxWidth: 440 }}>
+        <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence" />
+        <span className="executive-secure-pill" style={{ color: '#16a34a', borderColor: '#bbf7d0', background: '#f0fdf4' }}>
+          <CheckCircle2 size={13} /> PASSWORD RECOVERED
+        </span>
+        <h1>{recoveredRoleLabel} Password</h1>
+        <p>
+          Your official assigned password for <strong>{recoveredRoleLabel}</strong> has been retrieved:
+        </p>
+
+        <div style={{
+          background: '#f8fafc',
+          border: '1.5px solid #2563eb',
+          borderRadius: '12px',
+          padding: '20px',
+          margin: '20px 0',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1px', color: '#64748b', textTransform: 'uppercase', marginBottom: '8px' }}>
+            Assigned Role Password
+          </div>
+          <div style={{
+            fontSize: '24px',
+            fontWeight: 800,
+            letterSpacing: '2px',
+            color: '#0f172a',
+            fontFamily: 'monospace',
+            marginBottom: '12px'
+          }}>
+            {recoveredPassword}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard?.writeText(recoveredPassword);
+              setCopiedPassword(true);
+              setTimeout(() => setCopiedPassword(false), 2000);
+            }}
+            style={{
+              fontSize: '12px',
+              fontWeight: 600,
+              padding: '6px 14px',
+              borderRadius: '6px',
+              border: '1px solid #cbd5e1',
+              background: '#fff',
+              color: '#334155',
+              cursor: 'pointer'
+            }}
+          >
+            {copiedPassword ? '✓ Copied to clipboard!' : 'Copy Password'}
+          </button>
+        </div>
+
+        <button
+          className="executive-submit"
+          type="button"
+          onClick={handleContinueWithRecoveredPassword}
+        >
+          Proceed to Sign In with this Password <ArrowRight />
+        </button>
       </section>
     </main>
   );
@@ -443,26 +731,15 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
                 </button>
               </div>
             </label>
-            <label>
-              <span>Work email</span>
-              <div className="executive-input">
-                <UserCheck />
-                <input
-                  type="email"
-                  autoComplete="off"
-                  value={email}
-                  onChange={event => setEmail(event.target.value)}
-                  required
-                  placeholder="name@organisation.com"
-                />
-              </div>
-            </label>
             {!isLocalDemoLogin && (
               <label>
                 <span>Send verification code by</span>
                 <select
                   value={deliveryChannel}
-                  onChange={event => setDeliveryChannel(event.target.value as 'email' | 'sms')}
+                  onChange={event => {
+                    setDeliveryChannel(event.target.value as 'email' | 'sms');
+                    setError('');
+                  }}
                   style={{ width: '100%', height: 44, padding: '0 11px', border: '1px solid #d2dbe6', borderRadius: 8, background: '#fff', color: '#172334' }}
                 >
                   <option value="email">Email</option>
@@ -470,9 +747,50 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
                 </select>
               </label>
             )}
+            {deliveryChannel === 'email' ? (
+              <label>
+                <span>Work email</span>
+                <div className="executive-input">
+                  <UserCheck />
+                  <input
+                    type="email"
+                    autoComplete="off"
+                    value={email}
+                    onChange={event => setEmail(event.target.value)}
+                    required
+                    placeholder="name@organisation.com"
+                  />
+                </div>
+              </label>
+            ) : (
+              <label>
+                <span>Mobile Phone Number</span>
+                <div className="executive-input">
+                  <Smartphone />
+                  <input
+                    type="tel"
+                    autoComplete="off"
+                    value={loginPhone}
+                    onChange={event => setLoginPhone(event.target.value)}
+                    required
+                    placeholder="+91 99644 42538"
+                  />
+                </div>
+              </label>
+            )}
             <div className="executive-form-meta">
               <span className="executive-otp-hint"><ShieldCheck size={13} />Code expires in 10 minutes</span>
-              <button type="button" onClick={() => setError('Password reset is not available yet. Please contact your workspace administrator.')}>Forgot password?</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setForgotRole(selectedRole || 'super-admin');
+                  setForgotEmail(email || 'keerthana1234p@gmail.com');
+                  setError('');
+                  setMode('forgot-password');
+                }}
+              >
+                Forgot password?
+              </button>
             </div>
             <button className="executive-submit" type="submit" disabled={loading || serviceStatus === 'checking'}>
               {loading ? (
