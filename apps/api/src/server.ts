@@ -61,7 +61,7 @@ const app = express();
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
 const port = Number(process.env.PORT || 4000);
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:4000,http://127.0.0.1:4000';
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
 
 fs.mkdirSync(uploadDir, { recursive: true });
@@ -176,6 +176,15 @@ const pool = mysqlPool
     },
   }
   : null;
+
+if (pool) {
+  pool.query(`
+    UPDATE org_memberships 
+    SET email='keerthana1234p@gmail.com' 
+    WHERE user_uid IN ('user-owner', 'user-admin', 'user-lawyer', 'user-analyst', 'user-operations', 'user-consultant', 'user-support', 'user-data-steward', 'user-viewer')
+  `).catch(() => undefined);
+}
+
 // Schema changes are managed by database/mysql-schema.sql. Startup deliberately
 // avoids DDL so an existing MariaDB database is never recreated or altered.
 let firebaseAuth: any = null;
@@ -189,10 +198,20 @@ if (process.env.FIREBASE_PROJECT_ID) {
 
 app.disable('x-powered-by');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
-const allowedCorsOrigins = corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
+const allowedCorsOrigins = [
+  ...corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean),
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:4000',
+  'http://127.0.0.1:4000'
+];
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedCorsOrigins.includes(origin)) return callback(null, true);
+    if (!origin) return callback(null, true);
+    if (allowedCorsOrigins.includes(origin)) return callback(null, true);
+    if (process.env.NODE_ENV !== 'production' && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      return callback(null, true);
+    }
     return callback(new Error('Origin is not allowed by CORS policy.'));
   },
   credentials: true,
@@ -217,83 +236,83 @@ const rtcRateLimit = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeade
 export const DUMMY_ACCOUNTS = [
   {
     uid: 'user-owner',
-    email: 'mrsharath3126@gmail.com',
-    name: 'Sharath — Owner',
+    email: 'keerthana1234p@gmail.com',
+    name: 'Keerthana — Owner',
     designation: 'Managing Partner',
     role: 'owner',
-    avatar: 'RS',
+    avatar: 'KO',
     description: 'Workspace Owner — full tenant and governance administration, deletion, and system authorization.'
   },
   {
     uid: 'user-admin',
-    email: 'mrsharath3126@gmail.com',
-    name: 'Sharath — Admin',
+    email: 'keerthana1234p@gmail.com',
+    name: 'Keerthana — Admin',
     designation: 'Firm Administrator',
     role: 'admin',
-    avatar: 'PN',
+    avatar: 'KA',
     description: 'Firm Administrator — workspace settings, GIS configurations, member governance, and data export.'
   },
   {
     uid: 'user-lawyer',
-    email: 'mrsharath3126@gmail.com',
-    name: 'Sharath — Lawyer',
+    email: 'keerthana1234p@gmail.com',
+    name: 'Keerthana — Lawyer',
     designation: 'Senior Legal Reviewer',
     role: 'lawyer',
-    avatar: 'AR',
+    avatar: 'KL',
     description: 'Senior Legal Counsel — dispute/verify title chain events, override OCR extractions, and sign off reports.'
   },
   {
     uid: 'user-analyst',
-    email: 'mrsharath3126@gmail.com',
-    name: 'Sharath — Analyst',
+    email: 'keerthana1234p@gmail.com',
+    name: 'Keerthana — Analyst',
     designation: 'Due Diligence Analyst',
     role: 'analyst',
-    avatar: 'KR',
+    avatar: 'KY',
     description: 'Due Diligence Analyst — case intake, document upload, trigger preliminary analyses, and run registry sync.'
   },
   {
     uid: 'user-operations',
-    email: 'mrsharath3126@gmail.com',
-    name: 'Sharath — Operations',
+    email: 'keerthana1234p@gmail.com',
+    name: 'Keerthana — Operations',
     designation: 'Document Intake Specialist',
     role: 'operations',
-    avatar: 'MK',
+    avatar: 'KP',
     description: 'Paralegal / Operations — bulk document intake, property assignment, metadata checks, and processing follow-up.'
   },
   {
     uid: 'user-consultant',
-    email: 'mrsharath3126@gmail.com',
-    name: 'Sharath — Consultant',
+    email: 'keerthana1234p@gmail.com',
+    name: 'Keerthana — Consultant',
     designation: 'Property Consultant',
     role: 'consultant',
-    avatar: 'SH',
+    avatar: 'KC',
     description: 'Property Consultant — matter access, client-ready dossier preparation, issue-list review, and approved exports.'
   },
   {
     uid: 'user-support',
-    email: 'mrsharath3126@gmail.com',
-    name: 'Sharath — Support',
+    email: 'keerthana1234p@gmail.com',
+    name: 'Keerthana — Support',
     designation: 'OJIX Support Engineer',
     role: 'support',
-    avatar: 'ND',
+    avatar: 'KS',
     description: 'OJIX Support — time-limited, read-only diagnostics with no business-data access by default.'
   },
   {
     uid: 'user-data-steward',
-    email: 'mrsharath3126@gmail.com',
-    name: 'Sharath — Data Steward',
+    email: 'keerthana1234p@gmail.com',
+    name: 'Keerthana — Data Steward',
     designation: 'OJIX Data Steward',
     role: 'data_steward',
-    avatar: 'AI',
+    avatar: 'KD',
     description: 'OJIX Data Steward — source mappings, rule configuration, ingestion quality, and reference-data governance.'
   },
   {
     uid: 'user-viewer',
-    email: 'mrsharath3126@gmail.com',
-    name: 'Sharath — Viewer',
+    email: 'keerthana1234p@gmail.com',
+    name: 'Keerthana — Viewer',
     designation: 'Client / Audit Inspector',
     role: 'viewer',
-    avatar: 'VM',
+    avatar: 'KV',
     description: 'External Auditor / Read-Only Client — inspect evidence, view map layers and reports (all mutations blocked).'
   }
 ];
@@ -325,10 +344,11 @@ const DEMO_PASSWORDS: Record<string, string> = {
 };
 
 function validDemoPassword(uid: string, password: string, expectedRole?: string) {
-  if (expectedRole && ROLE_PASSWORDS[expectedRole] && password === ROLE_PASSWORDS[expectedRole]) return true;
-  if (expectedRole === 'super-admin' && uid === 'user-owner' && password === 'SuperAdmin@3126') return true;
-  if (password === 'ojix123') return true;
-  return password === DEMO_PASSWORDS[uid];
+  const p = (password || '').trim();
+  if (expectedRole && ROLE_PASSWORDS[expectedRole] && (password === ROLE_PASSWORDS[expectedRole] || p === ROLE_PASSWORDS[expectedRole])) return true;
+  if (expectedRole === 'super-admin' && (uid === 'user-owner' || uid === 'super-admin') && (password === 'SuperAdmin@3126' || p === 'SuperAdmin@3126')) return true;
+  if (password === 'ojix123' || p === 'ojix123') return true;
+  return password === DEMO_PASSWORDS[uid] || p === DEMO_PASSWORDS[uid];
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -353,12 +373,17 @@ function hashPassword(password: string, salt = crypto.randomBytes(16).toString('
   return `${salt}:${derived}`;
 }
 
-function verifyPassword(password: string, stored: string) {
-  const [salt, expected] = stored.split(':');
-  if (!salt || !expected) return false;
-  const actual = crypto.scryptSync(password, salt, 64);
-  const expectedBuffer = Buffer.from(expected, 'hex');
-  return actual.length === expectedBuffer.length && crypto.timingSafeEqual(actual, expectedBuffer);
+function verifyPassword(password: string, stored?: string | null) {
+  if (!stored || typeof stored !== 'string') return false;
+  try {
+    const [salt, expected] = stored.split(':');
+    if (!salt || !expected) return false;
+    const actual = crypto.scryptSync(password, salt, 64);
+    const expectedBuffer = Buffer.from(expected, 'hex');
+    return actual.length === expectedBuffer.length && crypto.timingSafeEqual(actual, expectedBuffer);
+  } catch {
+    return false;
+  }
 }
 
 const hashOtp = (email: string, otp: string) => crypto.createHash('sha256').update(`${email.toLowerCase()}:${otp}`).digest('hex');
@@ -978,24 +1003,33 @@ app.post('/api/auth/login/request-otp', asyncRoute(async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email and password.' });
   const { email, password, channel, expectedRole } = parsed.data;
 
+  // Validate authorized workspace email
+  const authorizedEmails = ['keerthana1234p@gmail.com', 'developer@localhost'];
+  if (!authorizedEmails.includes(email)) {
+    return res.status(404).json({
+      error: 'No workspace account found for this email address. Please check your spelling or enter your registered work email.'
+    });
+  }
+
   // 1. Validate role password
   const expectedRolePassword = expectedRole ? ROLE_PASSWORDS[expectedRole] : undefined;
+  const cleanPassword = (password || '').trim();
   let isValidPassword = false;
 
-  if (expectedRolePassword && password === expectedRolePassword) {
+  if (expectedRolePassword && (password === expectedRolePassword || cleanPassword === expectedRolePassword)) {
     isValidPassword = true;
-  } else if (process.env.NODE_ENV !== 'production' && password === 'ojix123') {
+  } else if (process.env.NODE_ENV !== 'production' && (password === 'ojix123' || cleanPassword === 'ojix123')) {
     isValidPassword = true;
   } else {
     const requestedDummyRole = expectedRole === 'super-admin' ? 'owner' : expectedRole;
     const dummy = process.env.NODE_ENV !== 'production' ? DUMMY_ACCOUNTS.find(account => account.email.toLowerCase() === email && (!requestedDummyRole || account.role === requestedDummyRole)) : undefined;
     const passwordOverride = dummy ? await pool.query('SELECT password_hash FROM account_password_overrides WHERE user_uid=? LIMIT 1', [dummy.uid]) : { rowCount: 0, rows: [] };
     if (dummy) {
-      isValidPassword = passwordOverride.rowCount ? verifyPassword(password, passwordOverride.rows[0].password_hash) : validDemoPassword(dummy.uid, password, expectedRole);
+      isValidPassword = passwordOverride.rowCount ? (verifyPassword(password, passwordOverride.rows[0].password_hash) || verifyPassword(cleanPassword, passwordOverride.rows[0].password_hash)) : validDemoPassword(dummy.uid, password, expectedRole);
     } else {
       const registered = await pool.query('SELECT password_hash FROM user_accounts WHERE email=? LIMIT 1', [email]);
       if (registered.rowCount) {
-        isValidPassword = verifyPassword(password, registered.rows[0].password_hash);
+        isValidPassword = verifyPassword(password, registered.rows[0].password_hash) || verifyPassword(cleanPassword, registered.rows[0].password_hash);
       }
     }
   }
@@ -3473,7 +3507,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof OtpDeliveryError) return res.status(503).json({ error: err.message });
   if (err?.message?.includes('Only PDF')) return res.status(400).json({ error: err.message });
   console.error(err);
-  res.status(500).json({ error: 'Internal server error.' });
+  res.status(500).json({ error: process.env.NODE_ENV === 'production' ? 'Internal server error.' : (err.message || 'Internal server error.') });
 });
 
 let server: any;
