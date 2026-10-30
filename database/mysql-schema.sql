@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     id CHAR(36) NOT NULL,
     email VARCHAR(255) NOT NULL,
     full_name VARCHAR(160) NOT NULL,
+    middle_name VARCHAR(80) NULL,
+    gender VARCHAR(32) NOT NULL DEFAULT 'prefer_not_to_say',
     password_hash VARCHAR(255) NOT NULL,
     email_verified BOOLEAN NOT NULL DEFAULT FALSE,
     status VARCHAR(20) NOT NULL DEFAULT 'active',
@@ -46,6 +48,8 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     disabled_reason TEXT NULL,
     phone_e164 VARCHAR(20) NULL,
     phone_verified_at DATETIME(6) NULL,
+    security_question VARCHAR(40) NULL,
+    security_answer_hash VARCHAR(255) NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
@@ -55,14 +59,17 @@ CREATE TABLE IF NOT EXISTS user_accounts (
 CREATE TABLE IF NOT EXISTS otp_challenges (
     id CHAR(36) NOT NULL,
     email VARCHAR(255) NOT NULL,
+    account_uid VARCHAR(191) NULL,
     purpose VARCHAR(30) NOT NULL DEFAULT 'registration',
     otp_hash CHAR(64) NOT NULL,
+    otp_salt CHAR(32) NULL,
     expires_at DATETIME(6) NOT NULL,
     attempts INT NOT NULL DEFAULT 0,
     consumed_at DATETIME(6) NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
-    KEY otp_challenges_email_idx (email, purpose, created_at)
+    KEY otp_challenges_email_idx (email, purpose, created_at),
+    KEY otp_challenges_account_purpose_idx (account_uid, purpose, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS account_password_overrides (

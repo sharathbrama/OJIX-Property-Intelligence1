@@ -21,6 +21,7 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
 - No Document AI OCR or Vertex AI extraction pipeline yet. Uploads are queued in metadata only; files remain in local `uploads/` for development.
 - No verified survey parcel boundaries, official lake/SWD geometry, buffer-rule engine or official planning notices.
 - No production Cloud Storage adapter, Cloud Tasks/Pub/Sub workers, PDF report renderer or billing.
+- A sandbox Supabase private-storage adapter and short-lived signed URL endpoint are available when explicitly configured; malware scanning and production storage controls are still pending.
 - No legal opinion or automated ownership certification.
 
 ## Requirements
@@ -85,13 +86,11 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
    - Web: http://localhost:5173
    - API health: http://localhost:4000/health
 
-6. Open the web app. In local mode, the API uses the seeded `local-developer` identity and demo workspace. This bypass is intentionally limited to development; `NODE_ENV=production` refuses unauthenticated operation.
+6. Open the web app and sign in with a configured demo account or a verified registered account. Protected API routes require an authenticated session.
 
 ### Platform Super Admin
 
-In development, the seeded owner account can open **Super Admin** from the sidebar. For production, set `SUPER_ADMIN_EMAILS` in the API environment to a comma-separated allowlist of verified account emails, then restart the API. The server checks this permission for every platform endpoint. Role and membership changes require a reason, are written to the audit log, and cannot leave an organization without an active owner.
-
-In local development, seeded demo accounts sign in with the development password (`ojix123`) without an OTP. Registered accounts and production still use OTP verification.
+The local Super Admin demo account is separately identified and mapped to the existing owner membership for workspace access. For production, set `SUPER_ADMIN_EMAILS` in the API environment to a comma-separated allowlist of verified account emails, then restart the API. The server checks this permission for every platform endpoint. Role and membership changes require a reason, are written to the audit log, and cannot leave an organization without an active owner.
 
 ### Run the complete stack with Docker
 
@@ -110,17 +109,28 @@ Startup and login flow:
 
 1. Run `docker compose up --build` and wait for the `db`, `api`, and `web` services to become healthy.
 2. Open http://localhost:8080. Check http://localhost:4001/health if the page cannot reach the API. The API uses port 4000 inside Compose; set `API_PORT` to another free host port if needed.
-3. Register with a new email and a password containing at least eight characters, uppercase and lowercase letters, and a number.
-4. Configure `RESEND_API_KEY` and `OTP_FROM_EMAIL` in `.env` for real email OTP delivery. For local demo-account sign-in, set `DEMO_OTP_EMAIL` to the inbox that should receive its code. Restart the API after changing `.env`. OTPs are never shown in the UI; requests return a configuration or delivery error if email cannot be sent.
-5. If login reports `Invalid email or password`, confirm the account was verified in this Compose database. Compose persists its database in `ojix_db_data`; deleting that volume removes local accounts and data.
+3. Configure SMTP settings (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and optionally `SMTP_SECURE` and `SMTP_FROM`) in `.env`. For Gmail, use an app password. Set `DEMO_OTP_EMAIL` to the inbox receiving codes for the shared-email demo accounts. Restart the API after changing `.env`.
+4. Set all ten `DEMO_*_PASSWORD` values in the ignored `.env` file, then seed password hashes into the local database:
 
-Existing databases need migration 019 for verified phone numbers:
+   ```bash
+   npm run seed:demo-passwords -w apps/api
+   ```
 
-```bash
-docker exec -i ojix-mariadb mariadb -uojix -pojix_local_only ojix_property_mysql < database/migrations/019_phone_otp.sql
-```
+   The seed command is disabled in production and refuses missing or repeated passwords. It stores hashes only. Keep `.env` private; `.env.example` contains placeholders.
 
-To enable SMS OTP, set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and either `TWILIO_FROM_NUMBER` or `TWILIO_MESSAGING_SERVICE_SID` in `.env`. For demo accounts, set `DEMO_OTP_PHONE` in E.164 format. New registrations can add a phone number and must verify it by SMS before the account is activated. Existing accounts can continue using email OTP; SMS is available after their phone number has been verified.
+5. For an existing database, apply the OTP account-binding migration once:
+
+   ```bash
+   docker exec -i ojix-mariadb mariadb -uojix -p ojix_property_mysql < database/migrations/026_demo_login_account_binding.sql
+   ```
+
+   Then, if the account profile columns are not present yet, apply migration 027 once:
+
+   ```bash
+   docker compose exec -T db mariadb -uojix -pojix_local_only ojix_property_mysql < database/migrations/027_registration_profile_fields.sql
+   ```
+
+   New databases receive the columns from the base schema and the Super Admin membership from `infra/db/seed.sql`. OTPs are never shown in the UI or returned by the API; requests return a configuration or delivery error if email cannot be sent.
 
 ## Commands
 
@@ -166,6 +176,16 @@ To enable token verification locally or in cloud:
 3. Ensure each user has a row in `org_memberships` for the workspace they can access. The API rejects users without membership.
 4. Configure the web Firebase app with `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID` and implement sign-in before exposing the app publicly. The current frontend is designed for local developer mode and does not include the sign-in screen yet.
 5. In production, do not set `NODE_ENV` to development, do not expose the local bypass, and configure TLS, secrets, least-privilege IAM and rate limits.
+
+## Authentication OTP delivery
+
+Registration and sign-in use cryptographically generated six-digit one-time codes stored as salted scrypt hashes in `otp_challenges`. Login challenges are bound to the selected account UID. Codes expire after 10 minutes, allow at most five incorrect attempts, and are consumed after successful verification or when a replacement code is requested. Registration and login OTP requests have a 30-second resend cooldown and a five-request per-email/account, per-15-minute limit. Migration `026_demo_login_account_binding.sql` adds the account binding and OTP salt columns for existing databases; `027_registration_profile_fields.sql` adds registration profile fields.
+
+Email OTP delivery uses SMTP via `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and optionally `SMTP_FROM`. Gmail can use `smtp.gmail.com`; use a Google app password rather than the account password. Demo-account sign-in needs `DEMO_OTP_EMAIL`. In development, local demo accounts share the configured inbox but use distinct hashed passwords and account UIDs; role selection is checked against the account resolved from its password. The API does not return generated codes. Set provider credentials in the server environment only.
+
+## Free-tier sandbox storage
+
+The API defaults to local document storage. For sandbox testing, it can upload new documents to a private Supabase Storage bucket and issue audited links valid for at most 15 minutes. See [docs/FREE_TIER_SANDBOX_PLAN.md](docs/FREE_TIER_SANDBOX_PLAN.md). Keep the service-role key on the API server only and use synthetic documents until malware scanning and the remaining security controls are implemented.
 
 ## Google Cloud production direction
 

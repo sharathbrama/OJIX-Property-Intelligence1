@@ -531,31 +531,15 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
-      const res = await fetch(`${API}/api/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid: targetUid, password: "ojix123" }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to switch identity");
-      localStorage.setItem("ojix_auth_token", data.token);
-      localStorage.setItem("ojix_user", JSON.stringify(data.user));
-      setAuthToken(data.token);
-      setCurrentUser(data.user);
-      localStorage.setItem("ojix_portal_mode", "workspace");
-      setPortalMode("workspace");
-      setPage("overview");
-      updateBrowserUrl("overview");
-      setSelected(null);
-      setDocs([]);
-      setFindings([]);
-      setRiskSummary(null);
       setShowRoleSwitcher(false);
-      setNotice(
-        `Active session switched to ${data.user.name} (${data.user.role.toUpperCase()})`,
-      );
+      localStorage.removeItem("ojix_auth_token");
+      localStorage.removeItem("ojix_user");
+      setAuthToken("");
+      setCurrentUser(null);
+      setPage("overview");
+      setNotice(`Sign in again to authenticate as ${availableAccounts.find((account) => account.uid === targetUid)?.name || "the selected account"}.`);
     } catch (err: any) {
-      setError(`Role switch failed: ${err.message}`);
+      setError(`Unable to switch account: ${err.message}`);
     } finally {
       setBusy(false);
     }

@@ -34,14 +34,13 @@ services:
       DATABASE_URL: mysql://ojix:ojix_local_only@db:3306/ojix_property_mysql
       CORS_ORIGIN: "http://localhost:5173,http://localhost:8080,http://web:8080"
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      OTP_FROM_EMAIL: ${OTP_FROM_EMAIL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
       DEMO_OTP_EMAIL: ${DEMO_OTP_EMAIL:-}
-      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
-      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
-      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
-      TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
-      DEMO_OTP_PHONE: ${DEMO_OTP_PHONE:-}
       UPLOAD_DIR: /app/uploads
       MAX_UPLOAD_MB: 25
       OCR_LANGUAGES: kan+eng

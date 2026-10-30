@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, Clock, Smartphone } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, X, RotateCcw, Crown, Settings2, Scale, SearchCheck, Files, BriefcaseBusiness, Headphones, Database } from 'lucide-react';
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
 import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
 import type { UserAccount, UserRole } from '../types';
@@ -13,95 +13,201 @@ interface LoginPageProps {
 const roleLoginCopy:Record<string,{label:string;description:string}>={
   'super-admin':{label:'Super Admin',description:'Authorized platform administrators only.'},owner:{label:'Workspace Owner',description:'Manage workspace operations and property matters.'},admin:{label:'Organization Admin',description:'Manage organization members, workflows and records.'},lawyer:{label:'Legal Reviewer',description:'Review title evidence and due-diligence findings.'},analyst:{label:'Evidence Analyst',description:'Analyze property records and prepare assigned matters.'},operations:{label:'Document Operations',description:'Manage document intake and processing queues.'},consultant:{label:'Consultant',description:'Review assigned client dossiers and evidence.'},support:{label:'Support',description:'Access authorized workspace diagnostics.'},data_steward:{label:'Data Steward',description:'Maintain source data and reference records.'},viewer:{label:'Viewer',description:'Access approved read-only workspace records.'}
 };
-
-export const ROLE_PASSWORDS: Record<string, string> = {
-  'super-admin': 'SuperAdmin@3126',
-  'owner': 'Owner@3126',
-  'admin': 'Admin@3126',
-  'lawyer': 'Lawyer@3126',
-  'analyst': 'Analyst@3126',
-  'operations': 'Operations@3126',
-  'consultant': 'Consultant@3126',
-  'support': 'Support@3126',
-  'data_steward': 'Steward@3126',
-  'viewer': 'Viewer@3126'
+const loginRoleOrder = ['owner','super-admin','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer'] as const;
+const loginRoleIcons = {
+  owner:Crown,'super-admin':ShieldCheck,admin:Settings2,lawyer:Scale,analyst:SearchCheck,
+  operations:Files,consultant:BriefcaseBusiness,support:Headphones,data_steward:Database,viewer:Eye,
 };
+const isValidRegistrationPhone = (countryCode: string, digits: string) => {
+  const formats: Record<string, RegExp> = {
+    '+91': /^[6-9]\d{9}$/,
+    '+1': /^[2-9]\d{2}[2-9]\d{6}$/,
+    '+44': /^7\d{9}$/,
+    '+61': /^4\d{8}$/,
+    '+971': /^5[024568]\d{7}$/,
+    '+65': /^[89]\d{7}$/,
+  };
+  return Boolean(formats[countryCode]?.test(digits));
+};
+
 export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
-  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'phone-otp'|'verified'|'forgot-password'|'forgot-password-verify'|'forgot-password-success'>(() => {
+  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
     const path = window.location.pathname.replace(/\/$/, '');
-    return path === '/register' ? 'register' : 'login';
+    return path === '/register' ? 'register' : 'landing';
   });
-  const [loginCardOpen, setLoginCardOpen] = useState(Boolean(expectedRole));
+  const [loginCardOpen, setLoginCardOpen] = useState(() => Boolean(expectedRole) || window.location.pathname.startsWith('/login'));
+  const [loginModalClosing, setLoginModalClosing] = useState(false);
+  const loginModalCloseRef = useRef<HTMLButtonElement>(null);
   const [dummyAccounts, setDummyAccounts] = useState<UserAccount[]>([]);
   const [selectedUid, setSelectedUid] = useState<string>('');
   const [email, setEmail] = useState<string>('');
-  const [loginPhone, setLoginPhone] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotRole, setForgotRole] = useState(expectedRole || 'super-admin');
-  const [forgotOtp, setForgotOtp] = useState('');
-  const [forgotChallengeId, setForgotChallengeId] = useState('');
-  const [recoveredPassword, setRecoveredPassword] = useState('');
-  const [recoveredRoleLabel, setRecoveredRoleLabel] = useState('');
-  const [copiedPassword, setCopiedPassword] = useState(false);
   const [registerName, setRegisterName] = useState('');
+  const [registerFirstName, setRegisterFirstName] = useState('');
+  const [registerMiddleName, setRegisterMiddleName] = useState('');
+  const [registerLastName, setRegisterLastName] = useState('');
+  const [registerGender, setRegisterGender] = useState('');
+  const [registerCountryCode, setRegisterCountryCode] = useState('+91');
+  const [registerMobile, setRegisterMobile] = useState('');
+  const [registerSecurityQuestion, setRegisterSecurityQuestion] = useState('');
+  const [registerSecurityAnswer, setRegisterSecurityAnswer] = useState('');
   const [registerEmail, setRegisterEmail] = useState('');
-  const [registerPhone, setRegisterPhone] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [registrationSubmitted, setRegistrationSubmitted] = useState(false);
+  const [registrationTouched, setRegistrationTouched] = useState<Record<string, boolean>>({});
   const [otp, setOtp] = useState('');
-  const [developmentOtp, setDevelopmentOtp] = useState('');
   const [challengeId, setChallengeId] = useState('');
   const [challengeRole, setChallengeRole] = useState('');
-  const [phoneChallengeId, setPhoneChallengeId] = useState('');
-  const [deliveryChannel, setDeliveryChannel] = useState<'email'|'sms'>('email');
-  const [selectedRole, setSelectedRole] = useState(expectedRole || '');
+  const [selectedRole, setSelectedRole] = useState(expectedRole || 'owner');
   const [otpDeliveryTarget, setOtpDeliveryTarget] = useState('');
+  const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
   const [timeLeft, setTimeLeft] = useState(600);
+  const [resendAvailableAt, setResendAvailableAt] = useState<number | null>(null);
+  const [resendSecondsLeft, setResendSecondsLeft] = useState(0);
   const [serviceStatus, setServiceStatus] = useState<'checking'|'ready'|'unavailable'>('checking');
   const [serviceMessage, setServiceMessage] = useState('Checking API and database…');
+  const [recoveryStep,setRecoveryStep]=useState<'request'|'reset'|'success'|null>(null);
+  const [recoveryChallengeId,setRecoveryChallengeId]=useState('');
+  const [recoveryOtp,setRecoveryOtp]=useState('');
+  const [recoveryPassword,setRecoveryPassword]=useState('');
+  const [recoveryConfirmPassword,setRecoveryConfirmPassword]=useState('');
+  const [recoveryExpiresAt,setRecoveryExpiresAt]=useState<number|null>(null);
+  const [recoveryTimeLeft,setRecoveryTimeLeft]=useState(600);
+  const [recoveryPasswordCopied,setRecoveryPasswordCopied]=useState(false);
+
+  const registrationErrorFor = (field: string) => {
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
+    switch (field) {
+      case 'firstName': return registerFirstName.trim() ? '' : 'Enter your first name.';
+      case 'lastName': return registerLastName.trim() ? '' : 'Enter your last name.';
+      case 'gender': return registerGender ? '' : 'Select a gender option.';
+      case 'mobileNumber': {
+        const digits = registerMobile.replace(/\D/g, '');
+        if (!digits) return 'Enter your mobile number.';
+        if (isValidRegistrationPhone(registerCountryCode, digits)) return '';
+        return registerCountryCode === '+91'
+          ? 'Enter 10 digits. Indian mobile numbers start with 6, 7, 8, or 9.'
+          : 'Enter a valid mobile number for the selected country.';
+      }
+      case 'email':
+        if (!registerEmail.trim()) return 'Enter your work email.';
+        return emailPattern.test(registerEmail.trim()) ? '' : 'Use a valid email such as name@company.com.';
+      case 'securityQuestion': return registerSecurityQuestion ? '' : 'Choose a security question.';
+      case 'securityAnswer':
+        if (!registerSecurityAnswer.trim()) return 'Enter an answer.';
+        return registerSecurityAnswer.trim().length >= 2 ? '' : 'Answer must contain at least 2 characters.';
+      case 'password':
+        if (registerPassword.length < 8) return 'Use at least 8 characters.';
+        if (!/[A-Z]/.test(registerPassword)) return 'Add at least one uppercase letter.';
+        if (!/[a-z]/.test(registerPassword)) return 'Add at least one lowercase letter.';
+        return /[0-9]/.test(registerPassword) ? '' : 'Add at least one number.';
+      case 'confirmPassword':
+        if (!confirmPassword) return 'Confirm your password.';
+        return confirmPassword === registerPassword ? '' : 'Passwords do not match.';
+      default: return '';
+    }
+  };
+  const registrationFieldError = (field: string) =>
+    registrationSubmitted || registrationTouched[field] ? registrationErrorFor(field) : '';
+  const registrationValidationProps = (field: string) => {
+    const message = registrationFieldError(field);
+    return {
+      onBlur: () => setRegistrationTouched(current => ({ ...current, [field]: true })),
+      'aria-invalid': Boolean(message),
+      'aria-describedby': message ? `registration-${field}-error` : undefined,
+    };
+  };
+  const registrationErrorMessage = (field: string) => {
+    const message = registrationFieldError(field);
+    return message ? <small id={`registration-${field}-error`} className="registration-field-error" role="alert">{message}</small> : null;
+  };
 
   useEffect(() => {
-    if (mode !== 'login-otp') return;
-    setTimeLeft(600);
-    const interval = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [mode, challengeId]);
+    if ((mode !== 'login-otp' && mode !== 'otp') || otpExpiresAt === null) return;
+    const updateTimeLeft = () => {
+      const now = Date.now();
+      setTimeLeft(Math.max(0, Math.ceil((otpExpiresAt - now) / 1000)));
+      setResendSecondsLeft(resendAvailableAt === null ? 0 : Math.max(0, Math.ceil((resendAvailableAt - now) / 1000)));
+    };
+    updateTimeLeft();
+    const interval = window.setInterval(updateTimeLeft, 1000);
+    return () => window.clearInterval(interval);
+  }, [mode, otpExpiresAt, resendAvailableAt]);
+
+  useEffect(()=>{
+    if(recoveryStep!=='reset'||recoveryExpiresAt===null)return;
+    const update=()=>setRecoveryTimeLeft(Math.max(0,Math.ceil((recoveryExpiresAt-Date.now())/1000)));
+    update();
+    const interval=window.setInterval(update,1000);
+    return()=>window.clearInterval(interval);
+  },[recoveryStep,recoveryExpiresAt]);
 
   const navigateAuth = (next: 'landing'|'login'|'register') => {
-    setMode(next);
+    const nextMode = next === 'login' ? 'landing' : next;
+    setMode(nextMode);
     setLoginCardOpen(next === 'login');
     setError('');
     setOtp('');
     const path = next === 'register' ? '/register' : next === 'login' ? '/login' : '/';
-    if (window.location.pathname !== path) window.history.pushState({ auth: next }, '', path);
+    if (next === 'login') {
+      if (window.location.pathname !== '/') window.history.pushState({ auth: 'landing' }, '', '/');
+    } else if (window.location.pathname !== path) window.history.pushState({ auth: next }, '', path);
   };
 
   useEffect(() => {
-    setSelectedRole(expectedRole || '');
+    if (expectedRole) setSelectedRole(expectedRole);
   }, [expectedRole]);
 
   useEffect(() => {
     const syncRoute = () => {
       const path = window.location.pathname.replace(/\/$/, '');
-      const next = path === '/register' ? 'register' : 'login';
+      const next = path === '/register' ? 'register' : 'landing';
       setLoginCardOpen(Boolean(path.startsWith('/login/')));
-      setMode(current => current === 'login-otp' || current === 'otp' || current === 'phone-otp' || current === 'verified' ? current : next);
+      setMode(current => current === 'login-otp' || current === 'otp' || current === 'verified' ? current : next);
     };
     window.addEventListener('popstate', syncRoute);
     return () => window.removeEventListener('popstate', syncRoute);
   }, []);
+
+  useEffect(() => {
+    if (!window.location.pathname.startsWith('/login')) return;
+    window.history.replaceState({ auth: 'landing' }, '', '/');
+  }, []);
+
+  useEffect(() => {
+    if (mode !== 'landing' || !loginCardOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.body.style.overflow = 'hidden';
+    loginModalCloseRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeLandingLogin();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [mode, loginCardOpen]);
+
+  const closeLandingLogin = () => {
+    setLoginModalClosing(true);
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.setTimeout(() => {
+      setLoginCardOpen(false);
+      setLoginModalClosing(false);
+      setError('');
+      setRecoveryStep(null);
+      setRecoveryOtp('');
+      setRecoveryPassword('');
+      setRecoveryConfirmPassword('');
+    }, reducedMotion ? 0 : 180);
+  };
 
   useEffect(() => {
     if (mode !== 'landing') return;
@@ -149,13 +255,9 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
 
   const selectAccount = (acc: UserAccount) => {
     setSelectedUid(acc.uid);
-    // The local Owner is also the development Super Admin. Preserve the
-    // dedicated portal selection instead of downgrading it to Owner when the
-    // account chooser fills the credentials.
-    const roleKey = expectedRole === 'super-admin' && acc.role === 'owner' ? 'super-admin' : acc.role;
-    setSelectedRole(roleKey);
+    setSelectedRole(acc.isSuperAdmin ? 'super-admin' : acc.role);
     setEmail(acc.email);
-    setPassword(ROLE_PASSWORDS[roleKey] || 'ojix123');
+    setPassword('');
     setError('');
   };
 
@@ -167,48 +269,54 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     try {
       const normalizedEmail = email.trim().toLowerCase();
       const requestedRole = selectedRole;
-      const isLocalDemoAccount = normalizedEmail === 'developer@localhost';
-      const res = await fetch(`${apiUrl}${isLocalDemoAccount ? '/api/auth/login' : '/api/auth/login/request-otp'}`, {
+      const res = await fetch(`${apiUrl}/api/auth/login/request-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: deliveryChannel === 'email' ? email.trim() : undefined,
-          password: password.trim(),
-          phone: deliveryChannel === 'sms' ? loginPhone.trim() : undefined,
-          channel: deliveryChannel,
-          expectedRole: requestedRole
-        })
+        body: JSON.stringify({ email, password, expectedRole:requestedRole })
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to authenticate');
+        const error = new Error(data.error || 'Failed to authenticate') as Error & { retryAfterSeconds?: number };
+        error.retryAfterSeconds = Number(data.retryAfterSeconds) || undefined;
+        throw error;
       }
 
-      if (isLocalDemoAccount) {
-        if (!matchesRequestedRole(data.user, requestedRole)) throw new Error(`This account cannot access the ${roleLoginCopy[requestedRole]?.label || 'selected'} sign-in page.`);
-        onLoginSuccess(data.token, data.user, requestedRole);
-        return;
-      }
-
-      if (data.email) {
-        setEmail(data.email);
-      }
       setChallengeId(data.challengeId);
       setChallengeRole(requestedRole);
-      setOtpDeliveryTarget(data.deliveryTarget || (deliveryChannel === 'sms' ? loginPhone : email));
-      setDevelopmentOtp(data.developmentOtp || '');
-      if (data.developmentOtp) {
-        console.log(`%c[OJIX SMS DISPATCH] Sign-in Code for ${data.deliveryTarget || '+91 9964442538'}: ${data.developmentOtp}`, 'color: #16a34a; font-weight: bold; font-size: 14px;');
-        setOtp(data.developmentOtp); // Auto-populate directly into the input so the user has it right there
-      } else {
-        setOtp('');
-      }
+      setOtpDeliveryTarget(data.deliveryTarget || email);
+      setOtpExpiresAt(data.expiresAt ? new Date(data.expiresAt).getTime() : Date.now() + 10 * 60 * 1000);
+      setResendAvailableAt(Date.now() + Math.max(0, Number(data.resendAfterSeconds || 30)) * 1000);
+      setOtp('');
       setMode('login-otp');
     } catch (err: any) {
+      if (Number(err?.retryAfterSeconds) > 0) setResendAvailableAt(Date.now() + Number(err.retryAfterSeconds) * 1000);
       setError(err.message || 'Login failed. Please check credentials.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const openPasswordRecovery=()=>{setMode('landing');setLoginCardOpen(true);if(window.location.pathname!=='/')window.history.pushState({auth:'landing'},'','/');setRecoveryStep('request');setRecoveryOtp('');setRecoveryPassword('');setRecoveryConfirmPassword('');setError('');};
+  const requestPasswordRecovery=async(e?:React.FormEvent)=>{
+    e?.preventDefault();setLoading(true);setError('');
+    try{
+      const res=await fetch(`${apiUrl}/api/auth/forgot-password/request-otp`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,expectedRole:selectedRole})});
+      const data=await res.json();
+      if(!res.ok){const failure=new Error(data.error||'Unable to send a recovery code.') as Error&{retryAfterSeconds?:number};failure.retryAfterSeconds=Number(data.retryAfterSeconds)||undefined;throw failure;}
+      setRecoveryChallengeId(data.challengeId);setRecoveryExpiresAt(data.expiresAt?new Date(data.expiresAt).getTime():Date.now()+600000);setRecoveryOtp('');setRecoveryStep('reset');
+    }catch(err){setError(err instanceof Error?err.message:'Unable to send a recovery code.');}
+    finally{setLoading(false);}
+  };
+  const resetForgottenPassword=async(e:React.FormEvent)=>{
+    e.preventDefault();setError('');
+    if(recoveryPassword!==recoveryConfirmPassword)return setError('New passwords do not match.');
+    setLoading(true);
+    try{
+      const res=await fetch(`${apiUrl}/api/auth/forgot-password/reset`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId:recoveryChallengeId,email,expectedRole:selectedRole,otp:recoveryOtp,newPassword:recoveryPassword})});
+      const data=await res.json();if(!res.ok)throw new Error(data.error||'Unable to reset the password.');
+      setPassword('');setRecoveryPasswordCopied(false);setRecoveryConfirmPassword('');setRecoveryOtp('');setRecoveryStep('success');
+    }catch(err){setError(err instanceof Error?err.message:'Unable to reset the password.');}
+    finally{setLoading(false);}
   };
 
   const verifyLoginOtp = async (e: React.FormEvent) => {
@@ -230,23 +338,50 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     return user.role===requestedRole;
   }
 
-  const requestOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const requestOtp = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     setError('');
-    if (registerPassword !== confirmPassword) return setError('Passwords do not match.');
+    setRegistrationSubmitted(true);
+    const requiredRegistrationFields = ['firstName', 'lastName', 'gender', 'mobileNumber', 'email', 'securityQuestion', 'securityAnswer', 'password', 'confirmPassword'];
+    if (requiredRegistrationFields.some(field => registrationErrorFor(field))) return;
+    const mobileDigits = registerMobile.replace(/\D/g, '');
+    const fullName = [registerFirstName, registerMiddleName, registerLastName].filter(Boolean).join(' ').trim();
+    if (fullName.length > 160) return setError('The combined name must be 160 characters or fewer.');
     setLoading(true);
     try {
       const res = await fetch(`${apiUrl}/api/auth/register/request-otp`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: registerName, email: registerEmail, phone: registerPhone, password: registerPassword })
+        body: JSON.stringify({
+          firstName: registerFirstName,
+          middleName: registerMiddleName,
+          lastName: registerLastName,
+          gender: registerGender,
+          countryCode: registerCountryCode,
+          mobileNumber: mobileDigits,
+          securityQuestion: registerSecurityQuestion,
+          securityAnswer: registerSecurityAnswer,
+          name: fullName,
+          email: registerEmail,
+          password: registerPassword,
+        })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Unable to create registration.');
+      if (!res.ok) {
+        const failure = new Error(data.error || 'Unable to create registration.') as Error & { retryAfterSeconds?: number };
+        failure.retryAfterSeconds = Number(data.retryAfterSeconds) || undefined;
+        throw failure;
+      }
       setChallengeId(data.challengeId);
-      setPhoneChallengeId(data.phoneChallengeId || '');
+      setRegisterName(fullName);
       setRegisterEmail(data.email);
+      setOtpExpiresAt(data.expiresAt ? new Date(data.expiresAt).getTime() : Date.now() + 10 * 60 * 1000);
+      setResendAvailableAt(Date.now() + Math.max(0, Number(data.resendAfterSeconds || 30)) * 1000);
+      setOtp('');
       setMode('otp');
-    } catch (err) { setError(err instanceof Error ? err.message : 'Registration failed.'); }
+    } catch (err: any) {
+      if (Number(err?.retryAfterSeconds) > 0) setResendAvailableAt(Date.now() + Number(err.retryAfterSeconds) * 1000);
+      setError(err instanceof Error ? err.message : 'Registration failed.');
+    }
     finally { setLoading(false); }
   };
 
@@ -260,82 +395,12 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'OTP verification failed.');
-      if (data.phoneVerificationRequired) { setOtp(''); setMode('phone-otp'); return; }
       setEmail(registerEmail);
       setPassword(registerPassword);
       setSelectedUid('');
       setMode('verified');
     } catch (err) { setError(err instanceof Error ? err.message : 'OTP verification failed.'); }
     finally { setLoading(false); }
-  };
-
-  const verifyPhoneOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(''); setLoading(true);
-    try {
-      const res=await fetch(`${apiUrl}/api/auth/register/verify-phone-otp`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId:phoneChallengeId,email:registerEmail,otp})});
-      const data=await res.json();
-      if(!res.ok) throw new Error(data.error||'Phone verification failed.');
-      setEmail(registerEmail); setPassword(registerPassword); setSelectedUid(''); setMode('verified');
-    } catch(err) { setError(err instanceof Error?err.message:'Phone verification failed.'); }
-    finally { setLoading(false); }
-  };
-
-  const handleRequestPasswordReset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-    try {
-      const res = await fetch(`${apiUrl}/api/auth/forgot-password/request-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail.trim(), role: forgotRole })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to request recovery code.');
-      setForgotChallengeId(data.challengeId);
-      setForgotOtp('');
-      setMode('forgot-password-verify');
-    } catch (err: any) {
-      setError(err.message || 'Failed to request recovery code.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyPasswordReset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-    try {
-      const res = await fetch(`${apiUrl}/api/auth/forgot-password/verify-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          challengeId: forgotChallengeId,
-          email: forgotEmail.trim(),
-          otp: forgotOtp.trim(),
-          role: forgotRole
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to verify recovery code.');
-      setRecoveredPassword(data.recoveredPassword);
-      setRecoveredRoleLabel(data.roleLabel);
-      setMode('forgot-password-success');
-    } catch (err: any) {
-      setError(err.message || 'Failed to verify recovery code.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleContinueWithRecoveredPassword = () => {
-    setSelectedRole(forgotRole);
-    setEmail(forgotEmail);
-    setPassword(recoveredPassword);
-    setMode('login');
-    setError('');
   };
 
   const getRoleBadgeColor = (role: UserRole) => {
@@ -358,315 +423,109 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     role: 'viewer' as UserRole, avatar: (registerName || 'RM').split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase(),
     description: 'Verified read-only workspace member'
   });
-  const isLocalDemoLogin = email.trim().toLowerCase() === 'developer@localhost';
-
-  if (mode === 'login-otp') return (
-    <main className="executive-otp-shell">
-      <section className="executive-otp-card">
-        <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence" />
-        <span className="executive-secure-pill"><ShieldCheck size={13} /> TWO-STEP VERIFICATION</span>
-        <h1>Confirm your secure sign-in</h1>
-        <p>
-          Enter the six-digit sign-in code sent by {deliveryChannel === 'email' ? 'email' : 'SMS'} to <strong>{otpDeliveryTarget || (deliveryChannel === 'sms' ? '+91 9964442538' : email)}</strong>.
-        </p>
-
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '8px',
-          padding: '8px 16px',
-          borderRadius: '9999px',
-          background: timeLeft < 60 ? '#fef2f2' : '#f0fdf4',
-          border: `1px solid ${timeLeft < 60 ? '#fca5a5' : '#bbf7d0'}`,
-          color: timeLeft < 60 ? '#dc2626' : '#15803d',
-          fontSize: '13px',
-          fontWeight: 600,
-          margin: '12px auto 18px auto',
-          width: 'fit-content'
-        }}>
-          <Clock size={16} />
-          <span>
-            {timeLeft > 0
-              ? `Code expires in: ${String(Math.floor(timeLeft / 60)).padStart(2, '0')}:${String(timeLeft % 60).padStart(2, '0')}`
-              : 'Code expired — please generate a new code'}
-          </span>
-        </div>
-
-        {error && <div className="executive-alert error"><AlertCircle size={16} /><span>{error}</span></div>}
-
-        {deliveryChannel === 'sms' && developmentOtp && (
-          <div style={{
-            background: '#f0fdf4',
-            border: '1.5px solid #86efac',
-            borderRadius: '12px',
-            padding: '12px 18px',
-            margin: '0 auto 16px auto',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            boxShadow: '0 4px 12px rgba(22, 163, 74, 0.08)',
-            textAlign: 'left'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div style={{
-                width: '36px',
-                height: '36px',
-                borderRadius: '50%',
-                background: '#dcfce7',
-                display: 'grid',
-                placeItems: 'center',
-                color: '#16a34a',
-                flexShrink: 0
-              }}>
-                <Smartphone size={20} />
-              </div>
-              <div>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: '#166534', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-                  📱 SMS Code Sent • +91 9964442538
-                </div>
-                <div style={{ fontSize: '13px', color: '#15803d', marginTop: '2px' }}>
-                  Your Code: <strong style={{ fontSize: '18px', letterSpacing: '3px', fontFamily: 'monospace' }}>{developmentOtp}</strong>
-                </div>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setOtp(developmentOtp)}
-              style={{
-                fontSize: '11px',
-                fontWeight: 700,
-                padding: '7px 14px',
-                borderRadius: '6px',
-                background: '#16a34a',
-                color: '#fff',
-                border: 'none',
-                cursor: 'pointer',
-                boxShadow: '0 2px 4px rgba(22, 163, 74, 0.2)'
-              }}
-            >
-              Fill Code
-            </button>
-          </div>
-        )}
-
-        <form onSubmit={verifyLoginOtp}>
-          <label>
-            Verification code
-            <input
-              autoFocus
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={6}
-              pattern="\d{6}"
-              value={otp}
-              onChange={event => setOtp(event.target.value.replace(/\D/g, ''))}
-              placeholder="Enter 6-digit OTP"
-            />
-          </label>
-          <button className="executive-submit" disabled={loading || otp.length !== 6 || timeLeft === 0}>
-            {loading ? <><span className="executive-spinner" /> Verifying…</> : <>Verify and enter workspace <ArrowRight /></>}
-          </button>
-        </form>
-        <div className="executive-otp-actions">
-          <button onClick={() => { setMode('login'); setOtp(''); setDevelopmentOtp(''); setError(''); }}>Back to sign in</button>
-          <button onClick={handleLogin as any}>Generate a new code</button>
-        </div>
-        <p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p>
-      </section>
-    </main>
-  );
-
-  if (mode === 'forgot-password') return (
-    <main className="executive-otp-shell">
-      <section className="executive-otp-card" style={{ maxWidth: 440 }}>
-        <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence" />
-        <span className="executive-secure-pill"><Key size={13} /> PASSWORD RECOVERY</span>
-        <h1>Recover your password</h1>
-        <p>
-          Select your assigned role and enter your work email to receive an official recovery code.
-        </p>
-
-        {error && <div className="executive-alert error"><AlertCircle size={16} /><span>{error}</span></div>}
-
-        <form onSubmit={handleRequestPasswordReset} style={{ display: 'flex', flexDirection: 'column', gap: 16, textAlign: 'left' }}>
-          <label>
-            <span>Assigned Role</span>
-            <select
-              value={forgotRole}
-              onChange={e => setForgotRole(e.target.value)}
-              style={{ width: '100%', height: 44, padding: '0 11px', border: '1px solid #d2dbe6', borderRadius: 8, background: '#fff', color: '#172334', fontSize: '13px' }}
-            >
-              {Object.entries(roleLoginCopy).map(([key, item]) => (
-                <option key={key} value={key}>{item.label}</option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            <span>Registered Work Email</span>
-            <div className="executive-input">
-              <UserCheck />
-              <input
-                type="email"
-                value={forgotEmail}
-                onChange={e => setForgotEmail(e.target.value)}
-                required
-                placeholder="keerthana1234p@gmail.com"
-              />
-            </div>
-          </label>
-
-          <button className="executive-submit" type="submit" disabled={loading}>
-            {loading ? <><span className="executive-spinner" />Sending code…</> : <>Send Recovery Code <ArrowRight /></>}
-          </button>
-        </form>
-
-        <div className="executive-otp-actions" style={{ marginTop: 16 }}>
-          <button onClick={() => { setMode('login'); setError(''); }}>Back to sign in</button>
-        </div>
-      </section>
-    </main>
-  );
-
-  if (mode === 'forgot-password-verify') return (
-    <main className="executive-otp-shell">
-      <section className="executive-otp-card" style={{ maxWidth: 440 }}>
-        <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence" />
-        <span className="executive-secure-pill"><ShieldCheck size={13} /> VERIFY RECOVERY CODE</span>
-        <h1>Enter verification code</h1>
-        <p>
-          A six-digit code was sent to <strong>{forgotEmail}</strong>. Check your inbox to reveal your password.
-        </p>
-
-        {error && <div className="executive-alert error"><AlertCircle size={16} /><span>{error}</span></div>}
-
-        <form onSubmit={handleVerifyPasswordReset}>
-          <label>
-            Recovery code
-            <input
-              autoFocus
-              inputMode="numeric"
-              maxLength={6}
-              pattern="\d{6}"
-              value={forgotOtp}
-              onChange={e => setForgotOtp(e.target.value.replace(/\D/g, ''))}
-              placeholder="Enter 6-digit OTP"
-            />
-          </label>
-          <button className="executive-submit" disabled={loading || forgotOtp.length !== 6}>
-            {loading ? <><span className="executive-spinner" />Verifying…</> : <>Verify and Reveal Password <ArrowRight /></>}
-          </button>
-        </form>
-
-        <div className="executive-otp-actions">
-          <button onClick={() => { setMode('forgot-password'); setError(''); }}>Change role / email</button>
-          <button onClick={handleRequestPasswordReset as any}>Resend code</button>
-        </div>
-      </section>
-    </main>
-  );
-
-  if (mode === 'forgot-password-success') return (
-    <main className="executive-otp-shell">
-      <section className="executive-otp-card" style={{ maxWidth: 440 }}>
-        <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence" />
-        <span className="executive-secure-pill" style={{ color: '#16a34a', borderColor: '#bbf7d0', background: '#f0fdf4' }}>
-          <CheckCircle2 size={13} /> PASSWORD RECOVERED
-        </span>
-        <h1>{recoveredRoleLabel} Password</h1>
-        <p>
-          Your official assigned password for <strong>{recoveredRoleLabel}</strong> has been retrieved:
-        </p>
-
-        <div style={{
-          background: '#f8fafc',
-          border: '1.5px solid #2563eb',
-          borderRadius: '12px',
-          padding: '20px',
-          margin: '20px 0',
-          textAlign: 'center'
-        }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1px', color: '#64748b', textTransform: 'uppercase', marginBottom: '8px' }}>
-            Assigned Role Password
-          </div>
-          <div style={{
-            fontSize: '24px',
-            fontWeight: 800,
-            letterSpacing: '2px',
-            color: '#0f172a',
-            fontFamily: 'monospace',
-            marginBottom: '12px'
-          }}>
-            {recoveredPassword}
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              navigator.clipboard?.writeText(recoveredPassword);
-              setCopiedPassword(true);
-              setTimeout(() => setCopiedPassword(false), 2000);
-            }}
-            style={{
-              fontSize: '12px',
-              fontWeight: 600,
-              padding: '6px 14px',
-              borderRadius: '6px',
-              border: '1px solid #cbd5e1',
-              background: '#fff',
-              color: '#334155',
-              cursor: 'pointer'
-            }}
-          >
-            {copiedPassword ? '✓ Copied to clipboard!' : 'Copy Password'}
-          </button>
-        </div>
-
-        <button
-          className="executive-submit"
-          type="button"
-          onClick={handleContinueWithRecoveredPassword}
-        >
-          Proceed to Sign In with this Password <ArrowRight />
-        </button>
-      </section>
-    </main>
-  );
+  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card"><img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/><span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span><h1>Confirm your secure sign-in</h1><p>Enter the six-digit code sent by email to <strong>{otpDeliveryTarget || email}</strong>. It can be used once.</p><p role="timer" aria-live="polite">{timeLeft>0?`Code expires in ${Math.floor(timeLeft/60)}:${String(timeLeft%60).padStart(2,'0')}`:'Code expired. Generate a new code.'}</p>{error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}<form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6||timeLeft===0}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form><div className="executive-otp-actions"><button onClick={()=>{setMode('login');setOtp('');setError('');}}>Back to sign in</button><button disabled={loading||resendSecondsLeft>0} onClick={handleLogin as any}>{resendSecondsLeft>0?`Resend code in ${resendSecondsLeft}s`:'Generate a new code'}</button></div><p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p></section></main>;
 
   if (mode !== 'login' && mode !== 'landing') {
     const isOtp = mode === 'otp';
-    const isPhoneOtp = mode === 'phone-otp';
     const isVerified = mode === 'verified';
     return (
-      <main className="portal-auth-page"><header className="portal-masthead"><div className="portal-brand-lockup"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><div><strong>Property Intelligence</strong><span>Karnataka due diligence workspace</span></div></div><div className="portal-head-actions"><button type="button" className="portal-login-tab" onClick={()=>navigateAuth('login')}>Login</button><button type="button" className="portal-register-tab active" onClick={()=>navigateAuth('register')}>Register</button></div></header><section className="portal-auth-main">
-        <div className="portal-auth-card" style={{width:'100%',maxWidth:520,background:'#fff',borderRadius:16,padding:36,boxShadow:'0 25px 50px -12px rgba(0,0,0,.4)'}}>
-          <div className="portal-auth-card-brand"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><span>SECURE MEMBER ONBOARDING</span></div>
-          <div style={{display:'flex',gap:8,marginBottom:24}}>{['Account','Verify email','Verify phone','Sign in'].map((label,index)=>{const active=isVerified?3:isPhoneOtp?2:isOtp?1:0;return <div key={label} style={{flex:1,fontSize:10,fontWeight:700,color:index<=active?'#1d4ed8':'#94a3b8'}}><div style={{height:3,borderRadius:3,background:index<=active?'#2563eb':'#e2e8f0',marginBottom:7}}/>{index+1}. {label}</div>})}</div>
-          <h2 style={{margin:'0 0 6px',fontSize:22,color:'#0f172a'}}>{isVerified?'Account verified':isPhoneOtp?'Verify your phone':isOtp?'Verify your email':'Create your account'}</h2>
-          <p style={{margin:'0 0 22px',fontSize:13,color:'#64748b',lineHeight:1.5}}>{isVerified?'Registration is complete. Continue to the sign-in page using your new password.':isPhoneOtp?`Enter the six-digit SMS code sent to ${registerPhone}.`:isOtp?`Enter the six-digit email code sent to ${registerEmail}. The code expires in 10 minutes.`:'First-time users can add a phone number to enable SMS sign-in.'}</p>
-          {error&&<div style={{background:'#fef2f2',border:'1px solid #fecaca',color:'#991b1b',padding:'10px 12px',borderRadius:8,fontSize:12,marginBottom:16}}>{error}</div>}
-          {isVerified ? <button onClick={()=>{navigateAuth('login');}} style={{width:'100%',padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>Continue to Sign In <ArrowRight size={16} style={{verticalAlign:'middle',marginLeft:6}}/></button> : isPhoneOtp ? (
-            <form onSubmit={verifyPhoneOtp} style={{display:'grid',gap:15}}><label style={{fontSize:11,fontWeight:700,color:'#334155'}}>SIX-DIGIT SMS CODE<input autoFocus inputMode="numeric" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:7,padding:13,border:'1px solid #cbd5e1',borderRadius:8,fontSize:20,letterSpacing:8,textAlign:'center'}}/></label><button disabled={loading||otp.length!==6} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Verifying…':'Verify Phone and Finish'}</button></form>
-          ) : isOtp ? (
-            <form onSubmit={verifyOtp} style={{display:'grid',gap:15}}><label style={{fontSize:11,fontWeight:700,color:'#334155'}}>SIX-DIGIT OTP<input autoFocus inputMode="numeric" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:7,padding:13,border:'1px solid #cbd5e1',borderRadius:8,fontSize:20,letterSpacing:8,textAlign:'center'}}/></label><button disabled={loading||otp.length!==6} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Verifying…':'Verify and Activate Account'}</button><button type="button" onClick={()=>{navigateAuth('register');}} style={{border:0,background:'transparent',color:'#2563eb',cursor:'pointer'}}>Change registration details</button></form>
-          ) : (
-            <form onSubmit={requestOtp} style={{display:'grid',gap:14}} autoComplete="off">
-              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>FULL NAME<input value={registerName} onChange={e=>setRegisterName(e.target.value)} required minLength={2} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
-              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>WORK EMAIL<input type="email" value={registerEmail} onChange={e=>setRegisterEmail(e.target.value)} required autoComplete="off" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
-              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>PHONE NUMBER (OPTIONAL)<input type="tel" value={registerPhone} onChange={e=>setRegisterPhone(e.target.value)} placeholder="+14155552671" pattern="\+[1-9]\d{7,14}" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/><small style={{display:'block',marginTop:5,color:'#64748b',fontWeight:400}}>Include country code. We will verify email and phone separately.</small></label>
-              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>CREATE PASSWORD<input type="password" value={registerPassword} onChange={e=>setRegisterPassword(e.target.value)} required minLength={8} autoComplete="new-password" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/><small style={{display:'block',marginTop:5,color:'#64748b',fontWeight:400}}>Minimum 8 characters with uppercase, lowercase and a number.</small></label>
-              <label style={{fontSize:11,fontWeight:700,color:'#334155'}}>CONFIRM PASSWORD<input type="password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} required autoComplete="new-password" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:11,border:'1px solid #cbd5e1',borderRadius:8}}/></label>
-              <button disabled={loading} style={{padding:12,border:0,borderRadius:8,background:'#2563eb',color:'#fff',fontWeight:700,cursor:'pointer'}}>{loading?'Creating OTP…':'Register and Send OTP'}</button>
-              <button type="button" onClick={()=>{navigateAuth('login');}} style={{border:0,background:'transparent',color:'#2563eb',cursor:'pointer'}}>Already registered? Sign in</button>
-            </form>
-          )}
+      <main className="portal-auth-page portal-register-page"><header className="portal-masthead"><div className="portal-brand-lockup"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><div><strong>Property Intelligence</strong><span>Karnataka due diligence workspace</span></div></div><div className="portal-head-actions"><button type="button" className="portal-login-tab" onClick={()=>navigateAuth('login')}>Login</button><button type="button" className="portal-register-tab active" onClick={()=>navigateAuth('register')}>Register</button></div></header><section className="portal-auth-main portal-register-main">
+        <div className="registration-modal" role="dialog" aria-modal="true" aria-labelledby="registration-title">
+          <div className="registration-modal-header"><h1 id="registration-title">Create Account</h1><button type="button" className="registration-close" aria-label="Close registration" onClick={()=>navigateAuth('landing')}><X size={19}/></button></div>
+          <div className="registration-modal-content">
+            <div className="registration-steps" aria-label="Registration steps">{['Account details','Verify email','Sign in'].map((label,index)=>{const active=isVerified?2:isOtp?1:0;return <div className={index<=active?'active':''} key={label}><i/>{index+1}. {label}</div>})}</div>
+            <p className="registration-intro">{isVerified?'Registration is complete. Continue to sign in with your new password.':isOtp?`Enter the six-digit email code sent to ${registerEmail}. It expires in 10 minutes.`:'Enter your account and contact details, then verify your work email.'}</p>
+            {error&&<div className="registration-error" role="alert">{error}</div>}
+            {isVerified ? <div className="registration-complete"><CheckCircle2 size={34}/><p>Your email is verified. Your password is ready for sign-in.</p><button className="registration-primary" type="button" onClick={()=>navigateAuth('login')}>Continue to Sign In <ArrowRight size={16}/></button></div> : isOtp ? (
+              <form onSubmit={verifyOtp} className="registration-otp-form"><p className="registration-otp-time" role="timer" aria-live="polite">{timeLeft>0?`Code expires in ${Math.floor(timeLeft/60)}:${String(timeLeft%60).padStart(2,'0')}`:'Code expired. Request a new code.'}</p><label className="registration-field"><span>Six-digit email code*</span><input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" placeholder="000000"/></label><button className="registration-primary" disabled={loading||otp.length!==6||timeLeft===0}>{loading?<><span className="executive-spinner"/> Verifying…</>:'Verify and Activate Account'}</button><button className="registration-link-button" type="button" disabled={loading||resendSecondsLeft>0} onClick={()=>requestOtp()}>{resendSecondsLeft>0?`Resend code in ${resendSecondsLeft}s`:'Resend verification code'}</button><button className="registration-link-button" type="button" onClick={()=>{setOtp('');setError('');setMode('register');}}>Change registration details</button></form>
+            ) : (
+              <form onSubmit={requestOtp} className="registration-form" noValidate>
+                <div className="registration-person-grid">
+                  <label className="registration-field"><span>First Name*</span><input autoComplete="given-name" value={registerFirstName} onChange={e=>setRegisterFirstName(e.target.value)} {...registrationValidationProps('firstName')} required maxLength={80}/>{registrationErrorMessage('firstName')}</label>
+                  <label className="registration-field"><span>Middle Name <small>(optional)</small></span><input autoComplete="additional-name" value={registerMiddleName} onChange={e=>setRegisterMiddleName(e.target.value)} maxLength={80}/></label>
+                  <label className="registration-field"><span>Last Name*</span><input autoComplete="family-name" value={registerLastName} onChange={e=>setRegisterLastName(e.target.value)} {...registrationValidationProps('lastName')} required maxLength={80}/>{registrationErrorMessage('lastName')}</label>
+                  <label className="registration-field"><span>Gender*</span><select value={registerGender} onChange={e=>setRegisterGender(e.target.value)} {...registrationValidationProps('gender')} required><option value="">Select gender</option><option value="female">Female</option><option value="male">Male</option><option value="non_binary">Non-binary</option><option value="prefer_not_to_say">Prefer not to say</option></select>{registrationErrorMessage('gender')}</label>
+                </div>
+                <label className="registration-field registration-wide"><span>Mobile Number*</span><div className="registration-phone"><select aria-label="Country calling code" value={registerCountryCode} onChange={e=>setRegisterCountryCode(e.target.value)}><option value="+91">India (+91)</option><option value="+1">United States / Canada (+1)</option><option value="+44">United Kingdom (+44)</option><option value="+61">Australia (+61)</option><option value="+971">United Arab Emirates (+971)</option><option value="+65">Singapore (+65)</option></select><input type="tel" autoComplete="tel-national" inputMode="numeric" value={registerMobile} onChange={e=>setRegisterMobile(e.target.value.replace(/[^\d\s()-]/g,''))} {...registrationValidationProps('mobileNumber')} required aria-label="Mobile number" placeholder="Enter mobile number"/></div><small className="registration-note">Enter a number matching the selected country. Email verification does not verify this number.</small>{registrationErrorMessage('mobileNumber')}</label>
+                <label className="registration-field registration-wide"><span>Work Email*</span><input type="email" autoComplete="email" value={registerEmail} onChange={e=>setRegisterEmail(e.target.value)} {...registrationValidationProps('email')} required maxLength={255} placeholder="name@company.com"/>{registrationErrorMessage('email')}</label>
+                <div className="registration-two-col">
+                  <label className="registration-field"><span>Security Question*</span><select value={registerSecurityQuestion} onChange={e=>setRegisterSecurityQuestion(e.target.value)} {...registrationValidationProps('securityQuestion')} required><option value="">Select a question</option><option value="first_school">What was the name of your first school?</option><option value="first_employer">What was the name of your first employer?</option><option value="childhood_city">In what city did you grow up?</option><option value="favorite_teacher">What was the name of a favorite teacher?</option></select>{registrationErrorMessage('securityQuestion')}<small className="registration-note">Your answer is hashed, but is not currently used for sign-in or account recovery.</small></label>
+                  <label className="registration-field"><span>Answer*</span><input autoComplete="off" value={registerSecurityAnswer} onChange={e=>setRegisterSecurityAnswer(e.target.value)} {...registrationValidationProps('securityAnswer')} required minLength={2} maxLength={120}/>{registrationErrorMessage('securityAnswer')}<small className="registration-note">Your answer is hashed before storage.</small></label>
+                </div>
+                <fieldset className="registration-password-section"><legend>Password setup</legend><div className="registration-two-col"><label className="registration-field"><span>Create Password*</span><input type="password" autoComplete="new-password" value={registerPassword} onChange={e=>setRegisterPassword(e.target.value)} {...registrationValidationProps('password')} required minLength={8} maxLength={128}/>{registrationErrorMessage('password')}<small className="registration-note">At least 8 characters with uppercase, lowercase and a number.</small></label><label className="registration-field"><span>Confirm Password*</span><input type="password" autoComplete="new-password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} {...registrationValidationProps('confirmPassword')} required minLength={8} maxLength={128}/>{registrationErrorMessage('confirmPassword')}</label></div></fieldset>
+                <div className="registration-actions"><button type="reset" className="registration-reset" onClick={()=>{setRegisterFirstName('');setRegisterMiddleName('');setRegisterLastName('');setRegisterGender('');setRegisterCountryCode('+91');setRegisterMobile('');setRegisterEmail('');setRegisterSecurityQuestion('');setRegisterSecurityAnswer('');setRegisterPassword('');setConfirmPassword('');setRegistrationSubmitted(false);setRegistrationTouched({});setError('');}}><RotateCcw size={15}/> Reset</button><button className="registration-primary" disabled={loading}>{loading?<><span className="executive-spinner"/> Sending code…</>:'Register'}</button></div>
+                <p className="registration-login-prompt">Already a user? <button type="button" onClick={()=>navigateAuth('login')}>Login</button></p>
+              </form>
+            )}
+          </div>
         </div></section></main>
     );
   }
 
   const isOwner = currentAccount?.role === 'owner';
+  const SelectedLoginRoleIcon = loginRoleIcons[selectedRole as keyof typeof loginRoleIcons] || UserCheck;
 
-  if (mode === 'landing') return <PropertyIntelligenceLanding onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')}/>;
+  if (mode === 'landing') return <>
+    <PropertyIntelligenceLanding onLogin={()=>{setLoginModalClosing(false);setLoginCardOpen(true);}} onRegister={()=>navigateAuth('register')}/>
+    {loginCardOpen&&<div className={`landing-login-backdrop${loginModalClosing?' is-closing':''}`} onMouseDown={event=>{if(event.target===event.currentTarget)closeLandingLogin();}}>
+      <section className="landing-login-modal" role="dialog" aria-modal="true" aria-labelledby="landing-login-title">
+        <header className="landing-login-header"><span>Secure OJIX workspace access</span><button ref={loginModalCloseRef} type="button" aria-label="Close login" onClick={closeLandingLogin}><X size={20}/></button></header>
+        <div className="landing-login-layout">
+          <div className="landing-login-visual">
+            <img className="landing-login-logo" src="/assets/ojix-wordmark-header.png" alt="OJIX"/>
+            <span className="portal-eyebrow">PROPERTY INTELLIGENCE</span>
+            <h2>Welcome back.<br/><em>Continue your review.</em></h2>
+            <p>Access connected property records, review documents, and evidence-led due-diligence workflows.</p>
+            <img className="landing-login-property-image" src="/images/ojix-property-hero.webp" alt="Property documents, survey map and review workspace"/>
+            <div className="landing-login-trust"><ShieldCheck size={15}/><span>Backend-verified roles</span><i/><span>Email OTP protected</span></div>
+          </div>
+          <div className="landing-login-form-panel">
+            <div className="landing-login-tabs" role="tablist" aria-label="Account access"><button className="active" type="button" role="tab" aria-selected="true">Login</button><button type="button" role="tab" aria-selected="false" onClick={()=>navigateAuth('register')}>Register</button></div>
+            <span className="executive-secure-pill"><ShieldCheck size={13}/> {recoveryStep?'Account recovery':'Secure access'}</span>
+            <h1 id="landing-login-title">{recoveryStep==='request'?'Reset your password':recoveryStep==='reset'?'Enter recovery code':recoveryStep==='success'?'Password updated':'Sign in to OJIX'}</h1>
+            <p className="landing-login-intro">{recoveryStep==='request'?'Select your assigned role and enter the account email. We will send a one-time recovery code.':recoveryStep==='reset'?`Enter the six-digit code sent for ${email} and choose a new password.`:recoveryStep==='success'?'Your password was changed and existing sessions were securely revoked.':'Choose your assigned role, then continue with email verification.'}</p>
+            {(!recoveryStep||recoveryStep==='request')&&<div className="landing-modal-role-grid" aria-label="Choose assigned role">
+              {loginRoleOrder.map((value,index)=>{const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={`${index===0?'recommended ':''}${active?'selected':''}`} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} key={value}><RoleIcon size={14}/><span>{roleLoginCopy[value].label}</span>{index===0&&<em>Recommended</em>}</button>})}
+            </div>}
+            {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
+            {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
+            {!recoveryStep&&<form className="executive-login-form landing-modal-form" onSubmit={handleLogin}>
+              <div className="login-selected-role"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Signing in as</small><strong>{roleLoginCopy[selectedRole]?.label}</strong></span></div>
+              <label><span>Work email</span><div className="executive-input"><UserCheck/><input autoFocus type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
+              <label><span>Password</span><div className="executive-input"><Lock/><input type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff/>:<Eye/>}</button></div></label>
+              <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/>Code expires in 10 minutes</span><button type="button" onClick={openPasswordRecovery}>Forgot password?</button></div>
+              <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'||!selectedRole}>{loading?<><span className="executive-spinner"/>Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
+            </form>}
+            {recoveryStep==='request'&&<form className="executive-login-form landing-modal-form recovery-form" onSubmit={requestPasswordRecovery}>
+              <div className="login-selected-role"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Recovering access for</small><strong>{roleLoginCopy[selectedRole]?.label}</strong></span></div>
+              <label><span>Work email</span><div className="executive-input"><UserCheck/><input autoFocus type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
+              <button className="executive-submit" type="submit" disabled={loading||serviceStatus!=='ready'}>{loading?<><span className="executive-spinner"/>Sending recovery code…</>:<>Send recovery code <ArrowRight/></>}</button>
+              <button className="recovery-link" type="button" onClick={()=>{setRecoveryStep(null);setError('');}}>Back to sign in</button>
+            </form>}
+            {recoveryStep==='reset'&&<form className="executive-login-form landing-modal-form recovery-form" onSubmit={resetForgottenPassword}>
+              <p className="recovery-timer" role="timer" aria-live="polite">{recoveryTimeLeft>0?`Code expires in ${Math.floor(recoveryTimeLeft/60)}:${String(recoveryTimeLeft%60).padStart(2,'0')}`:'Code expired. Request a new code.'}</p>
+              <label><span>Six-digit recovery code</span><div className="executive-input"><Key/><input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={recoveryOtp} onChange={event=>setRecoveryOtp(event.target.value.replace(/\D/g,''))} required placeholder="000000"/></div></label>
+              <label><span>New password</span><div className="executive-input"><Lock/><input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={recoveryPassword} onChange={event=>setRecoveryPassword(event.target.value)} required/></div><small className="recovery-password-hint">At least 8 characters with uppercase, lowercase and a number.</small></label>
+              <label><span>Confirm new password</span><div className="executive-input"><Lock/><input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={recoveryConfirmPassword} onChange={event=>setRecoveryConfirmPassword(event.target.value)} required/></div></label>
+              <button className="executive-submit" type="submit" disabled={loading||recoveryOtp.length!==6||recoveryTimeLeft===0}>{loading?<><span className="executive-spinner"/>Updating password…</>:<>Set new password <ArrowRight/></>}</button>
+              <div className="recovery-actions"><button type="button" onClick={()=>{setRecoveryStep('request');setRecoveryOtp('');setError('');}}>Change details</button><button type="button" onClick={()=>requestPasswordRecovery()} disabled={loading}>Send a new code</button></div>
+            </form>}
+            {recoveryStep==='success'&&<div className="recovery-result">
+              <span className="recovery-result-status"><CheckCircle2 size={15}/> Password reset</span>
+              <h2>{roleLoginCopy[selectedRole]?.label} Password</h2>
+              <p>Your new password for <strong>{roleLoginCopy[selectedRole]?.label}</strong> is ready. It is shown only for this recovery session.</p>
+              <div className="recovery-password-card">
+                <span>New role password</span>
+                <strong>{recoveryPassword}</strong>
+                <button type="button" onClick={async()=>{await navigator.clipboard.writeText(recoveryPassword);setRecoveryPasswordCopied(true);}}>{recoveryPasswordCopied?'Password copied':'Copy Password'}</button>
+              </div>
+              <button className="executive-submit" type="button" onClick={()=>{setRecoveryStep(null);setPassword(recoveryPassword);setRecoveryPassword('');setRecoveryPasswordCopied(false);setError('');}}>Proceed to Sign In with this Password <ArrowRight/></button>
+            </div>}
+          </div>
+        </div>
+      </section>
+    </div>}
+  </>;
 
   if (mode === 'login') return (
     <main className="executive-login-shell">
@@ -680,129 +539,43 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
           <h1>Property intelligence.<br/><em>Clarity in every detail.</em></h1>
           <p>Organise property records, review documents and track due-diligence findings in one workspace. Keep important information connected to its source and ready for professional review.</p>
           <PropertyIntelligenceHero/>
-          <div className="portal-welcome-points" aria-label="Property intelligence capabilities">
-            <article><img src="/images/ojix-property-records.webp" alt="" width="1254" height="1254" loading="lazy" decoding="async"/><span>Property Records</span></article>
-            <article><img src="/images/ojix-document-review.webp" alt="" width="1254" height="1254" loading="lazy" decoding="async"/><span>Document Review</span></article>
-            <article><img src="/images/ojix-risk-assessment.webp" alt="" width="1254" height="1254" loading="lazy" decoding="async"/><span>Risk Assessment</span></article>
+          <div className="login-feature-grid" aria-label="Property intelligence capabilities">
+            <span><CheckCircle2 size={16}/><b>Verified Records</b></span>
+            <span><MapPinned size={16}/><b>Maps &amp; Spatial Data</b></span>
+            <span><FileSearch size={16}/><b>Document Analysis</b></span>
+            <span><ShieldCheck size={16}/><b>Secure Workspace</b></span>
           </div>
           <div className="login-review-note"><ShieldCheck size={17}/><span><strong>Built for careful review</strong><small>Important conclusions remain subject to qualified professional review.</small></span></div>
         </div>
         <div className="executive-login-access portal-login-card-wrap" aria-hidden={!loginCardOpen}>
         <div className="executive-access-card portal-login-card">
+          <div className="login-card-brand"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><span>PROPERTY INTELLIGENCE</span></div>
+          <div className="login-card-tabs" role="tablist" aria-label="Account access"><button type="button" className="active" role="tab" aria-selected="true">Login</button><button type="button" role="tab" aria-selected="false" onClick={()=>navigateAuth('register')}>Register</button></div>
           <div className="executive-access-topline"><span className="executive-secure-pill"><ShieldCheck size={13}/> Secure access</span><span className={`executive-service ${serviceStatus}`}><i/>{serviceStatus==='checking'?'Checking services':serviceStatus==='ready'?'Systems available':'Service unavailable'}</span></div>
-          <div className="executive-user-heading"><div><span>OJIX PROPERTY INTELLIGENCE</span><h2>{selectedRole?`${roleLoginCopy[selectedRole]?.label||'Member'} Sign In`:'Welcome back'}</h2><p>{selectedRole?roleLoginCopy[selectedRole]?.description:'Choose the role you need, then sign in to continue.'}</p></div></div>
+          <div className="executive-user-heading"><div><span>SECURE WORKSPACE ACCESS</span><h2>Welcome to OJIX</h2><p>{selectedRole?`${roleLoginCopy[selectedRole]?.label}: ${roleLoginCopy[selectedRole]?.description}`:'Choose your assigned role, then continue with email verification.'}</p></div></div>
 
           {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
           {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
 
-          <form className="executive-login-form" onSubmit={handleLogin} autoComplete="off">
-            <label>
-              <span>Which role do you want to access?</span>
-              <select
-                required
-                value={selectedRole}
-                onChange={event => {
-                  const roleKey = event.target.value;
-                  setSelectedRole(roleKey);
-                  setError('');
-                }}
-                style={{ width: '100%', height: 44, padding: '0 11px', border: '1px solid #d2dbe6', borderRadius: 8, background: '#fff', color: '#172334' }}
-              >
-                <option value="" disabled>Select your assigned role</option>
-                {Object.entries(roleLoginCopy).map(([value, copy]) => (
-                  <option key={value} value={value}>{copy.label}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Password</span>
-              <div className="executive-input">
-                <Lock />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete="new-password"
-                  value={password}
-                  onChange={event => setPassword(event.target.value)}
-                  required
-                  placeholder={selectedRole ? `Enter password for ${roleLoginCopy[selectedRole]?.label || 'role'}` : 'Enter assigned role password'}
-                />
-                <button type="button" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword(value => !value)}>
-                  {showPassword ? <EyeOff /> : <Eye />}
-                </button>
-              </div>
-            </label>
-            {!isLocalDemoLogin && (
-              <label>
-                <span>Send verification code by</span>
-                <select
-                  value={deliveryChannel}
-                  onChange={event => {
-                    setDeliveryChannel(event.target.value as 'email' | 'sms');
-                    setError('');
-                  }}
-                  style={{ width: '100%', height: 44, padding: '0 11px', border: '1px solid #d2dbe6', borderRadius: 8, background: '#fff', color: '#172334' }}
-                >
-                  <option value="email">Email</option>
-                  <option value="sms">SMS to verified phone</option>
-                </select>
-              </label>
-            )}
-            {deliveryChannel === 'email' ? (
-              <label>
-                <span>Work email</span>
-                <div className="executive-input">
-                  <UserCheck />
-                  <input
-                    type="email"
-                    autoComplete="off"
-                    value={email}
-                    onChange={event => setEmail(event.target.value)}
-                    required
-                    placeholder="name@organisation.com"
-                  />
-                </div>
-              </label>
-            ) : (
-              <label>
-                <span>Mobile Phone Number</span>
-                <div className="executive-input">
-                  <Smartphone />
-                  <input
-                    type="tel"
-                    autoComplete="off"
-                    value={loginPhone}
-                    onChange={event => setLoginPhone(event.target.value)}
-                    required
-                    placeholder="+91 99644 42538"
-                  />
-                </div>
-              </label>
-            )}
-            <div className="executive-form-meta">
-              <span className="executive-otp-hint"><ShieldCheck size={13} />Code expires in 10 minutes</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setForgotRole(selectedRole || 'super-admin');
-                  setForgotEmail(email || 'keerthana1234p@gmail.com');
-                  setError('');
-                  setMode('forgot-password');
-                }}
-              >
-                Forgot password?
-              </button>
-            </div>
-            <button className="executive-submit" type="submit" disabled={loading || serviceStatus === 'checking'}>
-              {loading ? (
-                <><span className="executive-spinner" />Sending verification code…</>
-              ) : (
-                <>Continue with {deliveryChannel === 'email' ? 'email' : 'SMS'} OTP <ArrowRight /></>
-              )}
-            </button>
+          <form className="executive-login-form" onSubmit={handleLogin}>
+            <div className="login-selected-role" aria-live="polite"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Signing in as</small><strong>{roleLoginCopy[selectedRole]?.label || 'Select your assigned role'}</strong></span><button type="button" onClick={()=>document.getElementById('login-role-picker')?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'})}>Change</button></div>
+            <label><span>Work email</span><div className="executive-input"><UserCheck/><input type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
+            <label><span>Password</span><div className="executive-input"><Lock/><input type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff/>:<Eye/>}</button></div></label>
+            <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/>Code expires in 10 minutes</span><button type="button" onClick={openPasswordRecovery}>Forgot password?</button></div>
+            <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'||!selectedRole}>{loading?<><span className="executive-spinner"/>Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
           </form>
 
         </div>
         </div>
+        <aside id="login-role-picker" className="login-role-panel" aria-label="Available workspace roles">
+          <div className="login-role-panel-head"><span>WORKSPACE ACCESS</span><h2>Select your role</h2><p>Your assigned role is verified after authentication.</p></div>
+          <div className="login-role-list">
+            {loginRoleOrder.map((value,index)=>{const copy=roleLoginCopy[value];const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={`${index===0?'featured ':''}${active?'selected':''}`} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} style={{'--login-role-delay':`${index*45}ms`} as React.CSSProperties} key={value}>
+              <span className="login-role-badge-icon"><RoleIcon size={15}/></span><span><strong>{copy.label}</strong><small>{copy.description}</small></span>{index===0&&<em>Recommended</em>}<ArrowRight size={14}/>
+            </button>})}
+          </div>
+          <p className="login-role-security"><ShieldCheck size={14}/> Selecting a role never changes account permissions.</p>
+        </aside>
       </section>
     </main>
   );

@@ -17,7 +17,7 @@
 ## Not yet implemented
 - [ ] Frontend sign-in flow and Firebase SDK token injection
 - [ ] Role-based permissions beyond workspace membership
-- [ ] Cloud Storage adapter / signed URLs / malware scanning
+- [~] Sandbox Supabase private-storage adapter and signed URLs implemented; malware scanning and production controls pending
 - [ ] Document AI OCR and extraction review UI
 - [ ] Cloud Tasks / Pub/Sub worker and dead-letter handling
 - [ ] Official government source connectors and provenance validation

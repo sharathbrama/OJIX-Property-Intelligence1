@@ -1,4 +1,5 @@
-import { ArrowDown, ArrowRight, BadgeCheck, Building2, ClipboardCheck, FileCheck2, FileSearch, Files, MapPinned, SearchCheck, ShieldCheck, Sparkles, Waypoints } from 'lucide-react';
+import type { CSSProperties } from 'react';
+import { ArrowDown, ArrowRight, BadgeCheck, BookOpenCheck, Building2, ClipboardCheck, Database, FileCheck2, FileSearch, Files, Headphones, KeyRound, MapPinned, SearchCheck, ShieldCheck, Sparkles, UserCog, UsersRound, Waypoints } from 'lucide-react';
 import { PropertyStoryVisual } from './PropertyStoryVisual';
 
 interface PropertyIntelligenceLandingProps {
@@ -22,6 +23,19 @@ const workflow = [
   { icon: BadgeCheck, number: '04', title: 'Complete human review', copy: 'Resolve open findings and prepare the review for qualified professional sign-off.' },
 ];
 
+const roles = [
+  { title: 'Workspace Owner', description: 'Oversee the workspace, its members, settings, and property matters.', icon: KeyRound, featured: true },
+  { title: 'Super Admin', description: 'Administer authorized platform-level operations and controls.', icon: ShieldCheck },
+  { title: 'Organization Admin', description: 'Coordinate organization members, workflows, and records.', icon: UserCog },
+  { title: 'Legal Reviewer', description: 'Review title evidence and due-diligence findings.', icon: BookOpenCheck },
+  { title: 'Evidence Analyst', description: 'Analyze property records and prepare assigned matters.', icon: SearchCheck },
+  { title: 'Document Operations', description: 'Manage document intake and processing queues.', icon: Files },
+  { title: 'Consultant', description: 'Review assigned client dossiers and supporting evidence.', icon: UsersRound },
+  { title: 'Support', description: 'Access authorized workspace diagnostics and assistance tools.', icon: Headphones },
+  { title: 'Data Steward', description: 'Maintain source data and reference records.', icon: Database },
+  { title: 'Viewer', description: 'Access approved read-only workspace records.', icon: FileCheck2 },
+];
+
 export function PropertyIntelligenceLanding({ onLogin, onRegister }: PropertyIntelligenceLandingProps) {
   const explore = () => document.getElementById('ojix-capabilities')?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
 
@@ -33,7 +47,7 @@ export function PropertyIntelligenceLanding({ onLogin, onRegister }: PropertyInt
           <span><strong>Property Intelligence</strong><small>Karnataka due diligence workspace</small></span>
         </a>
         <nav className="ojix-story-nav" aria-label="Main navigation">
-          <a href="#ojix-platform">Platform</a><a href="#ojix-capabilities">Capabilities</a><a href="#ojix-workflow">Review workflow</a>
+          <a href="#ojix-platform">Platform</a><a href="#ojix-roles">Roles</a><a href="#ojix-capabilities">Capabilities</a><a href="#ojix-workflow">Review workflow</a>
         </nav>
         <div className="ojix-story-actions"><button className="story-login-link" onClick={onLogin}>Login</button><button className="story-nav-cta" onClick={onRegister}>Get started <ArrowRight size={15}/></button></div>
       </header>
@@ -42,15 +56,30 @@ export function PropertyIntelligenceLanding({ onLogin, onRegister }: PropertyInt
         <div className="story-contours" aria-hidden="true"/>
         <div className="story-hero-inner">
           <div className="ojix-story-copy">
-            <span className="story-eyebrow"><i/> PROPERTY DUE DILIGENCE · KARNATAKA</span>
-            <h1>Every property detail.<br/><em>One clear picture.</em></h1>
-            <p>Bring property records, legal documents, land information, and due-diligence findings into one connected workspace.</p>
+            <span className="story-eyebrow story-hero-eyebrow"><i/> PROPERTY DUE DILIGENCE · KARNATAKA</span>
+            <h1><span>Every property detail.</span><br/><em>One clear picture.</em></h1>
+            <p className="story-hero-description">Bring property records, legal documents, land information, and due-diligence findings into one connected workspace.</p>
             <div className="story-hero-actions"><button className="story-primary" onClick={explore}>Explore the platform <ArrowDown size={16}/></button><button className="story-secondary" onClick={onLogin}>Login to workspace <ArrowRight size={16}/></button></div>
             <div className="story-assurance"><ShieldCheck size={16}/><span>Evidence-linked review</span><i/><span>Source status at a glance</span><i/><span>Human oversight</span></div>
           </div>
           <div className="story-hero-art-wrap"><PropertyStoryVisual/></div>
         </div>
         <div className="story-scroll-cue" aria-hidden="true"><span>ONE CONNECTED WORKSPACE</span><i/></div>
+      </section>
+
+      <section id="ojix-roles" className="ojix-roles-section">
+        <div className="story-section-head reveal-on-scroll"><span className="story-eyebrow">PURPOSE-BUILT WORKSPACE ACCESS</span><h2>One review workspace.<br/><em>Clear roles for every contributor.</em></h2><p>Each role enters the same evidence-led workflow with access aligned to its assigned responsibilities.</p></div>
+        <div className="story-role-grid">
+          {roles.map(({title,description,icon:Icon,featured},i) => <article className={`story-role-card reveal-on-scroll${featured ? ' story-role-featured' : ''}`} style={{'--story-delay':`${i*75}ms`} as CSSProperties} key={title}>
+            <div className="story-role-card-top">
+              <span className="story-role-icon"><Icon size={featured ? 24 : 20}/></span>
+              {featured && <span className="story-recommended">Recommended</span>}
+            </div>
+            <h3>{title}</h3><p>{description}</p>
+            <span className="story-role-arrow" aria-hidden="true"><ArrowRight size={16}/></span>
+            {featured && <div className="story-owner-illustration" aria-hidden="true"><span/><span/><Building2 size={32}/><i/></div>}
+          </article>)}
+        </div>
       </section>
 
       <section id="ojix-platform" className="ojix-product-showcase">
@@ -92,8 +121,7 @@ export function PropertyIntelligenceLanding({ onLogin, onRegister }: PropertyInt
         <div className="story-cta-actions"><button className="story-primary" onClick={onLogin}>Login to workspace <ArrowRight size={16}/></button><button className="story-secondary" onClick={onRegister}>Create an account</button></div>
       </section>
 
-      <footer className="ojix-story-footer"><a className="ojix-story-brand" href="#top"><img src="/assets/ojix-wordmark-header.png" alt="OJIX" width="256" height="80"/><span><strong>Property Intelligence</strong><small>Karnataka due diligence workspace</small></span></a><p>Structured property review, with evidence kept in view.</p><nav aria-label="Footer navigation"><a href="#ojix-platform">Platform</a><a href="#ojix-capabilities">Capabilities</a><a href="#ojix-workflow">Workflow</a><button onClick={onLogin}>Login <ArrowRight size={14}/></button></nav><small className="story-legal">OJIX supports document organisation and review workflows. It does not replace official records or qualified legal advice.</small></footer>
+      <footer className="ojix-story-footer reveal-on-scroll"><a className="ojix-story-brand" href="#top"><img src="/assets/ojix-wordmark-header.png" alt="OJIX" width="256" height="80"/><span><strong>Property Intelligence</strong><small>Karnataka due diligence workspace</small></span></a><p>Structured property review, with evidence kept in view.</p><nav aria-label="Footer navigation"><a href="#ojix-platform">Platform</a><a href="#ojix-roles">Roles</a><a href="#ojix-capabilities">Capabilities</a><a href="#ojix-workflow">Workflow</a><button onClick={onLogin}>Login <ArrowRight size={14}/></button></nav><small className="story-legal">OJIX supports document organisation and review workflows. It does not replace official records or qualified legal advice.</small></footer>
     </main>
   );
 }
-import type { CSSProperties } from 'react';
