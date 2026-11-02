@@ -57,8 +57,10 @@ test('SMTP OTP delivery uses the configured mock transport without logging or re
   assert.equal(sent?.to, 'recipient@example.com');
   assert.equal(sent?.from, 'OJIX <sender@example.com>');
   assert.equal(sent?.subject, 'Your OJIX secure sign-in code');
-  assert.match(String(sent?.html), /Code requested/);
-  assert.match(String(sent?.html), /Expires in 10 minutes/);
+  assert.match(String(sent?.html), /One-time security code/);
+  assert.match(String(sent?.html), /Automated System Notification/);
+  assert.match(String(sent?.html), /All Rights Reserved/);
+  assert.match(String(sent?.html), /expires in 10 minutes/i);
   assert.equal([...String(sent?.html).matchAll(/text-align:center">[0-9]<\/div>/g)].length, 6);
   assert.equal(String(sent?.html).includes('<Tester>'), false);
   assert.match(String(sent?.text), /123456/);

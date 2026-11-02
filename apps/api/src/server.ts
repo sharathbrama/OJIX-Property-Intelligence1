@@ -323,9 +323,10 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 const supportSessions = new Map<string, number>();
-const authSessions = new Map<string, { id:string; uid:string; email:string; name:string; role:string; tenantId:string; expiresAt:number }>();
+const authSessions = new Map<string, { id:string; uid:string; email:string; name:string; role:string; tenantId:string; expiresAt:number; lastActivityAt:number }>();
 const SUPPORT_SESSION_MS = 60 * 60 * 1000;
 const AUTH_SESSION_MS = 8 * 60 * 60 * 1000;
+const OWNER_INACTIVITY_EXPIRY_MS = 5 * 60_000 + 30_000;
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 30 * 1000;
 const OTP_MAX_REQUESTS_PER_WINDOW = 5;
@@ -349,6 +350,22 @@ async function deliverOtpEmail(email:string, name:string, otp:string, purpose:'l
   return { delivered:true, mode:'email' as const };
 }
 
+async function deliverOtpSms(phone:string, name:string, otp:string) {
+  const accountSid=process.env.TWILIO_ACCOUNT_SID?.trim();
+  const authToken=process.env.TWILIO_AUTH_TOKEN?.trim();
+  const from=process.env.TWILIO_FROM_NUMBER?.trim();
+  const messagingServiceSid=process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
+  if(!accountSid||!authToken||(!from&&!messagingServiceSid))throw new OtpDeliveryError('SMS OTP delivery is not configured. Add Twilio credentials and restart the API.');
+  const body=new URLSearchParams({To:phone,Body:`OJIX sign-in code for ${name}: ${otp}. It expires in 10 minutes. Never share this code.`});
+  if(messagingServiceSid)body.set('MessagingServiceSid',messagingServiceSid);else body.set('From',from!);
+  const response=await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,{method:'POST',headers:{Authorization:`Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,'Content-Type':'application/x-www-form-urlencoded'},body});
+  if(!response.ok)throw new OtpDeliveryError('The SMS verification code could not be delivered. Check the Twilio sender and account configuration.');
+  return {delivered:true,mode:'sms' as const};
+}
+
+const maskEmail=(value:string)=>{const[local,domain]=value.split('@');return `${local.slice(0,2)}${'*'.repeat(Math.max(2,local.length-2))}@${domain}`;};
+const maskPhone=(value:string)=>`${value.slice(0,Math.max(0,value.length-4)).replace(/\d/g,'•')}${value.slice(-4)}`;
+
 async function authGuard(req: Request, res: Response, next: NextFunction) {
   const authReq = req as AuthenticatedRequest;
   let identity: { uid: string; email?: string; name?: string } | null = null;
@@ -368,7 +385,7 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
     let session=authSessions.get(rawToken);
     if (!session && pool && rawToken.startsWith('ojix-')) {
       const restored=await pool.query(
-        `SELECT s.id,s.user_uid,s.tenant_id,s.expires_at,m.email,m.role,u.full_name
+        `SELECT s.id,s.user_uid,s.tenant_id,s.expires_at,s.last_activity_at,m.email,m.role,u.full_name
          FROM authentication_sessions s
          JOIN org_memberships m ON m.user_uid=s.user_uid AND m.organization_id=s.tenant_id AND m.status='active'
          LEFT JOIN user_accounts u ON u.id=s.user_uid
@@ -378,12 +395,13 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
       if (restored.rowCount) {
         const row=restored.rows[0];
         const dummy=DUMMY_ACCOUNTS.find(account=>account.uid===row.user_uid);
-        session={id:row.id,uid:row.user_uid,email:row.email||dummy?.email||'',name:row.full_name||dummy?.name||row.email||row.user_uid,role:row.role,tenantId:row.tenant_id,expiresAt:new Date(row.expires_at).getTime()};
+        session={id:row.id,uid:row.user_uid,email:row.email||dummy?.email||'',name:row.full_name||dummy?.name||row.email||row.user_uid,role:row.role,tenantId:row.tenant_id,expiresAt:new Date(row.expires_at).getTime(),lastActivityAt:new Date(row.last_activity_at).getTime()};
         authSessions.set(rawToken,session);
       }
     }
     if (session && session.expiresAt > Date.now()) {
-      if(pool){const durable=await pool.query('SELECT id FROM authentication_sessions WHERE id=? AND revoked_at IS NULL AND expires_at>NOW(6)',[session.id]);if(!durable.rowCount){authSessions.delete(rawToken);return res.status(401).json({error:'Session has been revoked or expired.'});}await pool.query('UPDATE authentication_sessions SET last_activity_at=NOW(6) WHERE id=?',[session.id]);}
+      if(session.role==='owner'&&Date.now()-session.lastActivityAt>OWNER_INACTIVITY_EXPIRY_MS){if(pool)await pool.query("UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason='Inactivity timeout' WHERE id=? AND revoked_at IS NULL",[session.uid,session.id]);authSessions.delete(rawToken);return res.status(401).json({error:'Your session has expired due to inactivity. Please log in again.',code:'SESSION_INACTIVITY_EXPIRED'});}
+      if(pool){const durable=await pool.query('SELECT id FROM authentication_sessions WHERE id=? AND revoked_at IS NULL AND expires_at>NOW(6)',[session.id]);if(!durable.rowCount){authSessions.delete(rawToken);return res.status(401).json({error:'Session has been revoked or expired.'});}if(session.role!=='owner')await pool.query('UPDATE authentication_sessions SET last_activity_at=NOW(6) WHERE id=?',[session.id]);}
       identity={uid:session.uid,email:session.email,name:session.name};
     }
     else if (session) authSessions.delete(rawToken);
@@ -522,6 +540,18 @@ function adminGuard(req: Request, res: Response, next: NextFunction) {
     return res.status(403).json({
       error: 'Administrator or Owner privileges required to modify workspace settings.',
       requiredRoles: ['owner', 'admin'],
+      currentRole: user?.role || 'viewer'
+    });
+  }
+  next();
+}
+
+function ownerGuard(req: Request, res: Response, next: NextFunction) {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user || user.role !== 'owner') {
+    return res.status(403).json({
+      error: 'Workspace Owner access is required.',
+      requiredRoles: ['owner'],
       currentRole: user?.role || 'viewer'
     });
   }
@@ -687,26 +717,28 @@ app.get('/api/auth/dummy-accounts', (_req, res) => {
   res.json({ accounts: DUMMY_ACCOUNTS });
 });
 
+const registrationNameSchema=z.string().trim().min(2,'Name must contain at least 2 characters.').max(50,'Name must be 50 characters or fewer.').regex(/^[\p{L}]+(?:[ '\-][\p{L}]+)*$/u,'Use letters, spaces, hyphens or apostrophes only.');
 const registrationSchema = z.object({
-  firstName: z.string({ required_error: 'Enter your first name.' }).trim().min(1, 'Enter your first name.').max(80, 'First name must be 80 characters or fewer.'),
-  middleName: z.string().trim().max(80).optional().default(''),
-  lastName: z.string({ required_error: 'Enter your last name.' }).trim().min(1, 'Enter your last name.').max(80, 'Last name must be 80 characters or fewer.'),
+  firstName: registrationNameSchema,
+  middleName: z.union([z.literal(''),registrationNameSchema]).optional().default(''),
+  lastName: registrationNameSchema,
   gender: z.enum(['female', 'male', 'non_binary', 'prefer_not_to_say'], { required_error: 'Select a gender option.', invalid_type_error: 'Select a valid gender option.' }),
   countryCode: z.enum(['+91', '+1', '+44', '+61', '+971', '+65'], { required_error: 'Select a country calling code.', invalid_type_error: 'Select a supported country calling code.' }),
-  mobileNumber: z.string({ required_error: 'Enter your mobile number.' }).regex(/^\d{7,10}$/, 'Enter a valid mobile number using digits only.'),
+  mobileNumber: z.string({ required_error: 'Enter your mobile number.' }).regex(/^\d{8,10}$/, 'Enter a valid mobile number using digits only.').refine(value=>!(/^(\d)\1+$/.test(value)),'Repeated-digit mobile numbers are not valid.'),
   securityQuestion: z.enum(['first_school', 'first_employer', 'childhood_city', 'favorite_teacher'], { required_error: 'Choose a security question.', invalid_type_error: 'Choose a valid security question.' }),
-  securityAnswer: z.string({ required_error: 'Enter an answer.' }).trim().min(2, 'Answer must contain at least 2 characters.').max(120, 'Answer must be 120 characters or fewer.'),
+  securityAnswer: z.string({ required_error: 'Enter an answer.' }).trim().min(3, 'Answer must contain at least 3 characters.').max(120, 'Answer must be 120 characters or fewer.'),
   email: z.string({ required_error: 'Enter your work email.' }).trim().email('Enter a valid work email, e.g. name@company.com.').regex(/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/, 'Use an email with a valid domain, such as name@company.com.').max(255, 'Email must be 255 characters or fewer.').transform(value => value.toLowerCase()),
   password: z.string({ required_error: 'Create a password.' }).min(8, 'Password must be at least 8 characters.').max(128, 'Password must be 128 characters or fewer.')
     .regex(/[A-Z]/, 'Password must contain an uppercase letter.')
     .regex(/[a-z]/, 'Password must contain a lowercase letter.')
     .regex(/[0-9]/, 'Password must contain a number.')
+    .regex(/[^A-Za-z0-9]/, 'Password must contain a special character.')
 });
 
 app.post('/api/auth/register/request-otp', loginOtpRequestRateLimit, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed = registrationSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration details.' });
+  if (!parsed.success) {const fieldErrors=parsed.error.issues.reduce<Record<string,string>>((errors,issue)=>{const field=String(issue.path[0]||'form');if(!errors[field])errors[field]=issue.message;return errors;},{});return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration details.',fieldErrors });}
   const { firstName, middleName, lastName, gender, countryCode, mobileNumber, securityQuestion, securityAnswer, email, password } = parsed.data;
   const phoneFormats: Record<string, RegExp> = {
     '+91': /^[6-9]\d{9}$/,
@@ -716,7 +748,7 @@ app.post('/api/auth/register/request-otp', loginOtpRequestRateLimit, asyncRoute(
     '+971': /^5[024568]\d{7}$/,
     '+65': /^[89]\d{7}$/,
   };
-  if (!phoneFormats[countryCode].test(mobileNumber)) return res.status(400).json({ error: 'Enter a valid mobile number for the selected country.' });
+  if (!phoneFormats[countryCode].test(mobileNumber)||/^(\d)\1+$/.test(mobileNumber)) return res.status(400).json({ error: 'Enter a valid mobile number for the selected country.',fieldErrors:{mobileNumber:'Enter a valid mobile number for the selected country.'} });
   const name = [firstName, middleName, lastName].filter(Boolean).join(' ');
   if (name.length > 160) return res.status(400).json({ error: 'The combined name must be 160 characters or fewer.' });
   const phoneE164 = `${countryCode}${mobileNumber}`;
@@ -864,23 +896,24 @@ app.post('/api/auth/forgot-password/reset', loginOtpVerifyRateLimit, asyncRoute(
 
 app.post('/api/auth/login/request-otp', loginOtpRequestRateLimit, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const parsed=z.object({email:z.string().trim().email().transform(value=>value.toLowerCase()),password:z.string().min(1).max(128),expectedRole:z.enum(['super-admin','owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional()}).safeParse(req.body);
+  const parsed=z.object({email:z.string().trim().email().transform(value=>value.toLowerCase()),password:z.string().min(1).max(128),expectedRole:z.enum(['super-admin','owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional(),deliveryChannel:z.enum(['email','sms']).default('email')}).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error:'Enter a valid email and password.' });
-  const {email,password,expectedRole}=parsed.data;
+  const {email,password,expectedRole,deliveryChannel}=parsed.data;
   const dummyCandidates=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.filter(account=>account.email.toLowerCase()===email):[];
   const hashesResult=dummyCandidates.length?await pool.query(`SELECT user_uid,password_hash FROM account_password_overrides WHERE user_uid IN (${dummyCandidates.map(()=>'?').join(',')})`,dummyCandidates.map(account=>account.uid)):{rows:[],rowCount:0};
   const demoHashes=new Map<string,string>(hashesResult.rows.map(row=>[String(row.user_uid),String(row.password_hash)]));
   const dummy=resolveDemoCredential(email,password,dummyCandidates,demoHashes);
   if(dummyCandidates.length&&!dummy&&expectedRole==='super-admin')return res.status(401).json({error:'Invalid email or password.'});
-  const registered=!dummy?await pool.query('SELECT id,email,full_name,password_hash,email_verified,status FROM user_accounts WHERE email=? LIMIT 1',[email]):{rowCount:0,rows:[]};
+  const registered=!dummy?await pool.query('SELECT id,email,full_name,password_hash,email_verified,status,phone_e164,phone_verified_at FROM user_accounts WHERE email=? LIMIT 1',[email]):{rowCount:0,rows:[]};
   if (!dummy&&!registered.rowCount) return res.status(401).json({ error:'Invalid email or password.' });
   const validPassword=dummy?true:verifyPassword(password,registered.rows[0].password_hash);
   if (!validPassword) return res.status(401).json({ error:'Invalid email or password.' });
   if (registered.rowCount&&(!registered.rows[0].email_verified||registered.rows[0].status!=='active')) return res.status(403).json({ error:'Complete account verification before signing in.' });
   const uid=dummy?.uid||registered.rows[0].id;
   const name=dummy?.name||registered.rows[0].full_name;
-  const deliveryTarget=dummy?(process.env.DEMO_OTP_EMAIL?.trim()||''):email;
-  if (!deliveryTarget) return res.status(400).json({error:'Email delivery address is not configured for this demo account.'});
+  const localSmsPreview=deliveryChannel==='sms'&&Boolean(dummy)&&process.env.NODE_ENV!=='production'&&process.env.DEV_AUTO_FILL_MOBILE_OTP==='true';
+  const deliveryTarget=deliveryChannel==='sms'?(dummy?(process.env.DEMO_OTP_PHONE?.trim()||(localSmsPreview?'local-preview':'')):(registered.rows[0]?.phone_verified_at?String(registered.rows[0].phone_e164||''):'')):(dummy?(process.env.DEMO_OTP_EMAIL?.trim()||''):email);
+  if(!deliveryTarget)return res.status(400).json({error:deliveryChannel==='sms'?'No verified mobile number is available for this account. Configure SMS delivery or use email.':'Email delivery address is not configured for this demo account.'});
   const membership=await pool.query('SELECT organization_id,status,role FROM org_memberships WHERE user_uid=? ORDER BY created_at LIMIT 1',[uid]);
   if (!membership.rowCount||membership.rows[0].status!=='active') return res.status(403).json({error:'This workspace membership is not active.'});
   const role=membership.rows[0].role;
@@ -902,10 +935,11 @@ app.post('/api/auth/login/request-otp', loginOtpRequestRateLimit, asyncRoute(asy
   const expiresAt=new Date(Date.now()+OTP_TTL_MS);
   await pool.query("INSERT INTO otp_challenges (id,email,account_uid,purpose,otp_hash,otp_salt,expires_at) VALUES (?,?,?, 'login',?,?,?)",[challengeId,email,uid,hashOtp(email,otp,otpSalt),otpSalt,expiresAt]);
   let delivery;
-  try { delivery=await deliverOtpEmail(deliveryTarget,name,otp,'login'); }
+  try { delivery=deliveryChannel==='sms'?(localSmsPreview?{delivered:true,mode:'sms' as const}:await deliverOtpSms(deliveryTarget,name,otp)):await deliverOtpEmail(deliveryTarget,name,otp,'login'); }
   catch (error) { await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?',[challengeId]); throw error; }
   await audit(uid,membership.rows[0].organization_id,'auth.login_otp_requested','user_account',uid,{email,deliveryMode:delivery.mode});
-  res.status(201).json({challengeId,email,deliveryTarget,expiresAt:expiresAt.toISOString(),resendAfterSeconds:OTP_RESEND_COOLDOWN_MS/1000,deliveryMode:delivery.mode,message:'A six-digit sign-in code was sent by email.'});
+  const maskedDeliveryTarget=localSmsPreview?'Local mobile preview':delivery.mode==='sms'?maskPhone(deliveryTarget):maskEmail(deliveryTarget);
+  res.status(201).json({challengeId,email,deliveryTarget:maskedDeliveryTarget,expiresAt:expiresAt.toISOString(),resendAfterSeconds:OTP_RESEND_COOLDOWN_MS/1000,deliveryMode:delivery.mode,developmentOtp:localSmsPreview?otp:undefined,message:localSmsPreview?'A development-only mobile code was generated and autofilled.':`A six-digit sign-in code was sent by ${delivery.mode==='sms'?'SMS':'email'}.`});
 }));
 
 app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async (req,res)=>{
@@ -937,7 +971,7 @@ app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async
   const token=`ojix-${crypto.randomBytes(32).toString('base64url')}`;
   const expiresAt=Date.now()+sessionMs;
   const sessionId=crypto.randomUUID();
-  authSessions.set(token,{id:sessionId,uid:target.uid,email:target.email,name:target.name,role,tenantId,expiresAt});
+  authSessions.set(token,{id:sessionId,uid:target.uid,email:target.email,name:target.name,role,tenantId,expiresAt,lastActivityAt:Date.now()});
   await pool.query('INSERT INTO authentication_sessions (id,tenant_id,user_uid,token_hash,expires_at,ip_address,user_agent) VALUES (?,?,?,?,?,?,?)',[sessionId,tenantId,target.uid,crypto.createHash('sha256').update(token).digest('hex'),new Date(expiresAt),req.ip||null,String(req.header('user-agent')||'').slice(0,500)||null]);
   if(role==='support') supportSessions.set(target.uid,expiresAt);
   await audit(target.uid,tenantId,'auth.login_otp_verified','user_account',target.uid,{email,role});
@@ -998,11 +1032,23 @@ app.post('/api/auth/change-password',authGuard,asyncRoute(async(req,res)=>{
   res.json({success:true,message:'Password changed successfully. Other sessions were revoked, and Super Admin can see the security event.'});
 }));
 
+app.post('/api/auth/activity', authGuard, asyncRoute(async(req, res) => {
+  const user=(req as AuthenticatedRequest).user;
+  const rawToken=(req.header('authorization')||'').replace(/^Bearer\s+/i,'').trim();
+  const session=rawToken?authSessions.get(rawToken):undefined;
+  if(!session||session.uid!==user?.uid)return res.status(401).json({error:'Session is no longer active.'});
+  session.lastActivityAt=Date.now();
+  authSessions.set(rawToken,session);
+  if(pool)await pool.query('UPDATE authentication_sessions SET last_activity_at=NOW(6) WHERE id=? AND revoked_at IS NULL',[session.id]);
+  res.json({success:true,lastActivityAt:new Date(session.lastActivityAt).toISOString()});
+}));
+
 app.post('/api/auth/logout', authGuard, (req, res) => {
   const user = (req as AuthenticatedRequest).user;
   const rawToken=(req.header('authorization')||'').replace(/^Bearer\s+/i,'').trim();
   const session=rawToken?authSessions.get(rawToken):undefined;
-  if(session&&pool)void pool.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE id=?',[user?.uid||'unknown','User logout',session.id]);
+  const reason=req.body?.reason==='inactivity'?'Inactivity timeout':'User logout';
+  if(session&&pool)void pool.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE id=?',[user?.uid||'unknown',reason,session.id]);
   if(rawToken) authSessions.delete(rawToken);
   if (user?.role === 'support') supportSessions.delete(user.uid);
   res.json({ success: true, message: 'Logged out successfully.' });
@@ -1191,6 +1237,126 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
       ocr: 'local_tesseract',
       gisLayers: spatialLayerStatus.rows.length ? 'loaded_verified_provenance' : 'unavailable'
     }
+  });
+}));
+
+app.get('/api/owner/dashboard', authGuard, ownerGuard, asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const tenantId = req.user?.tenantId;
+  const dateValue=(value:unknown,fallback:string)=>/^\d{4}-\d{2}-\d{2}$/.test(String(value||''))?String(value):fallback;
+  const defaultTo=new Date().toISOString().slice(0,10);
+  const defaultFrom=new Date(Date.now()-180*24*60*60_000).toISOString().slice(0,10);
+  const from=dateValue(req.query.from,defaultFrom),to=dateValue(req.query.to,defaultTo);
+  if(from>to)return res.status(400).json({error:'The analytics start date must be on or before the end date.'});
+  const [metrics, workflow, recentFindings, workload, reports, activity, evidenceSources] = await Promise.all([
+    pool.query(`SELECT
+      COUNT(*) AS total_matters,
+      SUM(CASE WHEN p.status IN ('draft','documents_pending','in_review','clarification_required','ready_for_review','approved') AND p.archived_at IS NULL THEN 1 ELSE 0 END) AS active_reviews,
+      SUM(CASE WHEN p.status='ready_for_review' THEN 1 ELSE 0 END) AS ready_for_legal_review,
+      (SELECT COUNT(*) FROM documents d WHERE d.tenant_id=? AND d.governance_status='active' AND (d.manual_review_status IN ('pending','required') OR d.processing_status<>'completed')) AS documents_requiring_review,
+      SUM(CASE WHEN p.due_date<CURDATE() AND p.status NOT IN ('complete','closed','archived') THEN 1 ELSE 0 END) AS overdue_tasks
+      FROM properties p WHERE p.tenant_id=?`, [tenantId, tenantId]),
+    pool.query(`SELECT p.*,
+      (SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') AS document_count,
+      (SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active' AND (d.manual_review_status IN ('pending','required') OR d.processing_status<>'completed')) AS pending_document_reviews,
+      COALESCE((SELECT f.severity FROM risk_findings f WHERE f.property_id=p.id AND f.tenant_id=p.tenant_id ORDER BY FIELD(f.severity,'critical','high','medium','low','unverified') LIMIT 1),'unverified') AS risk_level,
+      CASE WHEN p.latitude IS NOT NULL AND p.longitude IS NOT NULL AND LOWER(COALESCE(p.coordinate_source,'')) NOT LIKE '%demo%' AND LOWER(COALESCE(p.coordinate_source,'')) NOT LIKE '%synthetic%' THEN 1 ELSE 0 END AS coordinates_verified,
+      ((CASE WHEN p.survey_number='' AND p.property_identifier='' THEN 1 ELSE 0 END) +
+       (CASE WHEN p.extent='' THEN 1 ELSE 0 END) +
+       (CASE WHEN p.latitude IS NULL OR p.longitude IS NULL THEN 1 ELSE 0 END) +
+       (CASE WHEN NOT EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') THEN 1 ELSE 0 END)) AS missing_evidence,
+      CASE
+        WHEN p.status='ready_for_review' THEN 'Legal review'
+        WHEN p.status='approved' THEN 'Report submission'
+        WHEN p.status='complete' THEN 'Completed'
+        WHEN p.status='clarification_required' THEN 'Clarification'
+        WHEN p.status='documents_pending' THEN 'Document intake'
+        ELSE 'Evidence review'
+      END AS review_stage,
+      CASE
+        WHEN p.due_date<CURDATE() AND p.status NOT IN ('complete','closed','archived') THEN 'Resolve overdue task'
+        WHEN p.status='ready_for_review' THEN 'Complete legal review'
+        WHEN p.status='approved' THEN 'Prepare final submission'
+        WHEN NOT EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') THEN 'Upload source evidence'
+        WHEN EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active' AND (d.manual_review_status IN ('pending','required') OR d.processing_status<>'completed')) THEN 'Review pending documents'
+        WHEN p.assigned_lawyer_uid='' THEN 'Assign Legal Reviewer'
+        ELSE 'Continue review'
+      END AS next_action
+      FROM properties p WHERE p.tenant_id=? AND p.archived_at IS NULL
+      ORDER BY (p.due_date<CURDATE() AND p.status NOT IN ('complete','closed','archived')) DESC,
+        FIELD(p.workflow_priority,'urgent','high','normal','low'), p.due_date IS NULL, p.due_date, p.updated_at DESC
+      LIMIT 100`, [tenantId]),
+    pool.query(`SELECT f.id,f.property_id,f.title,f.severity,f.evidence_status,f.created_at,p.name AS property_name,p.application_number
+      FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id
+      WHERE f.tenant_id=? ORDER BY f.created_at DESC LIMIT 6`, [tenantId]),
+    pool.query(`SELECT m.user_uid,m.email,m.role,COALESCE(u.full_name,m.email,m.user_uid) AS name,
+      CASE m.role
+        WHEN 'lawyer' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_lawyer_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
+        WHEN 'analyst' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_analyst_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
+        WHEN 'operations' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_operations_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
+        ELSE 0 END AS assigned_matters,
+      CASE m.role
+        WHEN 'lawyer' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_lawyer_uid=m.user_uid AND p.status='ready_for_review')
+        WHEN 'analyst' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_analyst_uid=m.user_uid AND p.status IN ('documents_pending','in_review','clarification_required'))
+        WHEN 'operations' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_operations_uid=m.user_uid AND p.status='documents_pending')
+        ELSE 0 END AS pending_reviews,
+      CASE m.role
+        WHEN 'lawyer' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_lawyer_uid=m.user_uid AND p.status='complete')
+        WHEN 'analyst' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_analyst_uid=m.user_uid AND p.status='complete')
+        WHEN 'operations' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_operations_uid=m.user_uid AND p.status='complete')
+        ELSE 0 END AS completed_tasks
+      FROM org_memberships m LEFT JOIN user_accounts u ON u.id=m.user_uid
+      WHERE m.organization_id=? AND m.status='active' AND m.role IN ('lawyer','analyst','operations')
+      ORDER BY assigned_matters DESC,m.role,name LIMIT 12`, [tenantId]),
+    pool.query(`SELECT p.id AS property_id,p.application_number,p.name AS property_name,p.status,p.assigned_lawyer_uid AS assigned_owner,p.due_date,p.updated_at,
+      CASE WHEN p.status='ready_for_review' THEN 'Review required' WHEN p.status='approved' THEN 'Submission required' ELSE 'Report action' END AS action
+      FROM properties p WHERE p.tenant_id=? AND p.status IN ('ready_for_review','approved') AND p.archived_at IS NULL
+      ORDER BY p.due_date IS NULL,p.due_date,p.updated_at DESC LIMIT 6`, [tenantId]),
+    pool.query(`SELECT a.id,a.actor_uid,a.action,a.entity_type,a.entity_id,a.created_at,COALESCE(u.full_name,m.email,a.actor_uid) AS actor_name
+      FROM audit_events a
+      LEFT JOIN user_accounts u ON u.id=a.actor_uid
+      LEFT JOIN org_memberships m ON m.organization_id=a.tenant_id AND m.user_uid=a.actor_uid
+      WHERE a.tenant_id=? AND a.action IN ('property.created','document.uploaded','document.fields_overridden','property.workflow_updated','report.snapshot_created','title_event.reviewed')
+      ORDER BY a.created_at DESC LIMIT 8`, [tenantId]),
+    pool.query(`SELECT
+      (SELECT COUNT(DISTINCT source_name) FROM rtc_lookups WHERE tenant_id=? AND status='completed') AS connected_sources,
+      ((SELECT COUNT(*) FROM rtc_lookups WHERE tenant_id=? AND verification_status='source_matched') +
+       (SELECT COUNT(*) FROM documents WHERE tenant_id=? AND governance_status='active' AND manual_review_status='completed')) AS verification_completed,
+      ((SELECT COUNT(*) FROM rtc_lookups WHERE tenant_id=? AND verification_status='unverified') +
+       (SELECT COUNT(*) FROM documents WHERE tenant_id=? AND governance_status='active' AND manual_review_status IN ('pending','required'))) AS verification_pending,
+      ((SELECT COUNT(*) FROM rtc_lookups WHERE tenant_id=? AND (verification_status='source_mismatch' OR status='failed')) +
+       (SELECT COUNT(*) FROM documents WHERE tenant_id=? AND governance_status IN ('rejected','quarantined'))) AS failed_verification,
+      (SELECT MAX(COALESCE(retrieved_at,updated_at,created_at)) FROM rtc_lookups WHERE tenant_id=?) AS last_synchronization`,
+      [tenantId,tenantId,tenantId,tenantId,tenantId,tenantId,tenantId,tenantId])
+  ]);
+  const [mattersByStatus,monthlyTrends,riskSeverity,taskComparison]=await Promise.all([
+    pool.query(`SELECT status AS label,COUNT(*) AS value FROM properties WHERE tenant_id=? AND DATE(created_at) BETWEEN ? AND ? GROUP BY status ORDER BY value DESC`,[tenantId,from,to]),
+    pool.query(`SELECT DATE_FORMAT(created_at,'%Y-%m') AS month,COUNT(*) AS created,
+      SUM(CASE WHEN status IN ('approved','complete','closed') THEN 1 ELSE 0 END) AS completed
+      FROM properties WHERE tenant_id=? AND DATE(created_at) BETWEEN ? AND ? GROUP BY DATE_FORMAT(created_at,'%Y-%m') ORDER BY month`,[tenantId,from,to]),
+    pool.query(`SELECT f.severity AS label,COUNT(*) AS value FROM risk_findings f WHERE f.tenant_id=? AND DATE(f.created_at) BETWEEN ? AND ? GROUP BY f.severity ORDER BY value DESC`,[tenantId,from,to]),
+    pool.query(`SELECT
+      SUM(CASE WHEN status IN ('complete','closed') THEN 1 ELSE 0 END) AS completed,
+      SUM(CASE WHEN status NOT IN ('complete','closed','archived') THEN 1 ELSE 0 END) AS pending
+      FROM properties WHERE tenant_id=? AND DATE(created_at) BETWEEN ? AND ?`,[tenantId,from,to])
+  ]);
+  const metricRow=metrics.rows[0]||{};
+  res.json({
+    metrics:Object.fromEntries(Object.entries(metricRow).map(([key,value])=>[key,Number(value||0)])),
+    workflow:workflow.rows,
+    pendingActions:[
+      {id:'documents',label:'Pending document reviews',count:Number(metricRow.documents_requiring_review||0),priority:Number(metricRow.documents_requiring_review||0)>0?'high':'normal',status:Number(metricRow.documents_requiring_review||0)>0?'Action required':'Clear',nextAction:'Review documents',target:'all-documents'},
+      {id:'approval',label:'Matters awaiting approval',count:Number(metricRow.ready_for_legal_review||0),priority:Number(metricRow.ready_for_legal_review||0)>0?'high':'normal',status:Number(metricRow.ready_for_legal_review||0)>0?'Pending':'Clear',nextAction:'Open matters',target:'properties'},
+      {id:'evidence',label:'Missing evidence',count:Number(workflow.rows.reduce((sum:number,item:any)=>sum+Number(item.missing_evidence||0),0)),priority:'high',status:'Review',nextAction:'Inspect workflow',target:'properties'},
+      {id:'overdue',label:'Overdue tasks',count:Number(metricRow.overdue_tasks||0),priority:Number(metricRow.overdue_tasks||0)>0?'urgent':'normal',status:Number(metricRow.overdue_tasks||0)>0?'Overdue':'Clear',nextAction:'Resolve tasks',target:'properties'},
+      {id:'legal',label:'Pending legal reviews',count:Number(metricRow.ready_for_legal_review||0),priority:Number(metricRow.ready_for_legal_review||0)>0?'high':'normal',status:Number(metricRow.ready_for_legal_review||0)>0?'Waiting':'Clear',nextAction:'Review queue',target:'all-findings'}
+    ],
+    recentFindings:recentFindings.rows,
+    teamWorkload:workload.rows,
+    reports:reports.rows,
+    recentActivity:activity.rows,
+    evidenceSources:evidenceSources.rows[0]||{},
+    analytics:{from,to,mattersByStatus:mattersByStatus.rows,monthlyTrends:monthlyTrends.rows,riskSeverity:riskSeverity.rows,taskComparison:taskComparison.rows[0]||{pending:0,completed:0}}
   });
 }));
 
@@ -3034,19 +3200,27 @@ app.get('/api/super-admin/overview',authGuard,superAdminGuard,asyncRoute(async(_
   ]);
   res.json({organizations:organizations.rows[0],members:members.rows[0],properties:properties.rows[0],documents:documents.rows[0],sessions:sessions.rows[0],findings:findings.rows[0],reviews:reviews.rows[0],pendingDocuments:pendingDocuments.rows[0],health:{database:services.rowCount?'connected':'unavailable'}});
 }));
-app.get('/api/super-admin/organizations',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+app.get('/api/super-admin/organizations',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const q=pageSchema.safeParse(req.query);if(!q.success)return res.status(400).json({error:'Invalid organization filters.'});
+  const {page,limit,search}=q.data,like=`%${search}%`;
+  const count=await pool!.query(`SELECT COUNT(*) total FROM organizations o WHERE ?='' OR o.name LIKE ? OR o.slug LIKE ? OR o.id LIKE ?`,[search,like,like,like]);
   const result=await pool!.query(`SELECT o.id,o.name,o.slug,o.created_at,
     (SELECT COUNT(*) FROM org_memberships m WHERE m.organization_id=o.id) member_count,
     (SELECT COUNT(*) FROM org_memberships m WHERE m.organization_id=o.id AND m.status='active') active_member_count,
     (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=o.id) property_count
-    FROM organizations o ORDER BY o.created_at DESC LIMIT 500`);
-  res.json({items:result.rows});
+    FROM organizations o WHERE ?='' OR o.name LIKE ? OR o.slug LIKE ? OR o.id LIKE ? ORDER BY o.created_at DESC LIMIT ? OFFSET ?`,[search,like,like,like,limit,(page-1)*limit]);
+  res.json({items:result.rows,page,limit,total:Number(count.rows[0]?.total||0)});
 }));
-app.get('/api/super-admin/members',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+app.get('/api/super-admin/members',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const q=pageSchema.safeParse(req.query);if(!q.success)return res.status(400).json({error:'Invalid member filters.'});
+  const {page,limit,search}=q.data,like=`%${search}%`;
+  const filter=`(?='' OR m.email LIKE ? OR m.user_uid LIKE ? OR m.role LIKE ? OR m.status LIKE ? OR o.name LIKE ? OR u.full_name LIKE ?)`;
+  const params=[search,like,like,like,like,like,like];
+  const count=await pool!.query(`SELECT COUNT(*) total FROM org_memberships m JOIN organizations o ON o.id=m.organization_id LEFT JOIN user_accounts u ON u.id=m.user_uid WHERE ${filter}`,params);
   const result=await pool!.query(`SELECT m.id,m.organization_id,m.user_uid,m.email,m.role,m.status,m.created_at,o.name organization_name,u.full_name,u.last_login_at
     FROM org_memberships m JOIN organizations o ON o.id=m.organization_id LEFT JOIN user_accounts u ON u.id=m.user_uid
-    ORDER BY m.created_at DESC LIMIT 2000`);
-  res.json({items:result.rows});
+    WHERE ${filter} ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,[...params,limit,(page-1)*limit]);
+  res.json({items:result.rows,page,limit,total:Number(count.rows[0]?.total||0)});
 }));
 app.patch('/api/super-admin/members/:id',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
   const normalizeChoice=(value:unknown)=>typeof value==='string'?value.trim().toLowerCase().replace(/[\s-]+/g,'_'):value;
@@ -3070,12 +3244,17 @@ app.patch('/api/super-admin/members/:id',authGuard,superAdminGuard,asyncRoute(as
     await conn.commit();res.json({success:true});
   }catch(error){await conn.rollback();throw error;}finally{conn.release();}
 }));
-app.get('/api/super-admin/sessions',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+app.get('/api/super-admin/sessions',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const q=pageSchema.safeParse(req.query);if(!q.success)return res.status(400).json({error:'Invalid session filters.'});
+  const {page,limit,search}=q.data,like=`%${search}%`;
+  const filter=`(?='' OR s.user_uid LIKE ? OR s.ip_address LIKE ? OR m.email LIKE ? OR m.role LIKE ? OR o.name LIKE ?)`;
+  const params=[search,like,like,like,like,like];
+  const count=await pool!.query(`SELECT COUNT(*) total FROM authentication_sessions s LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid LEFT JOIN organizations o ON o.id=s.tenant_id WHERE ${filter}`,params);
   const result=await pool!.query(`SELECT s.id,s.tenant_id,s.user_uid,s.created_at,s.last_activity_at,s.expires_at,s.revoked_at,s.ip_address,s.user_agent,
     m.email,m.role,o.name organization_name FROM authentication_sessions s
     LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid
-    LEFT JOIN organizations o ON o.id=s.tenant_id ORDER BY s.created_at DESC LIMIT 500`);
-  res.json({items:result.rows});
+    LEFT JOIN organizations o ON o.id=s.tenant_id WHERE ${filter} ORDER BY s.created_at DESC LIMIT ? OFFSET ?`,[...params,limit,(page-1)*limit]);
+  res.json({items:result.rows,page,limit,total:Number(count.rows[0]?.total||0)});
 }));
 app.delete('/api/super-admin/sessions/:id',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
   const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A session revocation reason is required.'});
@@ -3085,10 +3264,15 @@ app.delete('/api/super-admin/sessions/:id',authGuard,superAdminGuard,asyncRoute(
   await audit(req.user?.uid||'unknown',session.tenant_id,'super_admin.session_revoked','authentication_session',session.id,{userUid:session.user_uid,reason:parsed.data.reason});
   res.json({success:true});
 }));
-app.get('/api/super-admin/audit',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+app.get('/api/super-admin/audit',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const q=pageSchema.safeParse(req.query);if(!q.success)return res.status(400).json({error:'Invalid audit filters.'});
+  const {page,limit,search}=q.data,like=`%${search}%`;
+  const filter=`(?='' OR a.actor_uid LIKE ? OR a.action LIKE ? OR a.entity_type LIKE ? OR a.entity_id LIKE ? OR o.name LIKE ?)`;
+  const params=[search,like,like,like,like,like];
+  const count=await pool!.query(`SELECT COUNT(*) total FROM audit_events a LEFT JOIN organizations o ON o.id=a.tenant_id WHERE ${filter}`,params);
   const result=await pool!.query(`SELECT a.id,a.tenant_id,a.actor_uid,a.action,a.entity_type,a.entity_id,a.details,a.created_at,o.name organization_name
-    FROM audit_events a LEFT JOIN organizations o ON o.id=a.tenant_id ORDER BY a.created_at DESC LIMIT 500`);
-  res.json({items:result.rows});
+    FROM audit_events a LEFT JOIN organizations o ON o.id=a.tenant_id WHERE ${filter} ORDER BY a.created_at DESC LIMIT ? OFFSET ?`,[...params,limit,(page-1)*limit]);
+  res.json({items:result.rows,page,limit,total:Number(count.rows[0]?.total||0)});
 }));
 
 app.use('/api/admin',(req,res,next)=>{

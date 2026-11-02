@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, X, RotateCcw, Crown, Settings2, Scale, SearchCheck, Files, BriefcaseBusiness, Headphones, Database } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, X, RotateCcw, Crown, Settings2, Scale, SearchCheck, Files, BriefcaseBusiness, Headphones, Database, Mail, Smartphone } from 'lucide-react';
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
 import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
 import type { UserAccount, UserRole } from '../types';
@@ -27,8 +27,11 @@ const isValidRegistrationPhone = (countryCode: string, digits: string) => {
     '+971': /^5[024568]\d{7}$/,
     '+65': /^[89]\d{7}$/,
   };
-  return Boolean(formats[countryCode]?.test(digits));
+  return Boolean(formats[countryCode]?.test(digits)) && !/^(\d)\1+$/.test(digits);
 };
+const validPersonName=(value:string,optional=false)=>{const normalized=value.trim().replace(/\s+/g,' ');if(optional&&!normalized)return true;return normalized.length>=2&&normalized.length<=50&&/^[\p{L}]+(?:[ '\-][\p{L}]+)*$/u.test(normalized);};
+const sanitizePersonNameInput=(value:string)=>value.replace(/[^\p{L} '\-]/gu,'').replace(/\s{2,}/g,' ').slice(0,50);
+const formatRegistrationPhone=(countryCode:string,value:string)=>{const digits=value.replace(/\D/g,'').slice(0,countryCode==='+91'||countryCode==='+1'?10:15);if(countryCode==='+91')return digits.replace(/(\d{5})(?=\d)/,'$1 ');if(countryCode==='+1')return digits.replace(/(\d{3})(\d{0,3})(\d{0,4})/,(_,a,b,c)=>[a,b,c].filter(Boolean).join(' '));return digits.replace(/(\d{3})(?=\d)/g,'$1 ').trim();};
 
 export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
   const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
@@ -59,11 +62,16 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const [confirmPassword, setConfirmPassword] = useState('');
   const [registrationSubmitted, setRegistrationSubmitted] = useState(false);
   const [registrationTouched, setRegistrationTouched] = useState<Record<string, boolean>>({});
+  const registrationFormRef=useRef<HTMLFormElement>(null);
+  const [showRegisterPassword,setShowRegisterPassword]=useState(false);
+  const [showRegisterConfirmPassword,setShowRegisterConfirmPassword]=useState(false);
   const [otp, setOtp] = useState('');
   const [challengeId, setChallengeId] = useState('');
   const [challengeRole, setChallengeRole] = useState('');
   const [selectedRole, setSelectedRole] = useState(expectedRole || 'owner');
   const [otpDeliveryTarget, setOtpDeliveryTarget] = useState('');
+  const [otpDeliveryMode,setOtpDeliveryMode]=useState<'email'|'sms'>('email');
+  const [developmentOtpAutofilled,setDevelopmentOtpAutofilled]=useState(false);
   const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
   const [timeLeft, setTimeLeft] = useState(600);
   const [resendAvailableAt, setResendAvailableAt] = useState<number | null>(null);
@@ -82,12 +90,14 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const registrationErrorFor = (field: string) => {
     const emailPattern = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
     switch (field) {
-      case 'firstName': return registerFirstName.trim() ? '' : 'Enter your first name.';
-      case 'lastName': return registerLastName.trim() ? '' : 'Enter your last name.';
+      case 'firstName': return validPersonName(registerFirstName) ? '' : 'Use 2–50 letters; spaces, hyphens and apostrophes are allowed.';
+      case 'middleName': return validPersonName(registerMiddleName,true) ? '' : 'Use 2–50 letters; spaces, hyphens and apostrophes are allowed.';
+      case 'lastName': return validPersonName(registerLastName) ? '' : 'Use 2–50 letters; spaces, hyphens and apostrophes are allowed.';
       case 'gender': return registerGender ? '' : 'Select a gender option.';
       case 'mobileNumber': {
         const digits = registerMobile.replace(/\D/g, '');
         if (!digits) return 'Enter your mobile number.';
+        if (/^(\d)\1+$/.test(digits)) return 'Repeated-digit mobile numbers are not valid.';
         if (isValidRegistrationPhone(registerCountryCode, digits)) return '';
         return registerCountryCode === '+91'
           ? 'Enter 10 digits. Indian mobile numbers start with 6, 7, 8, or 9.'
@@ -95,16 +105,18 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       }
       case 'email':
         if (!registerEmail.trim()) return 'Enter your work email.';
-        return emailPattern.test(registerEmail.trim()) ? '' : 'Use a valid email such as name@company.com.';
+        return emailPattern.test(registerEmail.trim()) ? '' : 'Use a complete email such as name@company.com.';
       case 'securityQuestion': return registerSecurityQuestion ? '' : 'Choose a security question.';
       case 'securityAnswer':
         if (!registerSecurityAnswer.trim()) return 'Enter an answer.';
-        return registerSecurityAnswer.trim().length >= 2 ? '' : 'Answer must contain at least 2 characters.';
+        if(registerSecurityAnswer.trim().length<3)return 'Answer must contain at least 3 characters.';
+        return registerSecurityAnswer.trim().length<=120?'':'Answer must be 120 characters or fewer.';
       case 'password':
         if (registerPassword.length < 8) return 'Use at least 8 characters.';
         if (!/[A-Z]/.test(registerPassword)) return 'Add at least one uppercase letter.';
         if (!/[a-z]/.test(registerPassword)) return 'Add at least one lowercase letter.';
-        return /[0-9]/.test(registerPassword) ? '' : 'Add at least one number.';
+        if(!/[0-9]/.test(registerPassword))return 'Add at least one number.';
+        return /[^A-Za-z0-9]/.test(registerPassword)?'':'Add at least one special character.';
       case 'confirmPassword':
         if (!confirmPassword) return 'Confirm your password.';
         return confirmPassword === registerPassword ? '' : 'Passwords do not match.';
@@ -118,6 +130,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     return {
       onBlur: () => setRegistrationTouched(current => ({ ...current, [field]: true })),
       'aria-invalid': Boolean(message),
+      'data-valid': registrationTouched[field]&&!message?'true':undefined,
       'aria-describedby': message ? `registration-${field}-error` : undefined,
     };
   };
@@ -261,18 +274,17 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     setError('');
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const requestLoginOtp = async (deliveryChannel:'email'|'sms',e?:React.SyntheticEvent) => {
+    e?.preventDefault();
     setLoading(true);
     setError('');
 
     try {
-      const normalizedEmail = email.trim().toLowerCase();
       const requestedRole = selectedRole;
       const res = await fetch(`${apiUrl}/api/auth/login/request-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, expectedRole:requestedRole })
+        body: JSON.stringify({ email, password, expectedRole:requestedRole, deliveryChannel })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -284,9 +296,11 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       setChallengeId(data.challengeId);
       setChallengeRole(requestedRole);
       setOtpDeliveryTarget(data.deliveryTarget || email);
+      setOtpDeliveryMode(data.deliveryMode==='sms'?'sms':'email');
       setOtpExpiresAt(data.expiresAt ? new Date(data.expiresAt).getTime() : Date.now() + 10 * 60 * 1000);
       setResendAvailableAt(Date.now() + Math.max(0, Number(data.resendAfterSeconds || 30)) * 1000);
-      setOtp('');
+      setOtp(data.developmentOtp||'');
+      setDevelopmentOtpAutofilled(Boolean(data.developmentOtp));
       setMode('login-otp');
     } catch (err: any) {
       if (Number(err?.retryAfterSeconds) > 0) setResendAvailableAt(Date.now() + Number(err.retryAfterSeconds) * 1000);
@@ -295,6 +309,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       setLoading(false);
     }
   };
+  const handleLogin=(e:React.FormEvent)=>requestLoginOtp('email',e);
 
   const openPasswordRecovery=()=>{setMode('landing');setLoginCardOpen(true);if(window.location.pathname!=='/')window.history.pushState({auth:'landing'},'','/');setRecoveryStep('request');setRecoveryOtp('');setRecoveryPassword('');setRecoveryConfirmPassword('');setError('');};
   const requestPasswordRecovery=async(e?:React.FormEvent)=>{
@@ -342,8 +357,8 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     e?.preventDefault();
     setError('');
     setRegistrationSubmitted(true);
-    const requiredRegistrationFields = ['firstName', 'lastName', 'gender', 'mobileNumber', 'email', 'securityQuestion', 'securityAnswer', 'password', 'confirmPassword'];
-    if (requiredRegistrationFields.some(field => registrationErrorFor(field))) return;
+    const requiredRegistrationFields = ['firstName','middleName','lastName','gender','mobileNumber','email','securityQuestion','securityAnswer','password','confirmPassword'];
+    if(requiredRegistrationFields.some(field=>registrationErrorFor(field))){setError('Please correct the highlighted registration fields.');window.requestAnimationFrame(()=>{const first=registrationFormRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]');first?.focus();first?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'});});return;}
     const mobileDigits = registerMobile.replace(/\D/g, '');
     const fullName = [registerFirstName, registerMiddleName, registerLastName].filter(Boolean).join(' ').trim();
     if (fullName.length > 160) return setError('The combined name must be 160 characters or fewer.');
@@ -423,7 +438,22 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     role: 'viewer' as UserRole, avatar: (registerName || 'RM').split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase(),
     description: 'Verified read-only workspace member'
   });
-  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card"><img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/><span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span><h1>Confirm your secure sign-in</h1><p>Enter the six-digit code sent by email to <strong>{otpDeliveryTarget || email}</strong>. It can be used once.</p><p role="timer" aria-live="polite">{timeLeft>0?`Code expires in ${Math.floor(timeLeft/60)}:${String(timeLeft%60).padStart(2,'0')}`:'Code expired. Generate a new code.'}</p>{error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}<form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6||timeLeft===0}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form><div className="executive-otp-actions"><button onClick={()=>{setMode('login');setOtp('');setError('');}}>Back to sign in</button><button disabled={loading||resendSecondsLeft>0} onClick={handleLogin as any}>{resendSecondsLeft>0?`Resend code in ${resendSecondsLeft}s`:'Generate a new code'}</button></div><p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p></section></main>;
+  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card">
+    <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/>
+    <span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span>
+    <h1>Confirm your secure sign-in</h1>
+    <p>Enter the six-digit code sent by {otpDeliveryMode==='sms'?'SMS':'email'} to <strong>{otpDeliveryTarget||email}</strong>. It can be used once.</p>
+    <div className="otp-delivery-options" aria-label="Verification code delivery method">
+      <button type="button" className={otpDeliveryMode==='email'?'active':''} disabled={loading||resendSecondsLeft>0} onClick={()=>requestLoginOtp('email')}><Mail size={15}/><span><strong>Email</strong><small>{otpDeliveryMode==='email'?otpDeliveryTarget:'Send a new code'}</small></span></button>
+      <button type="button" className={otpDeliveryMode==='sms'?'active':''} disabled={loading||resendSecondsLeft>0} onClick={()=>requestLoginOtp('sms')}><Smartphone size={15}/><span><strong>Verified mobile</strong><small>{otpDeliveryMode==='sms'?otpDeliveryTarget:'Send SMS code'}</small></span></button>
+    </div>
+    <p role="timer" aria-live="polite">{timeLeft>0?`Code expires in ${Math.floor(timeLeft/60)}:${String(timeLeft%60).padStart(2,'0')}`:'Code expired. Generate a new code.'}</p>
+    {developmentOtpAutofilled&&<div className="executive-alert service"><ShieldCheck size={16}/><span>Local development mobile OTP was generated and autofilled. This feature is disabled in production.</span></div>}
+    {error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}
+    <form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6||timeLeft===0}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form>
+    <div className="executive-otp-actions"><button onClick={()=>{setMode('landing');setLoginCardOpen(true);setOtp('');setError('');}}>Back to sign in</button><button disabled={loading||resendSecondsLeft>0} onClick={()=>requestLoginOtp(otpDeliveryMode)}>{resendSecondsLeft>0?`Resend code in ${resendSecondsLeft}s`:`Resend by ${otpDeliveryMode==='sms'?'SMS':'email'}`}</button></div>
+    <p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p>
+  </section></main>;
 
   if (mode !== 'login' && mode !== 'landing') {
     const isOtp = mode === 'otp';
@@ -439,20 +469,20 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
             {isVerified ? <div className="registration-complete"><CheckCircle2 size={34}/><p>Your email is verified. Your password is ready for sign-in.</p><button className="registration-primary" type="button" onClick={()=>navigateAuth('login')}>Continue to Sign In <ArrowRight size={16}/></button></div> : isOtp ? (
               <form onSubmit={verifyOtp} className="registration-otp-form"><p className="registration-otp-time" role="timer" aria-live="polite">{timeLeft>0?`Code expires in ${Math.floor(timeLeft/60)}:${String(timeLeft%60).padStart(2,'0')}`:'Code expired. Request a new code.'}</p><label className="registration-field"><span>Six-digit email code*</span><input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" placeholder="000000"/></label><button className="registration-primary" disabled={loading||otp.length!==6||timeLeft===0}>{loading?<><span className="executive-spinner"/> Verifying…</>:'Verify and Activate Account'}</button><button className="registration-link-button" type="button" disabled={loading||resendSecondsLeft>0} onClick={()=>requestOtp()}>{resendSecondsLeft>0?`Resend code in ${resendSecondsLeft}s`:'Resend verification code'}</button><button className="registration-link-button" type="button" onClick={()=>{setOtp('');setError('');setMode('register');}}>Change registration details</button></form>
             ) : (
-              <form onSubmit={requestOtp} className="registration-form" noValidate>
+              <form ref={registrationFormRef} onSubmit={requestOtp} className="registration-form" noValidate>
                 <div className="registration-person-grid">
-                  <label className="registration-field"><span>First Name*</span><input autoComplete="given-name" value={registerFirstName} onChange={e=>setRegisterFirstName(e.target.value)} {...registrationValidationProps('firstName')} required maxLength={80}/>{registrationErrorMessage('firstName')}</label>
-                  <label className="registration-field"><span>Middle Name <small>(optional)</small></span><input autoComplete="additional-name" value={registerMiddleName} onChange={e=>setRegisterMiddleName(e.target.value)} maxLength={80}/></label>
-                  <label className="registration-field"><span>Last Name*</span><input autoComplete="family-name" value={registerLastName} onChange={e=>setRegisterLastName(e.target.value)} {...registrationValidationProps('lastName')} required maxLength={80}/>{registrationErrorMessage('lastName')}</label>
+                  <label className="registration-field"><span>First Name*</span><input autoComplete="given-name" value={registerFirstName} onChange={e=>setRegisterFirstName(sanitizePersonNameInput(e.target.value))} {...registrationValidationProps('firstName')} required minLength={2} maxLength={50}/>{registrationErrorMessage('firstName')}</label>
+                  <label className="registration-field"><span>Middle Name <small>(optional)</small></span><input autoComplete="additional-name" value={registerMiddleName} onChange={e=>setRegisterMiddleName(sanitizePersonNameInput(e.target.value))} {...registrationValidationProps('middleName')} minLength={2} maxLength={50}/>{registrationErrorMessage('middleName')}</label>
+                  <label className="registration-field"><span>Last Name*</span><input autoComplete="family-name" value={registerLastName} onChange={e=>setRegisterLastName(sanitizePersonNameInput(e.target.value))} {...registrationValidationProps('lastName')} required minLength={2} maxLength={50}/>{registrationErrorMessage('lastName')}</label>
                   <label className="registration-field"><span>Gender*</span><select value={registerGender} onChange={e=>setRegisterGender(e.target.value)} {...registrationValidationProps('gender')} required><option value="">Select gender</option><option value="female">Female</option><option value="male">Male</option><option value="non_binary">Non-binary</option><option value="prefer_not_to_say">Prefer not to say</option></select>{registrationErrorMessage('gender')}</label>
                 </div>
-                <label className="registration-field registration-wide"><span>Mobile Number*</span><div className="registration-phone"><select aria-label="Country calling code" value={registerCountryCode} onChange={e=>setRegisterCountryCode(e.target.value)}><option value="+91">India (+91)</option><option value="+1">United States / Canada (+1)</option><option value="+44">United Kingdom (+44)</option><option value="+61">Australia (+61)</option><option value="+971">United Arab Emirates (+971)</option><option value="+65">Singapore (+65)</option></select><input type="tel" autoComplete="tel-national" inputMode="numeric" value={registerMobile} onChange={e=>setRegisterMobile(e.target.value.replace(/[^\d\s()-]/g,''))} {...registrationValidationProps('mobileNumber')} required aria-label="Mobile number" placeholder="Enter mobile number"/></div><small className="registration-note">Enter a number matching the selected country. Email verification does not verify this number.</small>{registrationErrorMessage('mobileNumber')}</label>
+                <label className="registration-field registration-wide"><span>Mobile Number*</span><div className="registration-phone"><select aria-label="Country calling code" value={registerCountryCode} onChange={e=>{setRegisterCountryCode(e.target.value);setRegisterMobile('');}}><option value="+91">India (+91)</option><option value="+1">United States / Canada (+1)</option><option value="+44">United Kingdom (+44)</option><option value="+61">Australia (+61)</option><option value="+971">United Arab Emirates (+971)</option><option value="+65">Singapore (+65)</option></select><input type="tel" autoComplete="tel-national" inputMode="numeric" value={registerMobile} onChange={e=>setRegisterMobile(formatRegistrationPhone(registerCountryCode,e.target.value))} {...registrationValidationProps('mobileNumber')} required aria-label="Mobile number" placeholder="98765 43210"/></div><small className="registration-note">Enter a valid number for the selected country. Repeated and placeholder numbers are rejected.</small>{registrationErrorMessage('mobileNumber')}</label>
                 <label className="registration-field registration-wide"><span>Work Email*</span><input type="email" autoComplete="email" value={registerEmail} onChange={e=>setRegisterEmail(e.target.value)} {...registrationValidationProps('email')} required maxLength={255} placeholder="name@company.com"/>{registrationErrorMessage('email')}</label>
                 <div className="registration-two-col">
                   <label className="registration-field"><span>Security Question*</span><select value={registerSecurityQuestion} onChange={e=>setRegisterSecurityQuestion(e.target.value)} {...registrationValidationProps('securityQuestion')} required><option value="">Select a question</option><option value="first_school">What was the name of your first school?</option><option value="first_employer">What was the name of your first employer?</option><option value="childhood_city">In what city did you grow up?</option><option value="favorite_teacher">What was the name of a favorite teacher?</option></select>{registrationErrorMessage('securityQuestion')}<small className="registration-note">Your answer is hashed, but is not currently used for sign-in or account recovery.</small></label>
-                  <label className="registration-field"><span>Answer*</span><input autoComplete="off" value={registerSecurityAnswer} onChange={e=>setRegisterSecurityAnswer(e.target.value)} {...registrationValidationProps('securityAnswer')} required minLength={2} maxLength={120}/>{registrationErrorMessage('securityAnswer')}<small className="registration-note">Your answer is hashed before storage.</small></label>
+                  <label className="registration-field"><span>Answer*</span><input autoComplete="off" value={registerSecurityAnswer} onChange={e=>setRegisterSecurityAnswer(e.target.value)} {...registrationValidationProps('securityAnswer')} required minLength={3} maxLength={120}/>{registrationErrorMessage('securityAnswer')}<small className="registration-note">Your answer is hashed before storage.</small></label>
                 </div>
-                <fieldset className="registration-password-section"><legend>Password setup</legend><div className="registration-two-col"><label className="registration-field"><span>Create Password*</span><input type="password" autoComplete="new-password" value={registerPassword} onChange={e=>setRegisterPassword(e.target.value)} {...registrationValidationProps('password')} required minLength={8} maxLength={128}/>{registrationErrorMessage('password')}<small className="registration-note">At least 8 characters with uppercase, lowercase and a number.</small></label><label className="registration-field"><span>Confirm Password*</span><input type="password" autoComplete="new-password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} {...registrationValidationProps('confirmPassword')} required minLength={8} maxLength={128}/>{registrationErrorMessage('confirmPassword')}</label></div></fieldset>
+                <fieldset className="registration-password-section"><legend>Password setup</legend><div className="registration-two-col"><label className="registration-field"><span>Create Password*</span><div className="registration-password-input"><input type={showRegisterPassword?'text':'password'} autoComplete="new-password" value={registerPassword} onChange={e=>setRegisterPassword(e.target.value)} {...registrationValidationProps('password')} required minLength={8} maxLength={128}/><button type="button" aria-label={showRegisterPassword?'Hide password':'Show password'} onClick={()=>setShowRegisterPassword(value=>!value)}>{showRegisterPassword?<EyeOff size={15}/>:<Eye size={15}/>}</button></div>{registrationErrorMessage('password')}<small className="registration-note">8+ characters with uppercase, lowercase, number and special character.</small></label><label className="registration-field"><span>Confirm Password*</span><div className="registration-password-input"><input type={showRegisterConfirmPassword?'text':'password'} autoComplete="new-password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} {...registrationValidationProps('confirmPassword')} required minLength={8} maxLength={128}/><button type="button" aria-label={showRegisterConfirmPassword?'Hide password':'Show password'} onClick={()=>setShowRegisterConfirmPassword(value=>!value)}>{showRegisterConfirmPassword?<EyeOff size={15}/>:<Eye size={15}/>}</button></div>{registrationErrorMessage('confirmPassword')}</label></div></fieldset>
                 <div className="registration-actions"><button type="reset" className="registration-reset" onClick={()=>{setRegisterFirstName('');setRegisterMiddleName('');setRegisterLastName('');setRegisterGender('');setRegisterCountryCode('+91');setRegisterMobile('');setRegisterEmail('');setRegisterSecurityQuestion('');setRegisterSecurityAnswer('');setRegisterPassword('');setConfirmPassword('');setRegistrationSubmitted(false);setRegistrationTouched({});setError('');}}><RotateCcw size={15}/> Reset</button><button className="registration-primary" disabled={loading}>{loading?<><span className="executive-spinner"/> Sending code…</>:'Register'}</button></div>
                 <p className="registration-login-prompt">Already a user? <button type="button" onClick={()=>navigateAuth('login')}>Login</button></p>
               </form>
@@ -485,7 +515,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
             <h1 id="landing-login-title">{recoveryStep==='request'?'Reset your password':recoveryStep==='reset'?'Enter recovery code':recoveryStep==='success'?'Password updated':'Sign in to OJIX'}</h1>
             <p className="landing-login-intro">{recoveryStep==='request'?'Select your assigned role and enter the account email. We will send a one-time recovery code.':recoveryStep==='reset'?`Enter the six-digit code sent for ${email} and choose a new password.`:recoveryStep==='success'?'Your password was changed and existing sessions were securely revoked.':'Choose your assigned role, then continue with email verification.'}</p>
             {(!recoveryStep||recoveryStep==='request')&&<div className="landing-modal-role-grid" aria-label="Choose assigned role">
-              {loginRoleOrder.map((value,index)=>{const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={`${index===0?'recommended ':''}${active?'selected':''}`} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} key={value}><RoleIcon size={14}/><span>{roleLoginCopy[value].label}</span>{index===0&&<em>Recommended</em>}</button>})}
+              {loginRoleOrder.map(value=>{const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={active?'selected':''} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} key={value}><RoleIcon size={14}/><span>{roleLoginCopy[value].label}</span></button>})}
             </div>}
             {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
             {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}

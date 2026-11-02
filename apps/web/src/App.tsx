@@ -73,8 +73,11 @@ import ApiConsole from "./components/ApiConsole";
 import { AdminModule, type AdminSection } from "./components/AdminModule";
 import { SuperAdminPage } from "./components/SuperAdminPage";
 import { WorkflowGuide } from "./components/WorkflowGuide";
+import { OwnerAnalytics, OwnerPortfolioMap } from "./components/OwnerDashboardVisuals";
+import OwnerInactivityGuard from "./components/OwnerInactivityGuard";
 import { authFetch } from "./authFetch";
 import { validatePropertyForm } from "./propertyFormValidation";
+import "./owner-dashboard.css";
 
 import type { PropertyDoc, UserAccount, UserRole } from "./types";
 
@@ -429,6 +432,9 @@ export default function App() {
     confirmPassword: "",
   });
   const [availableAccounts, setAvailableAccounts] = useState<UserAccount[]>([]);
+  const [sessionExpiredMessage, setSessionExpiredMessage] = useState(() =>
+    sessionStorage.getItem("ojix_session_expired_message") || "",
+  );
 
   const [properties, setProperties] = useState<Property[]>([]);
   const [overview, setOverview] = useState({
@@ -437,6 +443,8 @@ export default function App() {
     ready_for_review: 0,
     documents: 0,
   });
+  const [ownerDashboardData, setOwnerDashboardData] = useState<any>(null);
+  const [ownerDashboardError, setOwnerDashboardError] = useState("");
   const [selected, setSelected] = useState<Property | null>(null);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -476,8 +484,13 @@ export default function App() {
         localStorage.setItem("ojix_user", JSON.stringify(data.user));
         setCurrentUser(data.user);
       })
-      .catch(() => {
+      .catch((sessionError) => {
         if (!active) return;
+        if (String(sessionError?.message || "").toLowerCase().includes("inactiv")) {
+          const message = "Your session has expired due to inactivity. Please log in again.";
+          sessionStorage.setItem("ojix_session_expired_message", message);
+          setSessionExpiredMessage(message);
+        }
         localStorage.removeItem("ojix_auth_token");
         localStorage.removeItem("ojix_user");
         setAuthToken(null);
@@ -497,12 +510,29 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [o, p] = await Promise.all([
+      const [o, p, ownerData] = await Promise.all([
         api<any>("/api/overview"),
         api<{ items: Property[] }>("/api/properties"),
+        currentUser.role === "owner"
+          ? api<any>("/api/owner/dashboard").catch((ownerError) => ({
+              dashboardError: (ownerError as Error).message,
+            }))
+          : Promise.resolve(null),
       ]);
       setOverview(o);
       setProperties(p.items);
+      if (currentUser.role === "owner") {
+        if (ownerData?.dashboardError) {
+          setOwnerDashboardData(null);
+          setOwnerDashboardError(ownerData.dashboardError);
+        } else {
+          setOwnerDashboardData(ownerData);
+          setOwnerDashboardError("");
+        }
+      } else {
+        setOwnerDashboardData(null);
+        setOwnerDashboardError("");
+      }
       if (selected) {
         const d = await api<{
           item: Property;
@@ -545,8 +575,18 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    authFetch(`${API}/api/auth/logout`, { method: "POST" }).catch(() => {});
+  const handleLogout = useCallback((reason: "manual" | "inactivity" = "manual") => {
+    authFetch(`${API}/api/auth/logout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    }).catch(() => {});
+    if (reason === "inactivity") {
+      const message = "Your session has expired due to inactivity. Please log in again.";
+      sessionStorage.setItem("ojix_session_expired_message", message);
+      setSessionExpiredMessage(message);
+      localStorage.setItem("ojix_session_event", JSON.stringify({ type: "logout", reason, at: Date.now() }));
+    }
     localStorage.removeItem("ojix_auth_token");
     localStorage.removeItem("ojix_user");
     localStorage.removeItem("ojix_portal_mode");
@@ -556,7 +596,8 @@ export default function App() {
     setSelected(null);
     setPage("overview");
     window.history.replaceState({}, "", "/login");
-  };
+  }, []);
+  const handleOwnerInactivity = useCallback(() => handleLogout("inactivity"), [handleLogout]);
 
   const changePassword = async (event: FormEvent) => {
     event.preventDefault();
@@ -1079,10 +1120,12 @@ export default function App() {
 
   if (!currentUser || !authToken) {
     return (
-      <LoginPage
+      <><div className={sessionExpiredMessage ? "session-expired-notice is-visible" : "session-expired-notice"} role="alert">{sessionExpiredMessage}</div><LoginPage
         apiUrl={API}
         expectedRole={loginRoleFromPath(window.location.pathname)}
         onLoginSuccess={(token, user, requestedRole) => {
+          sessionStorage.removeItem("ojix_session_expired_message");
+          setSessionExpiredMessage("");
           const requestedPortal = requestedRole;
           const openSuperAdmin = requestedPortal === "super-admin";
           localStorage.setItem("ojix_auth_token", token);
@@ -1098,7 +1141,7 @@ export default function App() {
             dashboardPathForUser(user, openSuperAdmin),
           );
         }}
-      />
+      /></>
     );
   }
 
@@ -1182,7 +1225,10 @@ export default function App() {
   const displayedUserName = portalMode === "super-admin" ? "Sharath — Super Admin" : currentUser.name;
 
   return (
-    <div className={`app-shell premium-shell role-${currentUser.role}`}>
+    <div className={`app-shell premium-shell role-${currentUser.role} ${portalMode === "super-admin" ? "platform-only-shell" : ""}`}>
+      {portalMode === "workspace" && currentUser.role === "owner" && (
+        <OwnerInactivityGuard onExpire={handleOwnerInactivity} apiUrl={API} />
+      )}
       <aside className={`sidebar ${portalMode === "super-admin" ? "super-admin-sidebar" : ""} ${mobileNav ? "sidebar-open" : ""}`}>
         <div className="brand">
           <img
@@ -1534,7 +1580,7 @@ export default function App() {
 
             <button
               className="icon-btn"
-              onClick={handleLogout}
+              onClick={() => handleLogout()}
               title="Sign Out"
               aria-label="Sign out"
               style={{ color: "#64748b" }}
@@ -1677,6 +1723,8 @@ export default function App() {
             ) : currentUser.role === "owner" ? (
               <OwnerDashboard
                 overview={overview}
+                dashboardData={ownerDashboardData}
+                dashboardError={ownerDashboardError}
                 properties={properties}
                 accounts={availableAccounts}
                 loading={loading}
@@ -2821,6 +2869,8 @@ function ConsultantDashboard({
 
 function OwnerDashboard({
   overview,
+  dashboardData,
+  dashboardError,
   properties,
   accounts,
   loading,
@@ -2830,6 +2880,8 @@ function OwnerDashboard({
   onPropertyUpdated,
 }: {
   overview: any;
+  dashboardData: any;
+  dashboardError: string;
   properties: Property[];
   accounts: UserAccount[];
   loading: boolean;
@@ -2846,6 +2898,19 @@ function OwnerDashboard({
   ) => void;
 }) {
   const [workflowProperty, setWorkflowProperty] = useState<Property | null>(null);
+  const [workflowSearch, setWorkflowSearch] = useState("");
+  const [workflowFilter, setWorkflowFilter] = useState("all");
+  const [analyticsData, setAnalyticsData] = useState<any>(dashboardData?.analytics || null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState("");
+  useEffect(() => { if (dashboardData?.analytics) setAnalyticsData(dashboardData.analytics); }, [dashboardData?.analytics]);
+  const updateAnalyticsRange = async (from:string,to:string) => {
+    setAnalyticsLoading(true);
+    setAnalyticsError("");
+    try { const result=await api<any>(`/api/owner/dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);setAnalyticsData(result.analytics); }
+    catch (rangeError) { setAnalyticsError((rangeError as Error).message || "Analytics could not be updated."); }
+    finally { setAnalyticsLoading(false); }
+  };
   const districts = Object.entries(
     properties.reduce<Record<string, number>>((result, property) => {
       const district = property.district || "Not recorded";
@@ -2871,7 +2936,10 @@ function OwnerDashboard({
     normal: 2,
     low: 1,
   };
-  const workflowRows = [...properties].sort(
+  const dashboardWorkflow = Array.isArray(dashboardData?.workflow)
+    ? dashboardData.workflow
+    : properties;
+  const workflowRows = [...dashboardWorkflow].sort(
     (a, b) =>
       Number(isOverdue(b)) -
         Number(isOverdue(a)) +
@@ -2879,25 +2947,45 @@ function OwnerDashboard({
         (priorityWeight[a.workflow_priority || "normal"] || 0) ||
       (a.due_date || "9999").localeCompare(b.due_date || "9999"),
   );
-  const overdueCount = properties.filter(isOverdue).length;
-  const readyCount = Number(overview.ready_for_review) || 0;
+  const filteredWorkflowRows = workflowRows.filter((property: any) => {
+    const term = workflowSearch.trim().toLowerCase();
+    const matchesSearch = !term || [property.name, property.application_number, property.village, property.district, property.review_stage, property.next_action]
+      .some((value) => String(value || "").toLowerCase().includes(term));
+    const matchesFilter = workflowFilter === "all" ||
+      (workflowFilter === "overdue" ? isOverdue(property) : property.status === workflowFilter);
+    return matchesSearch && matchesFilter;
+  });
+  const metrics = dashboardData?.metrics || {};
+  const overdueCount = Number(metrics.overdue_tasks) || properties.filter(isOverdue).length;
+  const readyCount = Number(metrics.ready_for_legal_review ?? overview.ready_for_review) || 0;
+  const documentReviewCount = Number(metrics.documents_requiring_review) || 0;
+  const pendingActions = Array.isArray(dashboardData?.pendingActions) ? dashboardData.pendingActions : [];
+  const recentFindings = Array.isArray(dashboardData?.recentFindings) ? dashboardData.recentFindings : (overview.recentFindings || []);
+  const teamWorkload = Array.isArray(dashboardData?.teamWorkload) ? dashboardData.teamWorkload : [];
+  const reports = Array.isArray(dashboardData?.reports) ? dashboardData.reports : [];
+  const recentActivity = Array.isArray(dashboardData?.recentActivity) ? dashboardData.recentActivity : [];
+  const evidenceSources = dashboardData?.evidenceSources || {};
+  const openPropertyById = (id?: string) => {
+    const property = properties.find((item) => item.id === id) || dashboardWorkflow.find((item: Property) => item.id === id);
+    if (property) onOpen(property);
+  };
   return (
     <div className="owner-dashboard">
       <div className="owner-welcome">
         <div>
           <div className="eyebrow">MANAGING PARTNER / WORKSPACE OWNER</div>
-          <h1>Firm-wide property intelligence</h1>
+          <h1>Property Operations Overview</h1>
           <p>
-            Welcome, {currentUser.name}. Monitor portfolio readiness, governance
-            and delivery across the organisation.
+            Welcome, {currentUser.name}. Monitor matters, assignments, evidence
+            readiness and legal review progress across your workspace.
           </p>
         </div>
         <div className="owner-actions">
           <button
             className="secondary-btn"
-            onClick={() => onNavigate("settings")}
+            onClick={() => document.getElementById("owner-pending-actions")?.scrollIntoView({ behavior: "smooth" })}
           >
-            <Settings2 size={15} /> Governance
+            <ClipboardCheck size={15} /> Pending actions
           </button>
           <button
             className="primary-btn"
@@ -2907,48 +2995,47 @@ function OwnerDashboard({
           </button>
         </div>
       </div>
+      {dashboardError && <div className="owner-dashboard-error" role="alert"><AlertTriangle size={16}/><span>Owner dashboard details could not be loaded: {dashboardError}</span></div>}
       <div className="owner-kpis">
         <div>
           <span>
             <Building2 />
           </span>
-          <small>Total applications</small>
-          <strong>{loading ? "—" : overview.total || 0}</strong>
-          <p>All property workspaces</p>
+          <small>Total matters</small>
+          <strong>{loading ? "—" : Number(metrics.total_matters ?? overview.total) || 0}</strong>
+          <p>All property matters</p>
         </div>
         <div>
           <span>
             <Clock3 />
           </span>
           <small>Active reviews</small>
-          <strong>{loading ? "—" : overview.in_review || 0}</strong>
-          <p>Currently in due diligence</p>
+          <strong>{loading ? "—" : Number(metrics.active_reviews ?? overview.in_review) || 0}</strong>
+          <p>Open review workflows</p>
         </div>
         <div>
           <span>
             <BadgeCheck />
           </span>
-          <small>Ready for review</small>
+          <small>Ready for legal review</small>
           <strong>{loading ? "—" : readyCount}</strong>
           <p>Awaiting professional decision</p>
         </div>
         <div>
           <span>
-            <ShieldAlert />
+            <FileSearch />
           </span>
-          <small>High-attention findings</small>
-          <strong>
-            {loading ? "—" : overview.high_attention_findings || 0}
-          </strong>
-          <p>Require legal assessment</p>
+          <small>Documents requiring review</small>
+          <strong>{loading ? "—" : documentReviewCount}</strong>
+          <p>Pending evidence checks</p>
         </div>
         <div>
           <span>
-            <UserCheck />
+            <AlertTriangle />
           </span>
-          <small>Workspace members</small>
-          <strong>{accounts.length || "—"}</strong>
-          <p>Across configured roles</p>
+          <small>Overdue tasks</small>
+          <strong>{loading ? "—" : overdueCount}</strong>
+          <p>Require immediate attention</p>
         </div>
       </div>
       <div className="owner-command-grid">
@@ -3024,57 +3111,24 @@ function OwnerDashboard({
             )}
           </div>
         </section>
-        <section className="panel owner-governance">
+        <section className="panel owner-governance" id="owner-pending-actions">
           <div className="panel-head">
             <div>
-              <h3>Governance status</h3>
-              <p>Privileged controls and production readiness</p>
+              <h3>Pending actions</h3>
+              <p>Operational work requiring the next owner or team action</p>
             </div>
-            <ShieldCheck size={18} className="panel-head-icon" />
+            <ClipboardCheck size={18} className="panel-head-icon" />
           </div>
           <div className="owner-governance-list">
-            <div>
-              <Check size={14} />
-              <span>
-                <strong>Role-based access</strong>
-                <small>
-                  {accounts.length} demonstration identities configured
-                </small>
-              </span>
-            </div>
-            <div>
-              <Check size={14} />
-              <span>
-                <strong>Tenant isolation</strong>
-                <small>Property queries scoped to the active workspace</small>
-              </span>
-            </div>
-            <div className="attention">
-              <AlertTriangle size={14} />
-              <span>
-                <strong>Document storage</strong>
-                <small>
-                  Local development storage; production setup pending
-                </small>
-              </span>
-            </div>
-            <div className="attention">
-              <AlertTriangle size={14} />
-              <span>
-                <strong>Government connectors</strong>
-                <small>Not connected; document-first workflow active</small>
-              </span>
-            </div>
-            <div className="attention">
-              <Check size={14} />
-              <span>
-                <strong>OCR and AI extraction</strong>
-                <small>Local Kannada and English OCR active</small>
-              </span>
-            </div>
+            {pendingActions.length ? pendingActions.map((action: any) => <button key={action.id} className={Number(action.count)>0?'attention':''} onClick={()=>onNavigate(action.target)}>
+              {Number(action.count)>0?<AlertTriangle size={14}/>:<Check size={14}/>}<span><strong>{action.label}</strong><small>{action.status} · {action.priority} priority · {action.nextAction}</small></span><b>{action.count}</b><ArrowUpRight size={13}/>
+            </button>) : <div className="owner-empty-inline"><Check size={14}/><span><strong>No pending actions</strong><small>The workspace action queue is clear.</small></span></div>}
           </div>
         </section>
       </div>
+      {analyticsError && <div className="owner-dashboard-error" role="alert"><AlertTriangle size={16}/><span>{analyticsError}</span></div>}
+      <OwnerAnalytics data={analyticsData || {}} team={teamWorkload} onRangeChange={updateAnalyticsRange} loading={analyticsLoading}/>
+      <OwnerPortfolioMap properties={dashboardWorkflow} onOpen={onOpen}/>
       <section className="panel owner-workflow-register">
         <div className="panel-head">
           <div>
@@ -3096,32 +3150,36 @@ function OwnerDashboard({
             </button>
           </div>
         </div>
+        <div className="owner-workflow-tools">
+          <label><Search size={14}/><input value={workflowSearch} onChange={(event)=>setWorkflowSearch(event.target.value)} placeholder="Search matter, location or next action" aria-label="Search workflow register"/></label>
+          <select value={workflowFilter} onChange={(event)=>setWorkflowFilter(event.target.value)} aria-label="Filter workflow register"><option value="all">All stages</option><option value="overdue">Overdue</option><option value="documents_pending">Documents pending</option><option value="in_review">Evidence review</option><option value="clarification_required">Clarification required</option><option value="ready_for_review">Ready for legal review</option><option value="approved">Approved</option><option value="complete">Completed</option></select>
+        </div>
         {loading ? (
           <div className="loading-state">
             <LoaderCircle className="spin" /> Loading workflow…
           </div>
-        ) : workflowRows.length ? (
+        ) : filteredWorkflowRows.length ? (
           <div className="owner-workflow-table-wrap">
             <table className="owner-workflow-table">
               <thead>
                 <tr>
-                  <th>APPLICATION</th>
-                  <th>STATUS</th>
-                  <th>PRIORITY</th>
-                  <th>LEAD LAWYER</th>
-                  <th>ANALYST / OPERATIONS</th>
+                  <th>MATTER / PROPERTY</th>
+                  <th>CURRENT STAGE</th>
+                  <th>REVIEW STAGE</th>
+                  <th>MISSING EVIDENCE</th>
+                  <th>NEXT ACTION</th>
+                  <th>ASSIGNED TO</th>
                   <th>DUE DATE</th>
-                  <th>EVIDENCE</th>
-                  <th></th>
+                  <th>STATUS</th>
                 </tr>
               </thead>
               <tbody>
-                {workflowRows.slice(0, 12).map((property) => (
+                {filteredWorkflowRows.slice(0, 20).map((property: any) => (
                   <tr
                     key={property.id}
                     className={isOverdue(property) ? "overdue" : ""}
                   >
-                    <td>
+                    <td className="owner-matter-cell" onClick={()=>onOpen(property)}>
                       <strong>{property.name}</strong>
                       <small>{propertyIdentityLabel(property)}</small>
                       <small className="mono">
@@ -3129,25 +3187,20 @@ function OwnerDashboard({
                       </small>
                     </td>
                     <td>
-                      <StatusPill status={property.status} />
+                      <span className={`owner-priority ${property.workflow_priority || "normal"}`}>{pretty(property.status)}</span>
                     </td>
                     <td>
-                      <span
-                        className={`owner-priority ${property.workflow_priority || "normal"}`}
-                      >
-                        {pretty(property.workflow_priority || "normal")}
-                      </span>
+                      <strong>{property.review_stage || pretty(property.status)}</strong>
                     </td>
                     <td>
-                      <strong>
-                        {memberName(property.assigned_lawyer_uid)}
-                      </strong>
+                      <span className={`review-signal ${Number(property.missing_evidence||0)>0?'attention':'ready'}`}>{Number(property.missing_evidence||0)>0?`${property.missing_evidence} missing`:'Complete'}</span>
                     </td>
                     <td>
-                      <span>{memberName(property.assigned_analyst_uid)}</span>
-                      <small>
-                        {memberName(property.assigned_operations_uid)}
-                      </small>
+                      <strong>{property.next_action || 'Continue review'}</strong>
+                    </td>
+                    <td>
+                      <strong>{memberName(property.assigned_lawyer_uid)}</strong>
+                      <small>{[memberName(property.assigned_analyst_uid),memberName(property.assigned_operations_uid)].filter(name=>name!=='Unassigned').join(' · ')||'No supporting assignment'}</small>
                     </td>
                     <td>
                       {property.due_date ? (
@@ -3164,16 +3217,8 @@ function OwnerDashboard({
                       )}
                     </td>
                     <td>
-                      <span
-                        className={`review-signal ${(property.document_count || 0) > 0 ? "ready" : "attention"}`}
-                      >
-                        {(property.document_count || 0) > 0
-                          ? `${property.document_count} file${property.document_count === 1 ? "" : "s"}`
-                          : "Missing"}
-                      </span>
-                    </td>
-                    <td>
                       <div className="owner-workflow-actions">
+                        <StatusPill status={property.status}/>
                         <button className="application-view assign-team" onClick={() => setWorkflowProperty(property)}>
                           <UserCheck size={13}/> Assign team
                         </button>
@@ -3202,105 +3247,38 @@ function OwnerDashboard({
           setWorkflowProperty(null);
         }}
       />}
-      <div className="owner-work-grid">
-        <section className="panel owner-approval-policy">
+      <div className="owner-insight-grid">
+        <section className="panel owner-insight-card">
           <div className="panel-head">
-            <div>
-              <h3>Approval safeguards</h3>
-              <p>
-                Enforced by the server before an application can be approved or
-                released.
-              </p>
-            </div>
-            <ShieldCheck size={18} className="panel-head-icon" />
+            <div><h3>Recent findings</h3><p>Latest evidence-backed property intelligence findings</p></div><ShieldAlert size={18} className="panel-head-icon"/>
           </div>
-          <div>
-            <p>
-              <Check size={14} />
-              <span>Lead Lawyer must be assigned</span>
-            </p>
-            <p>
-              <Check size={14} />
-              <span>
-                Property identity, extent, coordinates and four boundaries must
-                be recorded
-              </span>
-            </p>
-            <p>
-              <Check size={14} />
-              <span>At least one source document must be uploaded</span>
-            </p>
-            <p>
-              <Check size={14} />
-              <span>
-                Every document must pass application identity verification
-              </span>
-            </p>
-            <p>
-              <Check size={14} />
-              <span>Manual-review documents must be cleared</span>
-            </p>
-            <p>
-              <Check size={14} />
-              <span>Release is allowed only after Approved status</span>
-            </p>
-          </div>
+          <div className="owner-insight-list">{recentFindings.length?recentFindings.map((finding:any)=><button key={finding.id} onClick={()=>openPropertyById(finding.property_id)}><span className={`owner-severity ${finding.severity}`}>{pretty(finding.severity)}</span><span><strong>{finding.title}</strong><small>{finding.property_name} · {dateLabel(finding.created_at)}</small></span><ArrowUpRight size={13}/></button>):<OwnerEmpty message="No findings have been recorded."/>}</div>
         </section>
-        <section className="panel owner-shortcuts">
+        <section className="panel owner-insight-card">
           <div className="panel-head">
-            <div>
-              <h3>Owner controls</h3>
-              <p>Firm-wide oversight and configuration</p>
-            </div>
+            <div><h3>Team workload</h3><p>Assignments and review load by active team member</p></div><UserCheck size={18} className="panel-head-icon"/>
           </div>
-          <button onClick={() => onNavigate("settings")}>
-            <Settings2 />
-            <span>
-              <strong>Organisation and retention</strong>
-              <small>Users, roles, branding and data controls</small>
-            </span>
-            <ArrowUpRight />
-          </button>
-          <button onClick={() => onNavigate("source-registry")}>
-            <Activity />
-            <span>
-              <strong>Source health</strong>
-              <small>Connections, authority and freshness</small>
-            </span>
-            <ArrowUpRight />
-          </button>
-          <button onClick={() => onNavigate("all-documents")}>
-            <FolderOpen />
-            <span>
-              <strong>Evidence repository</strong>
-              <small>Tenant-wide document register</small>
-            </span>
-            <ArrowUpRight />
-          </button>
-          <button onClick={() => onNavigate("all-findings")}>
-            <ShieldAlert />
-            <span>
-              <strong>Review oversight</strong>
-              <small>Findings across all applications</small>
-            </span>
-            <ArrowUpRight />
-          </button>
+          <div className="owner-workload-list">{teamWorkload.length?teamWorkload.map((member:any)=>{const assigned=Number(member.assigned_matters||0);const pending=Number(member.pending_reviews||0);const completed=Number(member.completed_tasks||0);const total=Math.max(assigned+completed,1);return <div key={member.user_uid}><span className="owner-workload-avatar">{String(member.name||member.email).slice(0,1).toUpperCase()}</span><span><strong>{member.name||member.email}</strong><small>{pretty(member.role)} · {assigned} assigned · {pending} pending · {completed} completed</small><i><b style={{width:`${Math.min(100,(assigned/Math.max(total,1))*100)}%`}}/></i></span></div>}):<OwnerEmpty message="No review-team assignments are available."/>}</div>
+        </section>
+        <section className="panel owner-insight-card">
+          <div className="panel-head"><div><h3>Reports awaiting action</h3><p>Review and submission queue</p></div><FileText size={18} className="panel-head-icon"/></div>
+          <div className="owner-insight-list">{reports.length?reports.map((report:any)=><button key={report.property_id} onClick={()=>openPropertyById(report.property_id)}><span className="owner-report-icon"><FileCheck2 size={14}/></span><span><strong>{report.property_name}</strong><small>{report.action} · {memberName(report.assigned_owner)} · {report.due_date?dateLabel(report.due_date):'No due date'}</small></span><ArrowUpRight size={13}/></button>):<OwnerEmpty message="No reports are awaiting action."/>}</div>
+        </section>
+        <section className="panel owner-insight-card">
+          <div className="panel-head"><div><h3>Evidence source status</h3><p>Verification state for recorded workspace evidence</p></div><Activity size={18} className="panel-head-icon"/></div>
+          <div className="owner-source-status"><div><span>Connected sources</span><strong>{Number(evidenceSources.connected_sources||0)}</strong></div><div><span>Verification completed</span><strong className="success">{Number(evidenceSources.verification_completed||0)}</strong></div><div><span>Verification pending</span><strong className="warning">{Number(evidenceSources.verification_pending||0)}</strong></div><div><span>Failed verification</span><strong className="danger">{Number(evidenceSources.failed_verification||0)}</strong></div><p>Last synchronization: {evidenceSources.last_synchronization?dateLabel(evidenceSources.last_synchronization):'No synchronized source recorded'}</p></div>
         </section>
       </div>
-      <div className="owner-boundary">
-        <Scale size={17} />
-        <div>
-          <strong>Governance and legal responsibility remain separate</strong>
-          <p>
-            The Owner controls the organisation and may oversee delivery. Final
-            legal conclusions must still be recorded by a qualified Lead
-            Advocate with evidence and rationale.
-          </p>
-        </div>
-      </div>
+      <section className="panel owner-activity-panel">
+        <div className="panel-head"><div><h3>Recent workspace activity</h3><p>Matter, evidence, review and report events</p></div><Activity size={18} className="panel-head-icon"/></div>
+        <div className="owner-activity-list">{recentActivity.length?recentActivity.map((event:any)=><button key={event.id} onClick={()=>event.entity_type==='property'&&openPropertyById(event.entity_id)}><span className="owner-activity-dot"/><time>{dateLabel(event.created_at)}</time><span><strong>{pretty(event.action)}</strong><small>{event.actor_name||event.actor_uid}</small></span>{event.entity_type==='property'&&<ArrowUpRight size={13}/>}</button>):<OwnerEmpty message="No recent workspace activity is available."/>}</div>
+      </section>
+      <div className="owner-boundary"><Scale size={17}/><div><strong>Operational oversight and legal responsibility remain separate</strong><p>The Workspace Owner coordinates delivery. Final legal conclusions remain the responsibility of the assigned qualified Legal Reviewer.</p></div></div>
     </div>
   );
 }
+
+function OwnerEmpty({message}:{message:string}) { return <div className="owner-empty-state"><ClipboardCheck size={16}/><span>{message}</span></div>; }
 
 function ClientDashboard({
   properties,
