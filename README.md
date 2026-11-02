@@ -90,13 +90,11 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
 
 ### Deploy the web frontend to Vercel
 
-The repository includes a Vercel configuration for the Vite frontend (`apps/web`). Import the GitHub repository into Vercel and deploy with the repository root as the project root. Vercel will run `npm install`, build the `apps/web` workspace, and publish `apps/web/dist` with SPA route rewrites. Set `VITE_API_URL` to the HTTPS base URL of the separately hosted API before deploying; without it, the browser calls the Vercel origin and API requests will fail.
-
-Vercel hosts the web frontend only. The Express API, MariaDB database, Firebase project, and SMTP OTP delivery need their own production hosting and configuration. Set `SUPER_ADMIN_EMAILS` in the API host to a comma-separated list of verified account emails, including the intended administrator's email. Ensure that account is active in `user_accounts` and has an active `org_memberships` row; then restart/redeploy the API. The Super Admin sign-in portal will recognize the allowlisted email, while login still requires the account password and a delivered one-time code. Never put API secrets, passwords, database URLs, or Firebase service credentials in `VITE_*` variables because those values are embedded in the public frontend bundle.
+The Vercel project root is the repository root (`.`) because the npm workspace lockfile is there. Build settings, SPA refresh routing, team protection, production environment setup and current deployment status are documented in the [deployment runbook](docs/DEPLOYMENT.md). Production requires `VITE_API_URL` to point to the separately hosted API's HTTPS origin; the current Vercel project has no API URL configured yet.
 
 ### Platform Super Admin
 
-The local Super Admin demo account is separately identified and mapped to the existing owner membership for workspace access. For production, set `SUPER_ADMIN_EMAILS` in the API environment to a comma-separated allowlist of verified account emails, then restart the API. The server checks this permission for every platform endpoint. Role and membership changes require a reason, are written to the audit log, and cannot leave an organization without an active owner.
+Production bootstrap uses API-only secrets `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`. The API creates the account once, hashes the initial password, assigns the protected `super_admin` role and preserves existing passwords on redeploy. Platform endpoints enforce server-side Super Admin authorization. See the [bootstrap runbook](docs/DEPLOYMENT.md#super-admin-bootstrap-and-access).
 
 ### Run the complete stack with Docker
 
@@ -109,7 +107,7 @@ docker compose up --build
 - Web: http://localhost:8080
 - API health: http://localhost:4000/health
 
-Compose publishes MariaDB on host port 3307 by default so it can run alongside a local MySQL or MariaDB service already using port 3306. The API connects to MariaDB over the Compose network at `db:3306`; this host port setting does not change that connection. To use another free host port, set `DB_PORT` (for example, `DB_PORT=3308 docker compose up --build`).
+Compose publishes MariaDB on host port 3308 by default so it can run alongside a local MySQL or MariaDB service already using port 3306. The API connects to MariaDB over the Compose network at `db:3306`; this host port setting does not change that connection. To use another free host port, set `DB_PORT` (for example, `DB_PORT=3309 docker compose up --build`).
 
 Startup and login flow:
 

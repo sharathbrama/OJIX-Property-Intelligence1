@@ -32,8 +32,11 @@ services:
       NODE_ENV: ${NODE_ENV:-development}
       PORT: 4000
       DATABASE_URL: mysql://ojix:ojix_local_only@db:3306/ojix_property_mysql
-      CORS_ORIGIN: "http://localhost:5173,http://localhost:8080,http://web:8080"
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:8080,http://web:8080}
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-}
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      DATABASE_SSL: ${DATABASE_SSL:-false}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_SECURE: ${SMTP_SECURE:-false}
@@ -41,6 +44,10 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       DEMO_OTP_EMAIL: ${DEMO_OTP_EMAIL:-}
+      DOCUMENT_STORAGE_PROVIDER: ${DOCUMENT_STORAGE_PROVIDER:-local}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET:-private-documents}
       UPLOAD_DIR: /app/uploads
       MAX_UPLOAD_MB: 25
       OCR_LANGUAGES: kan+eng

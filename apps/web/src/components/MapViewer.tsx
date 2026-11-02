@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { authFetch } from '../authFetch';
+import { API_BASE_URL } from '../apiConfig';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import {
   Layers,
@@ -76,7 +77,7 @@ export interface MapViewerProps {
   readOnly?: boolean;
 }
 
-const API = typeof import.meta.env.VITE_API_URL !== 'undefined' ? import.meta.env.VITE_API_URL : '';
+const API = API_BASE_URL;
 
 async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await authFetch(`${API}${path}`, init);

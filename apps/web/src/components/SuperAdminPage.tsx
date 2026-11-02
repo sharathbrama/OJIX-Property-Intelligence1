@@ -2,21 +2,23 @@ import { useEffect, useState, type FormEvent } from 'react';
 import {
   Activity, AlertTriangle, BarChart3, Building2, Check, ChevronRight,
   CircleGauge, Database, FileText, Key, LayoutDashboard, LoaderCircle,
-  LockKeyhole, Mail, RefreshCw, Search, Server, ShieldAlert, ShieldCheck,
-  Users, X,
+  LockKeyhole, Mail, Plus, RefreshCw, Search, Server, ShieldAlert, ShieldCheck,
+  Users, UserPlus, X,
 } from 'lucide-react';
 import { authFetch } from '../authFetch';
 
-type Section = 'overview' | 'organizations' | 'members' | 'sessions' | 'audit';
+type Section = 'overview' | 'organizations' | 'members' | 'properties' | 'sessions' | 'audit';
 type AdminAction =
   | { kind: 'role'; member: any }
   | { kind: 'status'; member: any; status: 'active' | 'disabled' }
-  | { kind: 'revoke'; session: any };
+  | { kind: 'revoke'; session: any }
+  | { kind: 'archive'; property: any; archived: boolean };
 
 const sections: Array<[Section, string, any]> = [
   ['overview', 'Overview', LayoutDashboard],
   ['organizations', 'Organizations', Building2],
   ['members', 'Members', Users],
+  ['properties', 'Properties', FileText],
   ['sessions', 'Sessions', Server],
   ['audit', 'Audit log', FileText],
 ];
@@ -42,6 +44,9 @@ export function SuperAdminPage({ apiUrl }: { apiUrl: string }) {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [action, setAction] = useState<AdminAction | null>(null);
+  const [organizationOptions, setOrganizationOptions] = useState<any[]>([]);
+  const [createOrganizationOpen, setCreateOrganizationOpen] = useState(false);
+  const [createUserOpen, setCreateUserOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -51,8 +56,12 @@ export function SuperAdminPage({ apiUrl }: { apiUrl: string }) {
       setOverview(metrics);
       const paths: Record<Section, string> = {
         overview: '/api/super-admin/overview', organizations: '/api/super-admin/organizations',
-        members: '/api/super-admin/members', sessions: '/api/super-admin/sessions', audit: '/api/super-admin/audit',
+        members: '/api/super-admin/members', properties: '/api/super-admin/properties', sessions: '/api/super-admin/sessions', audit: '/api/super-admin/audit',
       };
+      if (section === 'members') {
+        const organizations = await request<any>(apiUrl, '/api/super-admin/organizations?page=1&limit=100');
+        setOrganizationOptions(organizations.items || []);
+      }
       if (section === 'overview') {
         const auditData = await request<any>(apiUrl, '/api/super-admin/audit?limit=100');
         setSecurityEvents((auditData.items || []).filter((event: any) => String(event.action).startsWith('auth.') || String(event.action).startsWith('super_admin.')));
@@ -88,17 +97,28 @@ export function SuperAdminPage({ apiUrl }: { apiUrl: string }) {
         {error && <div className="admin-flash error"><AlertTriangle size={15} />{error}</div>}
         {loading ? <div className="platform-loading"><LoaderCircle className="spin" /> Loading platform data…</div> : <>
           {section === 'overview' && <PlatformOverview overview={overview} events={securityEvents} onNavigate={changeSection} />}
-          {section === 'organizations' && <OrganizationsPanel rows={rows} search={search} setSearch={setSearch} page={page} total={Number(data?.total || 0)} setPage={setPage} />}
-          {section === 'members' && <MembersPanel rows={rows} search={search} setSearch={setSearch} page={page} total={Number(data?.total || 0)} setPage={setPage} onAction={setAction} />}
+          {section === 'organizations' && <OrganizationsPanel rows={rows} search={search} setSearch={setSearch} page={page} total={Number(data?.total || 0)} setPage={setPage} onCreate={() => setCreateOrganizationOpen(true)} onEdit={(id: string, body: any) => mutate(`/api/super-admin/organizations/${id}`, 'PATCH', body, 'Organization updated.')} />}
+          {section === 'members' && <MembersPanel rows={rows} search={search} setSearch={setSearch} page={page} total={Number(data?.total || 0)} setPage={setPage} onAction={setAction} onCreate={() => setCreateUserOpen(true)} />}
+          {section === 'properties' && <PropertiesPanel rows={rows} search={search} setSearch={setSearch} page={page} total={Number(data?.total || 0)} setPage={setPage} onAction={setAction} />}
           {section === 'sessions' && <SessionsPanel rows={rows} search={search} setSearch={setSearch} page={page} total={Number(data?.total || 0)} setPage={setPage} onAction={setAction} />}
           {section === 'audit' && <AuditPanel rows={rows} search={search} setSearch={setSearch} page={page} total={Number(data?.total || 0)} setPage={setPage} />}
         </>}
       </div>
     </main>
     {action && <ActionDialog action={action} onCancel={() => setAction(null)} onConfirm={async body => {
-      const target = action.kind === 'revoke' ? `/api/super-admin/sessions/${action.session.id}` : `/api/super-admin/members/${action.member.id}`;
-      const saved = await mutate(target, action.kind === 'revoke' ? 'DELETE' : 'PATCH', body, action.kind === 'revoke' ? 'Session revoked.' : 'Membership updated.');
+      const target = action.kind === 'revoke' ? `/api/super-admin/sessions/${action.session.id}` : action.kind === 'archive' ? `/api/super-admin/properties/${action.property.id}/archive` : `/api/super-admin/members/${action.member.id}`;
+      const saved = await mutate(target, action.kind === 'revoke' ? 'DELETE' : 'PATCH', body, action.kind === 'revoke' ? 'Session revoked.' : action.kind === 'archive' ? `Property ${action.archived ? 'archived' : 'restored'}.` : 'Membership updated.');
       if (saved) setAction(null); return saved;
+    }} />}
+    {createOrganizationOpen && <CreateOrganizationDialog onCancel={() => setCreateOrganizationOpen(false)} onCreate={async body => {
+      const saved = await mutate('/api/super-admin/organizations', 'POST', body, 'Organization created.');
+      if (saved) setCreateOrganizationOpen(false);
+      return saved;
+    }} />}
+    {createUserOpen && <CreateUserDialog organizations={organizationOptions} onCancel={() => setCreateUserOpen(false)} onCreate={async body => {
+      const saved = await mutate('/api/super-admin/users', 'POST', body, 'User account created. Share the temporary password using an approved secure channel.');
+      if (saved) setCreateUserOpen(false);
+      return saved;
     }} />}
   </div>;
 }
@@ -152,8 +172,9 @@ function SecurityEvents({ events, onViewAll }: { events: any[]; onViewAll: () =>
 
 function PanelHeader({ eyebrow, title, description, search, setSearch }: { eyebrow: string; title: string; description: string; search: string; setSearch: (value: string) => void }) { return <><div className="platform-section-heading"><div><span>{eyebrow}</span><h1>{title}</h1><p>{description}</p></div></div><label className="platform-search"><Search /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search records" /></label></>; }
 
-function OrganizationsPanel({ rows, search, setSearch, page, total, setPage }: any) { return <section className="platform-data-page"><PanelHeader eyebrow="PLATFORM DIRECTORY" title="Organizations" description="Workspace size and membership status across the platform." search={search} setSearch={value => { setSearch(value); setPage(1); }} /><DataTable headings={['Organization', 'Slug', 'Members', 'Active', 'Applications', 'Created']} empty={!rows.length}>{rows.map((item: any) => <tr key={item.id}><td><strong>{item.name}</strong><small>{item.id}</small></td><td>{item.slug}</td><td>{item.member_count}</td><td><Badge value={Number(item.active_member_count) ? 'active' : 'inactive'} /> {item.active_member_count}</td><td>{item.property_count}</td><td>{date(item.created_at)}</td></tr>)}</DataTable><Pagination page={page} total={total} onPage={setPage} /></section>; }
-function MembersPanel({ rows, search, setSearch, page, total, setPage, onAction }: any) { return <section className="platform-data-page"><PanelHeader eyebrow="IDENTITY GOVERNANCE" title="Members" description="Manage roles and access across every organization. All changes require an audit reason." search={search} setSearch={value => { setSearch(value); setPage(1); }} /><DataTable headings={['Member', 'Organization', 'Role', 'Status', 'Last login', 'Control']} empty={!rows.length}>{rows.map((member: any) => <tr key={member.id}><td><strong>{member.full_name || member.email || member.user_uid}</strong><small>{member.email || member.user_uid}</small></td><td>{member.organization_name}<small>{member.organization_id}</small></td><td><span className="platform-role-chip">{pretty(member.role)}</span></td><td><Badge value={member.status} /></td><td>{date(member.last_login_at)}</td><td><div className="platform-row-actions"><button onClick={() => onAction({ kind: 'role', member })}>Change role</button><button className={member.status === 'active' ? 'danger' : ''} onClick={() => onAction({ kind: 'status', member, status: member.status === 'active' ? 'disabled' : 'active' })}>{member.status === 'active' ? 'Disable' : 'Activate'}</button></div></td></tr>)}</DataTable><Pagination page={page} total={total} onPage={setPage} /></section>; }
+function OrganizationsPanel({ rows, search, setSearch, page, total, setPage, onCreate, onEdit }: any) { return <section className="platform-data-page"><PanelHeader eyebrow="PLATFORM DIRECTORY" title="Organizations" description="Workspace size and membership status across the platform." search={search} setSearch={value => { setSearch(value); setPage(1); }} /><div className="platform-section-actions"><button className="platform-create-button" onClick={onCreate}><Plus size={14} /> Create organization</button></div><DataTable headings={['Organization', 'Slug', 'Members', 'Active', 'Applications', 'Created', 'Manage']} empty={!rows.length}>{rows.map((item: any) => <tr key={item.id}><td><strong>{item.name}</strong><small>{item.id}</small></td><td>{item.slug}</td><td>{item.member_count}</td><td><Badge value={Number(item.active_member_count) ? 'active' : 'inactive'} /> {item.active_member_count}</td><td>{item.property_count}</td><td>{date(item.created_at)}</td><td><button className="platform-row-action" onClick={() => { const name = window.prompt('Organization name', item.name); if (name === null) return; const slug = window.prompt('Organization slug', item.slug); if (slug === null) return; const reason = window.prompt('Audit reason for this change'); if (reason) void onEdit(item.id, { name, slug, reason }); }}>Edit</button></td></tr>)}</DataTable><Pagination page={page} total={total} onPage={setPage} /></section>; }
+function MembersPanel({ rows, search, setSearch, page, total, setPage, onAction, onCreate }: any) { return <section className="platform-data-page"><PanelHeader eyebrow="IDENTITY GOVERNANCE" title="Members" description="Manage accounts and roles across every organization. Super Admin assignment is reserved for the configured bootstrap account." search={search} setSearch={value => { setSearch(value); setPage(1); }} /><div className="platform-section-actions"><button className="platform-create-button" onClick={onCreate}><UserPlus size={14} /> Create user</button></div><DataTable headings={['Member', 'Organization', 'Role', 'Status', 'Last login', 'Control']} empty={!rows.length}>{rows.map((member: any) => <tr key={member.id}><td><strong>{member.full_name || member.email || member.user_uid}</strong><small>{member.email || member.user_uid}</small></td><td>{member.organization_name}<small>{member.organization_id}</small></td><td><span className="platform-role-chip">{pretty(member.role)}</span></td><td><Badge value={member.status} /></td><td>{date(member.last_login_at)}</td><td><div className="platform-row-actions"><button onClick={() => onAction({ kind: 'role', member })}>Change role</button><button className={member.status === 'active' ? 'danger' : ''} onClick={() => onAction({ kind: 'status', member, status: member.status === 'active' ? 'disabled' : 'active' })}>{member.status === 'active' ? 'Disable' : 'Activate'}</button></div></td></tr>)}</DataTable><Pagination page={page} total={total} onPage={setPage} /></section>; }
+function PropertiesPanel({ rows, search, setSearch, page, total, setPage, onAction }: any) { return <section className="platform-data-page"><PanelHeader eyebrow="PLATFORM PROPERTY REGISTER" title="Properties" description="Review property records across organizations and archive or restore records with an audit reason." search={search} setSearch={value => { setSearch(value); setPage(1); }} /><DataTable headings={['Application', 'Property', 'Organization', 'Survey / village', 'Status', 'Created', 'Control']} empty={!rows.length}>{rows.map((property: any) => <tr key={property.id}><td><strong>{property.application_number}</strong><small>{property.id}</small></td><td>{property.name || 'Unnamed property'}<small>{property.district}, {property.taluk}</small></td><td>{property.organization_name}</td><td>{property.survey_number || '—'}<small>{property.village || '—'}</small></td><td><Badge value={property.archived_at ? 'archived' : property.status} /></td><td>{date(property.created_at)}</td><td><button className={`platform-row-action ${property.archived_at ? '' : 'danger'}`} onClick={() => onAction({ kind: 'archive', property, archived: !property.archived_at })}>{property.archived_at ? 'Restore' : 'Archive'}</button></td></tr>)}</DataTable><Pagination page={page} total={total} onPage={setPage} /></section>; }
 function SessionsPanel({ rows, search, setSearch, page, total, setPage, onAction }: any) { return <section className="platform-data-page"><PanelHeader eyebrow="ACCESS SECURITY" title="Authentication Sessions" description="Inspect and revoke active sessions across all workspaces." search={search} setSearch={value => { setSearch(value); setPage(1); }} /><DataTable headings={['Account', 'Organization', 'Last activity', 'Expires', 'IP / device', 'Status', 'Action']} empty={!rows.length}>{rows.map((session: any) => { const active = !session.revoked_at && new Date(session.expires_at) > new Date(); return <tr key={session.id}><td><strong>{session.email || session.user_uid}</strong><small>{pretty(session.role)}</small></td><td>{session.organization_name || session.tenant_id}</td><td>{date(session.last_activity_at)}</td><td>{date(session.expires_at)}</td><td>{session.ip_address || '—'}<small>{session.user_agent || '—'}</small></td><td><Badge value={session.revoked_at ? 'revoked' : active ? 'active' : 'expired'} /></td><td>{active && <button className="platform-danger-button" onClick={() => onAction({ kind: 'revoke', session })}>Revoke</button>}</td></tr>; })}</DataTable><Pagination page={page} total={total} onPage={setPage} /></section>; }
 function AuditPanel({ rows, search, setSearch, page, total, setPage }: any) { return <section className="platform-data-page"><PanelHeader eyebrow="GOVERNANCE RECORD" title="Audit Log" description="Search cross-organization actions by actor, event, entity or workspace." search={search} setSearch={value => { setSearch(value); setPage(1); }} /><DataTable headings={['Time', 'Organization', 'Actor', 'Action', 'Entity', 'Details']} empty={!rows.length}>{rows.map((event: any) => <tr key={event.id}><td>{date(event.created_at)}</td><td>{event.organization_name || 'Platform'}</td><td><span className="platform-actor">{event.actor_uid}</span></td><td><strong>{pretty(event.action)}</strong></td><td>{pretty(event.entity_type)}<small>{event.entity_id}</small></td><td><code>{JSON.stringify(event.details || {}).slice(0, 180)}</code></td></tr>)}</DataTable><Pagination page={page} total={total} onPage={setPage} /></section>; }
 
@@ -162,10 +183,29 @@ function EmptyState({ text }: { text: string }) { return <div className="platfor
 function Badge({ value }: { value?: string }) { const state = ['active', 'healthy', 'operational', 'recorded'].includes(value || '') ? 'success' : ['revoked', 'degraded', 'disabled'].includes(value || '') ? 'danger' : 'warning'; return <span className={`platform-badge ${state}`}><i />{pretty(value)}</span>; }
 function Pagination({ page, total, onPage }: { page: number; total: number; onPage: (page: number) => void }) { const pages = Math.max(1, Math.ceil(total / 25)); if (pages <= 1) return null; return <div className="platform-pagination"><button disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button><span>Page {page} of {pages} · {total} records</span><button disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button></div>; }
 
+function CreateOrganizationDialog({ onCancel, onCreate }: { onCancel: () => void; onCreate: (body: any) => Promise<boolean> }) {
+  const [name, setName] = useState(''); const [slug, setSlug] = useState(''); const [reason, setReason] = useState(''); const [saving, setSaving] = useState(false);
+  const updateName = (value: string) => { setName(value); if (!slug) setSlug(value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 120)); };
+  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); try { await onCreate({ name: name.trim(), slug: slug.trim(), reason: reason.trim() }); } finally { setSaving(false); } };
+  return <div className="platform-dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onCancel(); }}><form className="platform-dialog" role="dialog" aria-modal="true" onSubmit={submit}><header><span><Building2 /></span><button type="button" onClick={onCancel} aria-label="Close dialog"><X /></button></header><div><span className="platform-dialog-label">PLATFORM WORKSPACE</span><h2>Create organization</h2><p>New organizations are created without synthetic properties or sample accounts.</p></div><label>Organization name<input required minLength={2} maxLength={160} value={name} onChange={event => updateName(event.target.value)} /></label><label>URL slug<input required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxLength={120} value={slug} onChange={event => setSlug(event.target.value.toLowerCase())} /></label><label>Audit reason<textarea required minLength={3} maxLength={500} value={reason} onChange={event => setReason(event.target.value)} placeholder="Why is this workspace being created?" /></label><footer><button type="button" onClick={onCancel} disabled={saving}>Cancel</button><button type="submit" className="primary" disabled={saving || reason.trim().length < 3}>{saving ? 'Creating…' : 'Create organization'}</button></footer></form></div>;
+}
+
+function CreateUserDialog({ organizations, onCancel, onCreate }: { organizations: any[]; onCancel: () => void; onCreate: (body: any) => Promise<boolean> }) {
+  const [saving, setSaving] = useState(false);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const form = new FormData(event.currentTarget);
+    setSaving(true);
+    try { await onCreate({ name: String(form.get('name') || '').trim(), email: String(form.get('email') || '').trim(), organizationId: String(form.get('organizationId') || ''), role: String(form.get('role') || 'viewer'), password: String(form.get('password') || ''), reason: String(form.get('reason') || '').trim() }); }
+    finally { setSaving(false); }
+  };
+  return <div className="platform-dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onCancel(); }}><form className="platform-dialog" role="dialog" aria-modal="true" onSubmit={submit}><header><span><UserPlus /></span><button type="button" onClick={onCancel} aria-label="Close dialog"><X /></button></header><div><span className="platform-dialog-label">IDENTITY GOVERNANCE</span><h2>Create user account</h2><p>The user must control the supplied email to complete OTP sign-in.</p></div><label>Full name<input name="name" required minLength={2} maxLength={160} autoComplete="name" /></label><label>Email<input name="email" type="email" required maxLength={255} autoComplete="email" /></label><label>Organization<select name="organizationId" required defaultValue="" disabled={!organizations.length}><option value="" disabled>Select an organization</option>{organizations.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Workspace role<select name="role" defaultValue="viewer">{assignableRoles.map(item => <option key={item} value={item}>{pretty(item)}</option>)}</select></label><label>Temporary password<input name="password" type="password" required minLength={12} maxLength={128} autoComplete="new-password" /><small>Use 12+ characters with uppercase, lowercase, a number and a symbol. Share it outside OJIX using an approved secure channel.</small></label><label>Audit reason<textarea name="reason" required minLength={3} maxLength={500} placeholder="Why is this account being created?" /></label><footer><button type="button" onClick={onCancel} disabled={saving}>Cancel</button><button type="submit" className="primary" disabled={saving || !organizations.length}>{saving ? 'Creating…' : 'Create account'}</button></footer></form></div>;
+}
+
 function ActionDialog({ action, onCancel, onConfirm }: { action: AdminAction; onCancel: () => void; onConfirm: (body: any) => Promise<boolean> }) {
   const [reason, setReason] = useState(''); const [role, setRole] = useState(action.kind === 'role' ? action.member.role : ''); const [saving, setSaving] = useState(false);
-  const subject = action.kind === 'revoke' ? (action.session.email || action.session.user_uid) : (action.member.full_name || action.member.email || action.member.user_uid);
-  const destructive = action.kind === 'revoke' || (action.kind === 'status' && action.status === 'disabled');
-  const submit = async (event: FormEvent) => { event.preventDefault(); if (reason.trim().length < 3) return; setSaving(true); try { await onConfirm(action.kind === 'role' ? { role, reason: reason.trim() } : action.kind === 'status' ? { status: action.status, reason: reason.trim() } : { reason: reason.trim() }); } finally { setSaving(false); } };
-  return <div className="platform-dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onCancel(); }}><form className="platform-dialog" role="dialog" aria-modal="true" onSubmit={submit}><header><span className={destructive ? 'danger' : ''}>{destructive ? <ShieldAlert /> : <ShieldCheck />}</span><button type="button" onClick={onCancel} aria-label="Close dialog"><X /></button></header><div><span className="platform-dialog-label">PROTECTED ACTION</span><h2>{action.kind === 'role' ? 'Change member role' : action.kind === 'status' ? `${action.status === 'active' ? 'Activate' : 'Disable'} membership` : 'Revoke session'}</h2><p>Target: <strong>{subject}</strong></p></div>{action.kind === 'role' && <label>New role<select value={role} onChange={event => setRole(event.target.value)}>{assignableRoles.map(item => <option key={item} value={item}>{pretty(item)}</option>)}</select></label>}<label>Audit reason<textarea value={reason} onChange={event => setReason(event.target.value)} minLength={3} maxLength={500} required placeholder="Explain why this action is required" /></label>{action.kind === 'role' && role === 'owner' && <div className="platform-dialog-warning"><AlertTriangle />Owner grants workspace-wide governance access.</div>}<footer><button type="button" onClick={onCancel} disabled={saving}>Cancel</button><button type="submit" className={destructive ? 'danger' : 'primary'} disabled={saving || reason.trim().length < 3}>{saving ? 'Saving…' : 'Confirm action'}</button></footer></form></div>;
+  const subject = action.kind === 'revoke' ? (action.session.email || action.session.user_uid) : action.kind === 'archive' ? (action.property.name || action.property.application_number) : (action.member.full_name || action.member.email || action.member.user_uid);
+  const destructive = action.kind === 'revoke' || (action.kind === 'status' && action.status === 'disabled') || (action.kind === 'archive' && action.archived);
+  const submit = async (event: FormEvent) => { event.preventDefault(); if (reason.trim().length < 3) return; setSaving(true); try { await onConfirm(action.kind === 'role' ? { role, reason: reason.trim() } : action.kind === 'status' ? { status: action.status, reason: reason.trim() } : action.kind === 'archive' ? { archived: action.archived, reason: reason.trim() } : { reason: reason.trim() }); } finally { setSaving(false); } };
+  const title = action.kind === 'role' ? 'Change member role' : action.kind === 'status' ? `${action.status === 'active' ? 'Activate' : 'Disable'} membership` : action.kind === 'archive' ? `${action.archived ? 'Archive' : 'Restore'} property` : 'Revoke session';
+  return <div className="platform-dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onCancel(); }}><form className="platform-dialog" role="dialog" aria-modal="true" onSubmit={submit}><header><span className={destructive ? 'danger' : ''}>{destructive ? <ShieldAlert /> : <ShieldCheck />}</span><button type="button" onClick={onCancel} aria-label="Close dialog"><X /></button></header><div><span className="platform-dialog-label">PROTECTED ACTION</span><h2>{title}</h2><p>Target: <strong>{subject}</strong></p></div>{action.kind === 'role' && <label>New role<select value={role} onChange={event => setRole(event.target.value)}>{assignableRoles.map(item => <option key={item} value={item}>{pretty(item)}</option>)}</select></label>}<label>Audit reason<textarea value={reason} onChange={event => setReason(event.target.value)} minLength={3} maxLength={500} required placeholder="Explain why this action is required" /></label>{action.kind === 'role' && role === 'owner' && <div className="platform-dialog-warning"><AlertTriangle />Owner grants workspace-wide governance access.</div>}<footer><button type="button" onClick={onCancel} disabled={saving}>Cancel</button><button type="submit" className={destructive ? 'danger' : 'primary'} disabled={saving || reason.trim().length < 3}>{saving ? 'Saving…' : 'Confirm action'}</button></footer></form></div>;
 }

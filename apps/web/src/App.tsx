@@ -76,6 +76,7 @@ import { WorkflowGuide } from "./components/WorkflowGuide";
 import { OwnerAnalytics, OwnerPortfolioMap } from "./components/OwnerDashboardVisuals";
 import OwnerInactivityGuard from "./components/OwnerInactivityGuard";
 import { authFetch } from "./authFetch";
+import { API_BASE_URL } from "./apiConfig";
 import { validatePropertyForm } from "./propertyFormValidation";
 import "./owner-dashboard.css";
 
@@ -168,10 +169,7 @@ type ParcelReference = {
   fact_state: string;
   notes: string;
 };
-const API =
-  typeof import.meta.env.VITE_API_URL !== "undefined"
-    ? import.meta.env.VITE_API_URL
-    : "";
+const API = API_BASE_URL;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const token =
@@ -469,6 +467,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (import.meta.env.PROD && !API_BASE_URL) {
+      localStorage.removeItem("ojix_auth_token");
+      localStorage.removeItem("ojix_user");
+      setAuthToken(null);
+      setCurrentUser(null);
+      setAuthChecking(false);
+      return;
+    }
     if (!authToken) {
       setAuthChecking(false);
       return;
@@ -1894,7 +1900,7 @@ export default function App() {
                     required
                     type="password"
                     autoComplete="new-password"
-                    minLength={8}
+                    minLength={currentUser?.isSuperAdmin ? 12 : 8}
                     value={passwordForm.newPassword}
                     onChange={(event) =>
                       setPasswordForm({
@@ -1910,7 +1916,7 @@ export default function App() {
                     required
                     type="password"
                     autoComplete="new-password"
-                    minLength={8}
+                    minLength={currentUser?.isSuperAdmin ? 12 : 8}
                     value={passwordForm.confirmPassword}
                     onChange={(event) =>
                       setPasswordForm({
@@ -1922,9 +1928,7 @@ export default function App() {
                 </label>
               </div>
               <div className="form-note">
-                <ShieldCheck size={15} /> Use at least eight characters with
-                uppercase, lowercase, and a number. Other sessions will be
-                revoked.
+                <ShieldCheck size={15} /> {currentUser?.isSuperAdmin ? "Use 12+ characters with uppercase, lowercase, a number and a special character." : "Use at least eight characters with uppercase, lowercase, and a number."} Other sessions will be revoked.
               </div>
               <div className="modal-actions">
                 <button

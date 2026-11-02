@@ -3,6 +3,7 @@ import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, 
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
 import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
 import type { UserAccount, UserRole } from '../types';
+import { apiConfig } from '../apiConfig';
 
 interface LoginPageProps {
   apiUrl: string;
@@ -241,6 +242,12 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   }, [mode]);
 
   useEffect(() => {
+    if (apiConfig.error) {
+      setServiceStatus('unavailable');
+      setServiceMessage(apiConfig.error);
+      setDummyAccounts([]);
+      return;
+    }
     fetch(`${apiUrl}/health`)
       .then(async res => {
         const data = await res.json().catch(() => ({}));
@@ -250,7 +257,9 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       })
       .catch(() => {
         setServiceStatus('unavailable');
-        setServiceMessage('API or database unavailable. Start the local stack and retry.');
+        setServiceMessage(import.meta.env.PROD
+          ? 'The production API is unreachable. Check the API host, database readiness, and CORS allowlist.'
+          : 'API or database unavailable. Start the local stack and retry.');
       });
 
     // The API exposes this list only when it is itself running in local
@@ -325,6 +334,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const resetForgottenPassword=async(e:React.FormEvent)=>{
     e.preventDefault();setError('');
     if(recoveryPassword!==recoveryConfirmPassword)return setError('New passwords do not match.');
+    if(selectedRole==='super-admin'&&(recoveryPassword.length<12||!/[A-Z]/.test(recoveryPassword)||!/[a-z]/.test(recoveryPassword)||!/[0-9]/.test(recoveryPassword)||!/[^A-Za-z0-9]/.test(recoveryPassword)))return setError('Super Admin passwords need 12+ characters with uppercase, lowercase, a number and a special character.');
     setLoading(true);
     try{
       const res=await fetch(`${apiUrl}/api/auth/forgot-password/reset`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId:recoveryChallengeId,email,expectedRole:selectedRole,otp:recoveryOtp,newPassword:recoveryPassword})});
@@ -535,8 +545,8 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
             {recoveryStep==='reset'&&<form className="executive-login-form landing-modal-form recovery-form" onSubmit={resetForgottenPassword}>
               <p className="recovery-timer" role="timer" aria-live="polite">{recoveryTimeLeft>0?`Code expires in ${Math.floor(recoveryTimeLeft/60)}:${String(recoveryTimeLeft%60).padStart(2,'0')}`:'Code expired. Request a new code.'}</p>
               <label><span>Six-digit recovery code</span><div className="executive-input"><Key/><input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={recoveryOtp} onChange={event=>setRecoveryOtp(event.target.value.replace(/\D/g,''))} required placeholder="000000"/></div></label>
-              <label><span>New password</span><div className="executive-input"><Lock/><input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={recoveryPassword} onChange={event=>setRecoveryPassword(event.target.value)} required/></div><small className="recovery-password-hint">At least 8 characters with uppercase, lowercase and a number.</small></label>
-              <label><span>Confirm new password</span><div className="executive-input"><Lock/><input type="password" autoComplete="new-password" minLength={8} maxLength={128} value={recoveryConfirmPassword} onChange={event=>setRecoveryConfirmPassword(event.target.value)} required/></div></label>
+              <label><span>New password</span><div className="executive-input"><Lock/><input type="password" autoComplete="new-password" minLength={selectedRole==='super-admin'?12:8} maxLength={128} value={recoveryPassword} onChange={event=>setRecoveryPassword(event.target.value)} required/></div><small className="recovery-password-hint">{selectedRole==='super-admin'?'12+ characters with uppercase, lowercase, a number and a special character.':'At least 8 characters with uppercase, lowercase and a number.'}</small></label>
+              <label><span>Confirm new password</span><div className="executive-input"><Lock/><input type="password" autoComplete="new-password" minLength={selectedRole==='super-admin'?12:8} maxLength={128} value={recoveryConfirmPassword} onChange={event=>setRecoveryConfirmPassword(event.target.value)} required/></div></label>
               <button className="executive-submit" type="submit" disabled={loading||recoveryOtp.length!==6||recoveryTimeLeft===0}>{loading?<><span className="executive-spinner"/>Updating password…</>:<>Set new password <ArrowRight/></>}</button>
               <div className="recovery-actions"><button type="button" onClick={()=>{setRecoveryStep('request');setRecoveryOtp('');setError('');}}>Change details</button><button type="button" onClick={()=>requestPasswordRecovery()} disabled={loading}>Send a new code</button></div>
             </form>}

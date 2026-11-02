@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { API_BASE_URL } from '../apiConfig';
 
-const API_BASE = typeof import.meta.env.VITE_API_URL !== 'undefined' ? import.meta.env.VITE_API_URL : '';
+const API_BASE = API_BASE_URL;
 
 type Endpoint = {
   method: string;

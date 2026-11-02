@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { authFetch } from '../authFetch';
+import { API_BASE_URL } from '../apiConfig';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -66,7 +67,7 @@ export interface TitleChainTimelineProps {
   onChainUpdated?: () => void;
 }
 
-const API = typeof import.meta.env.VITE_API_URL !== 'undefined' ? import.meta.env.VITE_API_URL : '';
+const API = API_BASE_URL;
 
 const STANDARD_DISPUTE_TEMPLATES = [
   {

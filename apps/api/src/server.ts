@@ -12,6 +12,8 @@ import crypto from 'node:crypto';
 import mysql from 'mysql2/promise';
 import { z } from 'zod';
 import { generateOtp, generateOtpSalt, hashOtp, hashPassword, resolveDemoCredential, verifyOtp, verifyPassword } from './auth-security.js';
+import { bootstrapSuperAdmin, isConfiguredSuperAdminEmail } from './super-admin-bootstrap.js';
+import { validateProductionEnvironment } from './production-config.js';
 import { sendOtpEmailWithSmtp } from './otp-email.js';
 import { calculateRisk, buildBaselineFindings, type RiskFinding } from './risk-engine.js';
 import { extractDocument, type ExtractionInput } from './document-extractor.js';
@@ -65,6 +67,8 @@ const port = Number(process.env.PORT || 4000);
 const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
 const documentStorage = createDocumentStorage();
+
+validateProductionEnvironment();
 
 fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -132,6 +136,12 @@ function parseMariaDbJsonRows(rows: any[]): any[] {
 const mysqlPool = process.env.DATABASE_URL
   ? mysql.createPool({
       uri: process.env.DATABASE_URL,
+      ssl: process.env.DATABASE_SSL?.toLowerCase() === 'true'
+        ? {
+            rejectUnauthorized: true,
+            ...(process.env.DATABASE_SSL_CA ? { ca: fs.readFileSync(process.env.DATABASE_SSL_CA, 'utf8') } : {}),
+          }
+        : undefined,
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
@@ -190,6 +200,7 @@ if (process.env.FIREBASE_PROJECT_ID) {
 }
 
 app.disable('x-powered-by');
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
 const allowedCorsOrigins = corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
 app.use(cors({
@@ -395,7 +406,7 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
       if (restored.rowCount) {
         const row=restored.rows[0];
         const dummy=DUMMY_ACCOUNTS.find(account=>account.uid===row.user_uid);
-        session={id:row.id,uid:row.user_uid,email:row.email||dummy?.email||'',name:row.full_name||dummy?.name||row.email||row.user_uid,role:row.role,tenantId:row.tenant_id,expiresAt:new Date(row.expires_at).getTime(),lastActivityAt:new Date(row.last_activity_at).getTime()};
+        session={id:row.id,uid:row.user_uid,email:row.email||dummy?.email||'',name:row.full_name||dummy?.name||row.email||row.user_uid,role:isConfiguredSuperAdminEmail(row.email)?'owner':row.role,tenantId:row.tenant_id,expiresAt:new Date(row.expires_at).getTime(),lastActivityAt:new Date(row.last_activity_at).getTime()};
         authSessions.set(rawToken,session);
       }
     }
@@ -439,13 +450,15 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
   }
   if(membership.rows[0].status&&membership.rows[0].status!=='active')return res.status(403).json({error:'This workspace membership is not active.'});
 
+  const authenticatedEmail = membership.rows[0].email || identity.email;
+  const isSuperAdmin = (process.env.NODE_ENV !== 'production' && dummyIdentity?.uid === 'user-super-admin') ||
+    isConfiguredSuperAdminEmail(authenticatedEmail);
   authReq.user = {
     ...identity,
-    email: membership.rows[0].email || identity.email,
+    email: authenticatedEmail,
     tenantId: membership.rows[0].organization_id,
-    role: membership.rows[0].role,
-    isSuperAdmin: (process.env.NODE_ENV !== 'production' && dummyIdentity?.uid === 'user-super-admin') ||
-      (process.env.SUPER_ADMIN_EMAILS || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean).includes((membership.rows[0].email || identity.email || '').toLowerCase())
+    role: isSuperAdmin ? 'owner' : membership.rows[0].role,
+    isSuperAdmin,
   };
   next();
 }
@@ -681,7 +694,7 @@ async function audit(userId: string, tenantId: string | undefined, action: strin
 app.get('/health', asyncRoute(async (_req, res) => {
   let database = 'not_configured';
   if (pool) { await pool.query('SELECT 1'); database = 'connected'; }
-  res.json({ status: 'ok', service: 'ojix-property-api', version: '0.1.0', database, databaseEngine: 'MariaDB', authentication: firebaseAuth ? 'firebase' : 'local-development-only' });
+  res.json({ status: 'ok', service: 'ojix-property-api', version: '0.1.0', database, databaseEngine: 'MariaDB', authentication: firebaseAuth ? 'firebase-id-token-and-otp-session' : 'password-and-otp-session' });
 }));
 
 app.get('/healthz', (_req, res) => {
@@ -704,7 +717,7 @@ app.get('/readyz', asyncRoute(async (_req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (err: any) {
-    res.status(503).json({ status: 'not_ready', error: err.message });
+    res.status(503).json({ status: 'not_ready', error: process.env.NODE_ENV === 'production' ? 'Database readiness check failed.' : err.message });
   }
 }));
 
@@ -833,8 +846,7 @@ app.post('/api/auth/forgot-password/request-otp', loginOtpRequestRateLimit, asyn
     FROM user_accounts u JOIN org_memberships m ON m.user_uid=u.id
     WHERE u.email=? ORDER BY m.created_at LIMIT 1`,[email]):{rowCount:0,rows:[]};
   const registeredRow=registered.rows[0];
-  const configuredSuperAdmins=(process.env.SUPER_ADMIN_EMAILS||'').split(',').map(value=>value.trim().toLowerCase()).filter(Boolean);
-  const registeredRole=configuredSuperAdmins.includes(email)?'super-admin':registeredRow?.membership_role;
+  const registeredRole=isConfiguredSuperAdminEmail(email)?'super-admin':registeredRow?.membership_role;
   const registeredMatches=Boolean(registered.rowCount&&registeredRow.email_verified&&registeredRow.status==='active'&&registeredRow.membership_status==='active'&&registeredRole===expectedRole);
   const account=dummy?{uid:dummy.uid,name:dummy.name,tenantId:DEFAULT_ORGANIZATION_ID}:registeredMatches?{uid:String(registeredRow.id),name:String(registeredRow.full_name),tenantId:String(registeredRow.organization_id)}:null;
   const fakeChallengeId=crypto.randomUUID();
@@ -871,6 +883,7 @@ app.post('/api/auth/forgot-password/reset', loginOtpVerifyRateLimit, asyncRoute(
   }).safeParse(req.body);
   if(!parsed.success)return res.status(400).json({error:parsed.error.issues[0]?.message||'Enter a valid recovery code and new password.'});
   const {challengeId,email,expectedRole,otp,newPassword}=parsed.data;
+  if(expectedRole==='super-admin'&&(newPassword.length<12||!/[A-Z]/.test(newPassword)||!/[a-z]/.test(newPassword)||!/[0-9]/.test(newPassword)||!/[^A-Za-z0-9]/.test(newPassword)))return res.status(400).json({error:'Super Admin passwords must contain at least 12 characters with uppercase, lowercase, a number and a special character.'});
   const result=await pool.query("SELECT * FROM otp_challenges WHERE id=? AND email=? AND purpose='password_reset' LIMIT 1",[challengeId,email]);
   const challenge=result.rows[0];
   if(!challenge||challenge.consumed_at||new Date(challenge.expires_at).getTime()<=Date.now())return res.status(400).json({error:'This recovery request is no longer valid. Request a new code.'});
@@ -880,7 +893,7 @@ app.post('/api/auth/forgot-password/reset', loginOtpVerifyRateLimit, asyncRoute(
   const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.uid===accountUid&&account.email.toLowerCase()===email):undefined;
   const registered=!dummy?await pool.query(`SELECT u.id,m.organization_id,m.role,m.status FROM user_accounts u JOIN org_memberships m ON m.user_uid=u.id WHERE u.id=? AND u.email=? AND u.email_verified=TRUE AND u.status='active' ORDER BY m.created_at LIMIT 1`,[accountUid,email]):{rowCount:0,rows:[]};
   if(!dummy&&!registered.rowCount)return res.status(400).json({error:'This recovery request is no longer valid. Request a new code.'});
-  const role=dummy?.isSuperAdmin?'super-admin':dummy?.role||((process.env.SUPER_ADMIN_EMAILS||'').split(',').map(value=>value.trim().toLowerCase()).includes(email)?'super-admin':registered.rows[0]?.role);
+  const role=dummy?.isSuperAdmin?'super-admin':dummy?.role||(isConfiguredSuperAdminEmail(email)?'super-admin':registered.rows[0]?.role);
   if(role!==expectedRole||(!dummy&&registered.rows[0]?.status!=='active'))return res.status(400).json({error:'This recovery request is no longer valid. Request a new code.'});
   const consumed=await pool.query("UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=? AND email=? AND account_uid=? AND purpose='password_reset' AND consumed_at IS NULL AND attempts<5 AND expires_at>NOW(6)",[challengeId,email,accountUid]);
   if(!consumed.rowCount)return res.status(400).json({error:'This recovery request is no longer valid. Request a new code.'});
@@ -917,8 +930,8 @@ app.post('/api/auth/login/request-otp', loginOtpRequestRateLimit, asyncRoute(asy
   const membership=await pool.query('SELECT organization_id,status,role FROM org_memberships WHERE user_uid=? ORDER BY created_at LIMIT 1',[uid]);
   if (!membership.rowCount||membership.rows[0].status!=='active') return res.status(403).json({error:'This workspace membership is not active.'});
   const role=membership.rows[0].role;
-  const isSuperAdmin=(process.env.NODE_ENV!=='production'&&dummy?.uid==='user-super-admin')||(process.env.SUPER_ADMIN_EMAILS||'').split(',').map(value=>value.trim().toLowerCase()).filter(Boolean).includes(email);
-  const authenticatedLoginRole=dummy?.isSuperAdmin?'super-admin':role;
+  const isSuperAdmin=(process.env.NODE_ENV!=='production'&&dummy?.uid==='user-super-admin')||isConfiguredSuperAdminEmail(email);
+  const authenticatedLoginRole=isSuperAdmin?'super-admin':role;
   if(expectedRole&&expectedRole!==authenticatedLoginRole)return res.status(403).json({error:`This account is not authorized for the ${expectedRole.replace('_',' ')} sign-in portal.`});
 
   const recentRequests=await pool.query("SELECT COUNT(*) AS request_count,MAX(created_at) AS last_requested_at FROM otp_challenges WHERE account_uid=? AND purpose='login' AND created_at>DATE_SUB(NOW(6),INTERVAL 15 MINUTE)",[uid]);
@@ -960,9 +973,9 @@ app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async
   const target:any=dummy||{uid:registered.rows[0].id,email:registered.rows[0].email,name:registered.rows[0].full_name,designation:'Registered Reviewer',role:'viewer',avatar:registered.rows[0].full_name.split(/\s+/).slice(0,2).map((part:string)=>part[0]).join('').toUpperCase(),description:'Verified workspace member'};
   const membership=await pool.query('SELECT organization_id,role,status FROM org_memberships WHERE user_uid=? LIMIT 1',[target.uid]);
   if (!membership.rowCount||membership.rows[0].status!=='active') return res.status(403).json({error:'This workspace membership is not active.'});
-  const role=membership.rows[0]?.role||target.role;
-  const isSuperAdmin=(process.env.NODE_ENV!=='production'&&dummy?.uid==='user-super-admin')||(process.env.SUPER_ADMIN_EMAILS||'').split(',').map(value=>value.trim().toLowerCase()).filter(Boolean).includes(email);
-  const authenticatedLoginRole=dummy?.isSuperAdmin?'super-admin':role;
+  const isSuperAdmin=(process.env.NODE_ENV!=='production'&&dummy?.uid==='user-super-admin')||isConfiguredSuperAdminEmail(email);
+  const role=isSuperAdmin?'owner':membership.rows[0]?.role||target.role;
+  const authenticatedLoginRole=isSuperAdmin?'super-admin':role;
   if(expectedRole&&expectedRole!==authenticatedLoginRole)return res.status(403).json({error:`This account is not authorized for the ${expectedRole.replace('_',' ')} sign-in portal.`});
   const consumed=await pool.query("UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=? AND email=? AND account_uid=? AND purpose='login' AND consumed_at IS NULL AND attempts<5 AND expires_at>NOW(6)",[challengeId,email,accountUid]);
   if(!consumed.rowCount)return res.status(400).json({error:'This sign-in code is no longer valid. Request a new code.'});
@@ -1016,6 +1029,7 @@ app.post('/api/auth/change-password',authGuard,asyncRoute(async(req,res)=>{
   }).refine(value=>value.currentPassword!==value.newPassword,{message:'New password must be different from the current password.'}).safeParse(req.body);
   if(!parsed.success)return res.status(400).json({error:parsed.error.issues[0]?.message||'Enter a valid new password.'});
   const user=(req as AuthenticatedRequest).user!;
+  if(user.isSuperAdmin&&(parsed.data.newPassword.length<12||!/[^A-Za-z0-9]/.test(parsed.data.newPassword)))return res.status(400).json({error:'Super Admin passwords must contain at least 12 characters and a special character.'});
   const dummy=DUMMY_ACCOUNTS.find(account=>account.uid===user.uid);
   const registered=await pool.query('SELECT password_hash FROM user_accounts WHERE id=? LIMIT 1',[user.uid]);
   const override=dummy?await pool.query('SELECT password_hash FROM account_password_overrides WHERE user_uid=? LIMIT 1',[user.uid]):{rowCount:0,rows:[]};
@@ -3211,6 +3225,27 @@ app.get('/api/super-admin/organizations',authGuard,superAdminGuard,asyncRoute(as
     FROM organizations o WHERE ?='' OR o.name LIKE ? OR o.slug LIKE ? OR o.id LIKE ? ORDER BY o.created_at DESC LIMIT ? OFFSET ?`,[search,like,like,like,limit,(page-1)*limit]);
   res.json({items:result.rows,page,limit,total:Number(count.rows[0]?.total||0)});
 }));
+app.post('/api/super-admin/organizations',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const parsed=z.object({name:z.string().trim().min(2).max(160),slug:z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(120),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:'Enter a valid organization name, URL slug and audit reason.'});
+  const duplicate=await pool!.query('SELECT id FROM organizations WHERE slug=? LIMIT 1',[parsed.data.slug]);
+  if(duplicate.rowCount)return res.status(409).json({error:'That organization slug is already in use.'});
+  const id=crypto.randomUUID();
+  await pool!.query('INSERT INTO organizations (id,name,slug) VALUES (?,?,?)',[id,parsed.data.name,parsed.data.slug]);
+  await audit(req.user?.uid||'unknown',id,'super_admin.organization_created','organization',id,{name:parsed.data.name,slug:parsed.data.slug,reason:parsed.data.reason});
+  res.status(201).json({item:{id,name:parsed.data.name,slug:parsed.data.slug},success:true});
+}));
+app.patch('/api/super-admin/organizations/:id',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const parsed=z.object({name:z.string().trim().min(2).max(160).optional(),slug:z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(120).optional(),reason:z.string().trim().min(3).max(500)}).refine(value=>value.name||value.slug).safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:'Choose a valid organization name or slug and provide an audit reason.'});
+  const current=await pool!.query('SELECT id,name,slug FROM organizations WHERE id=? LIMIT 1',[req.params.id]);
+  if(!current.rowCount)return res.status(404).json({error:'Organization not found.'});
+  if(parsed.data.slug){const duplicate=await pool!.query('SELECT id FROM organizations WHERE slug=? AND id<>? LIMIT 1',[parsed.data.slug,req.params.id]);if(duplicate.rowCount)return res.status(409).json({error:'That organization slug is already in use.'});}
+  const next={name:parsed.data.name||current.rows[0].name,slug:parsed.data.slug||current.rows[0].slug};
+  await pool!.query('UPDATE organizations SET name=?,slug=? WHERE id=?',[next.name,next.slug,req.params.id]);
+  await audit(req.user?.uid||'unknown',req.params.id,'super_admin.organization_updated','organization',req.params.id,{before:current.rows[0],after:next,reason:parsed.data.reason});
+  res.json({item:{id:req.params.id,...next},success:true});
+}));
 app.get('/api/super-admin/members',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
   const q=pageSchema.safeParse(req.query);if(!q.success)return res.status(400).json({error:'Invalid member filters.'});
   const {page,limit,search}=q.data,like=`%${search}%`;
@@ -3221,6 +3256,48 @@ app.get('/api/super-admin/members',authGuard,superAdminGuard,asyncRoute(async(re
     FROM org_memberships m JOIN organizations o ON o.id=m.organization_id LEFT JOIN user_accounts u ON u.id=m.user_uid
     WHERE ${filter} ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,[...params,limit,(page-1)*limit]);
   res.json({items:result.rows,page,limit,total:Number(count.rows[0]?.total||0)});
+}));
+app.post('/api/super-admin/users',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const roleSchema=z.enum(['owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']);
+  const parsed=z.object({name:z.string().trim().min(2).max(160),email:z.string().trim().email().max(255).transform(value=>value.toLowerCase()),organizationId:z.string().uuid(),role:roleSchema,password:z.string().min(12).max(128).regex(/[A-Z]/).regex(/[a-z]/).regex(/[0-9]/).regex(/[^A-Za-z0-9]/),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:'Provide a valid name, email, organization, role, 12-character temporary password and audit reason.'});
+  const {name,email,organizationId,role,password,reason}=parsed.data;
+  const organization=await pool!.query('SELECT id,name FROM organizations WHERE id=? LIMIT 1',[organizationId]);
+  if(!organization.rowCount)return res.status(404).json({error:'Organization not found.'});
+  const existing=await pool!.query('SELECT id FROM user_accounts WHERE email=? LIMIT 1',[email]);
+  if(existing.rowCount)return res.status(409).json({error:'An account with this email already exists. Add the existing account to the organization instead.'});
+  const userId=crypto.randomUUID(),membershipId=crypto.randomUUID();
+  const conn=await pool!.getConnection();
+  try{
+    await conn.beginTransaction();
+    await conn.query('INSERT INTO user_accounts (id,email,full_name,password_hash,email_verified,status,otp_required) VALUES (?,?,?,?,TRUE,\'active\',TRUE)',[userId,email,name,hashPassword(password)]);
+    await conn.query('INSERT INTO org_memberships (id,organization_id,user_uid,email,role,status) VALUES (?,?,?,?,?,\'active\')',[membershipId,organizationId,userId,email,role]);
+    await conn.query('INSERT INTO audit_events (id,actor_uid,tenant_id,action,entity_type,entity_id,details) VALUES (?,?,?,?,?,?,?)',[crypto.randomUUID(),req.user?.uid||'unknown',organizationId,'super_admin.user_created','user_account',userId,JSON.stringify({email,name,role,organizationName:organization.rows[0].name,reason})]);
+    await conn.commit();
+    res.status(201).json({success:true,item:{id:userId,membershipId,email,full_name:name,role,organization_id:organizationId,status:'active'},message:'Account created. The user must complete email OTP verification when signing in.'});
+  }catch(error:any){
+    await conn.rollback();
+    if(error?.code==='ER_DUP_ENTRY')return res.status(409).json({error:'An account or membership with these details already exists.'});
+    throw error;
+  }finally{conn.release();}
+}));
+app.get('/api/super-admin/properties',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const q=pageSchema.safeParse(req.query);if(!q.success)return res.status(400).json({error:'Invalid property filters.'});
+  const {page,limit,search}=q.data,like=`%${search}%`;
+  const filter=`(?='' OR p.name LIKE ? OR p.application_number LIKE ? OR p.survey_number LIKE ? OR p.village LIKE ? OR o.name LIKE ? OR p.id LIKE ?)`;
+  const params=[search,like,like,like,like,like,like];
+  const count=await pool!.query(`SELECT COUNT(*) total FROM properties p JOIN organizations o ON o.id=p.tenant_id WHERE ${filter}`,params);
+  const result=await pool!.query(`SELECT p.id,p.tenant_id,p.application_number,p.name,p.village,p.taluk,p.district,p.survey_number,p.status,p.archived_at,p.created_at,o.name organization_name FROM properties p JOIN organizations o ON o.id=p.tenant_id WHERE ${filter} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,[...params,limit,(page-1)*limit]);
+  res.json({items:result.rows,page,limit,total:Number(count.rows[0]?.total||0)});
+}));
+app.patch('/api/super-admin/properties/:id/archive',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  const parsed=z.object({archived:z.boolean(),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:'Choose the property archive state and provide an audit reason.'});
+  const current=await pool!.query('SELECT id,tenant_id,archived_at FROM properties WHERE id=? LIMIT 1',[req.params.id]);
+  if(!current.rowCount)return res.status(404).json({error:'Property not found.'});
+  await pool!.query('UPDATE properties SET archived_at=?,archived_by_uid=?,archive_reason=?,updated_by_uid=?,updated_at=NOW(6) WHERE id=?',[parsed.data.archived?new Date():null,parsed.data.archived?req.user?.uid:null,parsed.data.archived?parsed.data.reason:null,req.user?.uid||'unknown',req.params.id]);
+  await audit(req.user?.uid||'unknown',current.rows[0].tenant_id,parsed.data.archived?'super_admin.property_archived':'super_admin.property_restored','property',req.params.id,{reason:parsed.data.reason});
+  res.json({success:true,archived:parsed.data.archived});
 }));
 app.patch('/api/super-admin/members/:id',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
   const normalizeChoice=(value:unknown)=>typeof value==='string'?value.trim().toLowerCase().replace(/[\s-]+/g,'_'):value;
@@ -3434,7 +3511,17 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 let server: any;
 if (process.env.NODE_ENV !== 'test') {
-  server = app.listen(port, () => console.log(`OJIX Property API listening on http://localhost:${port}`));
+  void (async () => {
+    if (!pool && process.env.NODE_ENV === 'production') throw new Error('DATABASE_URL is required to start the production API.');
+    if (pool) {
+      const bootstrap = await bootstrapSuperAdmin(pool as unknown as import('./super-admin-bootstrap.js').BootstrapPool);
+      if (bootstrap.configured) console.log(`Super Admin bootstrap ready (${bootstrap.created ? 'created' : 'account preserved'}).`);
+    }
+    server = app.listen(port, () => console.log(`OJIX Property API listening on port ${port}`));
+  })().catch(error => {
+    console.error('OJIX API startup failed:', error instanceof Error ? error.message : 'Unknown configuration error.');
+    process.exit(1);
+  });
   async function shutdown() { server?.close(); if (pool) await pool.end(); process.exit(0); }
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }
