@@ -251,15 +251,23 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     fetch(`${apiUrl}/health`)
       .then(async res => {
         const data = await res.json().catch(() => ({}));
-        if (!res.ok || data.database !== 'connected') throw new Error(data.error || 'Database is not ready.');
+        if (!res.ok || data.database !== 'connected') {
+          const reason = data.database === 'not_configured'
+            ? 'The API has no DATABASE_URL configured.'
+            : data.database === 'disconnected'
+              ? 'The API is running but cannot connect to its database.'
+              : data.error || `Health check failed (HTTP ${res.status}).`;
+          throw new Error(reason);
+        }
         setServiceStatus('ready');
         setServiceMessage(`API ready • ${data.databaseEngine || 'Database'} connected`);
       })
-      .catch(() => {
+      .catch(error => {
         setServiceStatus('unavailable');
+        const detail = error instanceof Error ? error.message : 'Request failed.';
         setServiceMessage(import.meta.env.PROD
-          ? 'The production API is unreachable. Check the API host, database readiness, and CORS allowlist.'
-          : 'API or database unavailable. Start the local stack and retry.');
+          ? `Production API health check failed: ${detail} Verify VITE_API_URL, API reachability, and the API CORS allowlist.`
+          : `API health check failed: ${detail} Start the local API and database, then retry.`);
       });
 
     // The API exposes this list only when it is itself running in local

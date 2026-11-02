@@ -7,6 +7,7 @@ This guide matches the checked-in application: a React/Vite frontend, Express AP
 - Frontend: [https://ojix-property-intelligence-ten.vercel.app](https://ojix-property-intelligence-ten.vercel.app) (Vercel team deployment protection is enabled).
 - API: **not deployed**. The local API is available at `http://localhost:4001` only while the developer Docker stack is running.
 - The Vercel project currently has no production environment variables. Until `VITE_API_URL` points to a hosted API, the login screen reports the missing production API configuration and authenticated features cannot be verified.
+- Live diagnosis on 2026-11-02: requesting `/health` on the Vercel domain returns the Vercel SPA `index.html` (the catch-all rewrite), not an API response. The deployed JavaScript bundle still includes the obsolete development message `Start the local stack`; redeploy the current frontend after a real HTTPS API URL is available.
 - A production login, remote MySQL persistence and production uploads have not been verified. Do not describe the full product as production-ready until those checks pass.
 
 ## Frontend on Vercel

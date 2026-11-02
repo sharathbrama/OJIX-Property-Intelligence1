@@ -692,9 +692,31 @@ async function audit(userId: string, tenantId: string | undefined, action: strin
 }
 
 app.get('/health', asyncRoute(async (_req, res) => {
-  let database = 'not_configured';
-  if (pool) { await pool.query('SELECT 1'); database = 'connected'; }
-  res.json({ status: 'ok', service: 'ojix-property-api', version: '0.1.0', database, databaseEngine: 'MariaDB', authentication: firebaseAuth ? 'firebase-id-token-and-otp-session' : 'password-and-otp-session' });
+  const common = {
+    service: 'ojix-property-api',
+    version: '0.1.0',
+    databaseEngine: 'MariaDB',
+    authentication: firebaseAuth ? 'firebase-id-token-and-otp-session' : 'password-and-otp-session',
+  };
+  if (!pool) {
+    return res.status(503).json({
+      ...common,
+      status: 'not_ready',
+      database: 'not_configured',
+      error: 'Database is not configured. Set DATABASE_URL and restart the API.',
+    });
+  }
+  try {
+    await pool.query('SELECT 1');
+    return res.json({ ...common, status: 'ok', database: 'connected' });
+  } catch {
+    return res.status(503).json({
+      ...common,
+      status: 'not_ready',
+      database: 'disconnected',
+      error: 'Database connectivity check failed.',
+    });
+  }
 }));
 
 app.get('/healthz', (_req, res) => {
