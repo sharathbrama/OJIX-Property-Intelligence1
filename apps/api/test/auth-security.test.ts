@@ -8,14 +8,14 @@ const demoRoles = [
 ];
 
 test('same-email demo credentials resolve by stored password hash, not client role', () => {
-  const accounts = demoRoles.map(role => ({ uid: `demo-${role}`, email: 'mrsharath3126@gmail.com', role }));
+  const accounts = demoRoles.map(role => ({ uid: `demo-${role}`, email: 'keerthana1234p@gmail.com', role }));
   const hashes = new Map(accounts.map(account => [account.uid, hashPassword(`test-${account.role}-password`)]));
 
   for (const account of accounts) {
     assert.equal(resolveDemoCredential(account.email, `test-${account.role}-password`, accounts, hashes)?.uid, account.uid);
   }
   assert.equal(resolveDemoCredential('unknown@example.com', 'test-owner-password', accounts, hashes), null);
-  assert.equal(resolveDemoCredential('mrsharath3126@gmail.com', 'wrong-password', accounts, hashes), null);
+  assert.equal(resolveDemoCredential('keerthana1234p@gmail.com', 'wrong-password', accounts, hashes), null);
 });
 
 test('demo credential resolution rejects ambiguous matching password hashes', () => {

@@ -29,11 +29,11 @@ export interface TitleEvent {
 
 export interface TitleGap {
   code:
-    | 'TITLE_GAP_MISSING_PREDECESSOR'
-    | 'TITLE_GAP_CHRONOLOGICAL_INVERSION'
-    | 'TITLE_GAP_EXTENT_OVERCONVEYANCE'
-    | 'TITLE_UNRELEASED_ENCUMBRANCE'
-    | 'TITLE_REGISTRATION_DELAY_EXCEEDED';
+  | 'TITLE_GAP_MISSING_PREDECESSOR'
+  | 'TITLE_GAP_CHRONOLOGICAL_INVERSION'
+  | 'TITLE_GAP_EXTENT_OVERCONVEYANCE'
+  | 'TITLE_UNRELEASED_ENCUMBRANCE'
+  | 'TITLE_REGISTRATION_DELAY_EXCEEDED';
   severity: 'critical' | 'high' | 'medium';
   title: string;
   description: string;
@@ -135,7 +135,7 @@ export function normalizePartyName(rawName: string): {
     }
   }
 
-  const canonicalName = normalWords.length > 0 
+  const canonicalName = normalWords.length > 0
     ? (parentSpouse ? `${normalWords.join(' ')} (S/O ${parentSpouse.toUpperCase()})` : normalWords.join(' '))
     : rawName.toUpperCase().trim();
 

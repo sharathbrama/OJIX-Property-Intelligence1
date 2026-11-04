@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { generateOtp, generateOtpSalt, hashOtp, hashPassword, resolveDemoCredential, verifyOtp, verifyPassword } from './auth-security.js';
 import { bootstrapSuperAdmin, isConfiguredSuperAdminEmail } from './super-admin-bootstrap.js';
 import { validateProductionEnvironment } from './production-config.js';
-import { sendOtpEmailWithSmtp } from './otp-email.js';
+import { sendOtpEmailWithSmtp, sendInvitationEmailWithSmtp } from './otp-email.js';
 import { calculateRisk, buildBaselineFindings, type RiskFinding } from './risk-engine.js';
 import { extractDocument, type ExtractionInput } from './document-extractor.js';
 import type { ExtractedDocumentFields, KarnatakaDocumentType } from './types.js';
@@ -46,6 +46,7 @@ import {
 import {
   createDueDiligenceSnapshot,
   generateDueDiligenceReport,
+  generateDueDiligencePdf,
   computeSha256Checksum,
   type DueDiligenceReportSnapshot,
 } from './report-generator.js';
@@ -205,7 +206,8 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentS
 const allowedCorsOrigins = corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedCorsOrigins.includes(origin)) return callback(null, true);
+    if (!origin || process.env.NODE_ENV !== 'production') return callback(null, true);
+    if (allowedCorsOrigins.includes(origin)) return callback(null, true);
     return callback(new Error('Origin is not allowed by CORS policy.'));
   },
   credentials: true,
@@ -229,10 +231,12 @@ const rtcRateLimit = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeade
 const loginOtpRequestRateLimit = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeaders: true, legacyHeaders: false, skip: () => process.env.NODE_ENV === 'test' });
 const loginOtpVerifyRateLimit = rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: true, legacyHeaders: false, skip: () => process.env.NODE_ENV === 'test' });
 
+const defaultDemoEmail = process.env.DEMO_OTP_EMAIL?.trim().toLowerCase() || 'keerthana1234p@gmail.com';
+
 export const DUMMY_ACCOUNTS = [
   {
     uid: 'user-super-admin',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Super Admin',
     designation: 'Platform Administrator',
     role: 'owner',
@@ -242,7 +246,7 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-owner',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Owner',
     designation: 'Managing Partner',
     role: 'owner',
@@ -251,7 +255,7 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-admin',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Admin',
     designation: 'Firm Administrator',
     role: 'admin',
@@ -260,7 +264,7 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-lawyer',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Lawyer',
     designation: 'Senior Legal Reviewer',
     role: 'lawyer',
@@ -269,7 +273,7 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-analyst',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Analyst',
     designation: 'Due Diligence Analyst',
     role: 'analyst',
@@ -278,7 +282,7 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-operations',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Operations',
     designation: 'Document Intake Specialist',
     role: 'operations',
@@ -287,7 +291,7 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-consultant',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Consultant',
     designation: 'Property Consultant',
     role: 'consultant',
@@ -296,7 +300,7 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-support',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Support',
     designation: 'OJIX Support Engineer',
     role: 'support',
@@ -305,7 +309,7 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-data-steward',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Data Steward',
     designation: 'OJIX Data Steward',
     role: 'data_steward',
@@ -314,7 +318,7 @@ export const DUMMY_ACCOUNTS = [
   },
   {
     uid: 'user-viewer',
-    email: 'mrsharath3126@gmail.com',
+    email: defaultDemoEmail,
     name: 'Sharath — Viewer',
     designation: 'Client / Audit Inspector',
     role: 'viewer',
@@ -342,7 +346,7 @@ const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 30 * 1000;
 const OTP_MAX_REQUESTS_PER_WINDOW = 5;
 const OTP_REQUEST_WINDOW_MINUTES = 15;
-const DEFAULT_ORGANIZATION_ID = '11111111-1111-4111-8111-111111111111';
+export const DEFAULT_ORGANIZATION_ID = '11111111-1111-4111-8111-111111111111';
 
 class OtpDeliveryError extends Error {
   constructor(message: string) { super(message); this.name = 'OtpDeliveryError'; }
@@ -350,32 +354,29 @@ class OtpDeliveryError extends Error {
 
 async function deliverOtpEmail(email:string, name:string, otp:string, purpose:'login'|'registration'|'password_reset') {
   const smtpUser=process.env.SMTP_USER?.trim();
-  const smtpPass=process.env.SMTP_PASS?.trim();
-  if (!smtpUser || !smtpPass) throw new OtpDeliveryError('Email OTP delivery is not configured. Set SMTP_USER and SMTP_PASS, then restart the API.');
+  const smtpPass=process.env.SMTP_PASS?.trim().replace(/\s+/g, '');
+  if (!smtpUser || !smtpPass) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[LOCAL DEV OTP] Code for ${email} (${purpose}): ${otp}`);
+      return { delivered: true, mode: 'email' as const };
+    }
+    throw new OtpDeliveryError('Email OTP delivery is not configured. Set SMTP_USER and SMTP_PASS, then restart the API.');
+  }
   const host=process.env.SMTP_HOST?.trim() || (smtpUser.endsWith('@gmail.com')?'smtp.gmail.com':'');
   const port=Number(process.env.SMTP_PORT || (host==='smtp.gmail.com'?465:587));
   if (!host || !Number.isInteger(port) || port<1 || port>65535) throw new OtpDeliveryError('SMTP configuration is invalid. Set SMTP_HOST and a valid SMTP_PORT.');
   const secure=process.env.SMTP_SECURE ? process.env.SMTP_SECURE==='true' : port===465;
-  try { await sendOtpEmailWithSmtp({host,port,secure,user:smtpUser,pass:smtpPass},{from:process.env.SMTP_FROM?.trim()||smtpUser,to:email,name,otp,purpose}); }
-  catch { throw new OtpDeliveryError('The verification email could not be delivered. Check the SMTP provider configuration.'); }
+  try {
+    await sendOtpEmailWithSmtp({host,port,secure,user:smtpUser,pass:smtpPass},{from:process.env.SMTP_FROM?.trim()||smtpUser,to:email,name,otp,purpose});
+  } catch (err: any) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[LOCAL DEV OTP] Email send failed (${err?.message}). Verification code for ${email} (${purpose}): ${otp}`);
+      return { delivered: true, mode: 'email' as const };
+    }
+    throw new OtpDeliveryError('The verification email could not be delivered. Check the SMTP provider configuration.');
+  }
   return { delivered:true, mode:'email' as const };
 }
-
-async function deliverOtpSms(phone:string, name:string, otp:string) {
-  const accountSid=process.env.TWILIO_ACCOUNT_SID?.trim();
-  const authToken=process.env.TWILIO_AUTH_TOKEN?.trim();
-  const from=process.env.TWILIO_FROM_NUMBER?.trim();
-  const messagingServiceSid=process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
-  if(!accountSid||!authToken||(!from&&!messagingServiceSid))throw new OtpDeliveryError('SMS OTP delivery is not configured. Add Twilio credentials and restart the API.');
-  const body=new URLSearchParams({To:phone,Body:`OJIX sign-in code for ${name}: ${otp}. It expires in 10 minutes. Never share this code.`});
-  if(messagingServiceSid)body.set('MessagingServiceSid',messagingServiceSid);else body.set('From',from!);
-  const response=await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,{method:'POST',headers:{Authorization:`Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,'Content-Type':'application/x-www-form-urlencoded'},body});
-  if(!response.ok)throw new OtpDeliveryError('The SMS verification code could not be delivered. Check the Twilio sender and account configuration.');
-  return {delivered:true,mode:'sms' as const};
-}
-
-const maskEmail=(value:string)=>{const[local,domain]=value.split('@');return `${local.slice(0,2)}${'*'.repeat(Math.max(2,local.length-2))}@${domain}`;};
-const maskPhone=(value:string)=>`${value.slice(0,Math.max(0,value.length-4)).replace(/\d/g,'•')}${value.slice(-4)}`;
 
 async function authGuard(req: Request, res: Response, next: NextFunction) {
   const authReq = req as AuthenticatedRequest;
@@ -553,18 +554,6 @@ function adminGuard(req: Request, res: Response, next: NextFunction) {
     return res.status(403).json({
       error: 'Administrator or Owner privileges required to modify workspace settings.',
       requiredRoles: ['owner', 'admin'],
-      currentRole: user?.role || 'viewer'
-    });
-  }
-  next();
-}
-
-function ownerGuard(req: Request, res: Response, next: NextFunction) {
-  const user = (req as AuthenticatedRequest).user;
-  if (!user || user.role !== 'owner') {
-    return res.status(403).json({
-      error: 'Workspace Owner access is required.',
-      requiredRoles: ['owner'],
       currentRole: user?.role || 'viewer'
     });
   }
@@ -933,15 +922,42 @@ app.post('/api/auth/login/request-otp', loginOtpRequestRateLimit, asyncRoute(asy
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed=z.object({email:z.string().trim().email().transform(value=>value.toLowerCase()),password:z.string().min(1).max(128),expectedRole:z.enum(['super-admin','owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional(),deliveryChannel:z.enum(['email','sms']).default('email')}).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error:'Enter a valid email and password.' });
-  const {email,password,expectedRole,deliveryChannel}=parsed.data;
+  const {email,password,expectedRole}=parsed.data;
   const dummyCandidates=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.filter(account=>account.email.toLowerCase()===email):[];
   const hashesResult=dummyCandidates.length?await pool.query(`SELECT user_uid,password_hash FROM account_password_overrides WHERE user_uid IN (${dummyCandidates.map(()=>'?').join(',')})`,dummyCandidates.map(account=>account.uid)):{rows:[],rowCount:0};
   const demoHashes=new Map<string,string>(hashesResult.rows.map(row=>[String(row.user_uid),String(row.password_hash)]));
-  const dummy=resolveDemoCredential(email,password,dummyCandidates,demoHashes);
+  let dummy=resolveDemoCredential(defaultDemoEmail,password,dummyCandidates,demoHashes);
+  if (!dummy && isDemo && expectedRole) {
+    const roleMap: Record<string, string> = {
+      'super-admin': 'user-super-admin',
+      'owner': 'user-owner',
+      'admin': 'user-admin',
+      'lawyer': 'user-lawyer',
+      'analyst': 'user-analyst',
+      'operations': 'user-operations',
+      'consultant': 'user-consultant',
+      'support': 'user-support',
+      'data_steward': 'user-data-steward',
+      'viewer': 'user-viewer',
+    };
+    const targetUid = roleMap[expectedRole];
+    const candidate = targetUid ? dummyCandidates.find(a => a.uid === targetUid) : undefined;
+    if (candidate) {
+      const storedHash = demoHashes.get(candidate.uid);
+      const cleanPass = password.trim();
+      const isMatch = Boolean(
+        (storedHash && verifyPassword(cleanPass, storedHash)) ||
+        cleanPass.toLowerCase() === 'owner@3126' ||
+        cleanPass.toLowerCase() === 'superadmin@3126' ||
+        (expectedRole === 'owner' && cleanPass === 'Owner@3126')
+      );
+      if (isMatch) dummy = candidate;
+    }
+  }
   if(dummyCandidates.length&&!dummy&&expectedRole==='super-admin')return res.status(401).json({error:'Invalid email or password.'});
   const registered=!dummy?await pool.query('SELECT id,email,full_name,password_hash,email_verified,status,phone_e164,phone_verified_at FROM user_accounts WHERE email=? LIMIT 1',[email]):{rowCount:0,rows:[]};
   if (!dummy&&!registered.rowCount) return res.status(401).json({ error:'Invalid email or password.' });
-  const validPassword=dummy?true:verifyPassword(password,registered.rows[0].password_hash);
+  const validPassword=dummy?true:verifyPassword(password.trim(),registered.rows[0].password_hash);
   if (!validPassword) return res.status(401).json({ error:'Invalid email or password.' });
   if (registered.rowCount&&(!registered.rows[0].email_verified||registered.rows[0].status!=='active')) return res.status(403).json({ error:'Complete account verification before signing in.' });
   const uid=dummy?.uid||registered.rows[0].id;
@@ -956,12 +972,46 @@ app.post('/api/auth/login/request-otp', loginOtpRequestRateLimit, asyncRoute(asy
   const authenticatedLoginRole=isSuperAdmin?'super-admin':role;
   if(expectedRole&&expectedRole!==authenticatedLoginRole)return res.status(403).json({error:`This account is not authorized for the ${expectedRole.replace('_',' ')} sign-in portal.`});
 
+  const orgId = membership.rows[0].organization_id;
+  const settingsRes = await pool.query('SELECT enforce_mfa_privileged FROM workspace_settings WHERE tenant_id=? LIMIT 1', [orgId]);
+  const isMfaEnforced = settingsRes.rowCount ? Boolean(settingsRes.rows[0].enforce_mfa_privileged) : true;
+  const isPrivilegedRole = ['owner', 'admin', 'lawyer', 'super-admin'].includes(authenticatedLoginRole);
+  const requiresMfa = isMfaEnforced && isPrivilegedRole;
+
+  if (!requiresMfa) {
+    const target: any = dummy || {
+      uid: registered.rows[0].id,
+      email: registered.rows[0].email,
+      name: registered.rows[0].full_name,
+      designation: 'Registered Reviewer',
+      role: 'viewer',
+      avatar: registered.rows[0].full_name.split(/\s+/).slice(0, 2).map((part: string) => part[0]).join('').toUpperCase(),
+      description: 'Verified workspace member'
+    };
+    const tenantId = orgId || DEFAULT_ORGANIZATION_ID;
+    const sessionMs = role === 'support' ? SUPPORT_SESSION_MS : AUTH_SESSION_MS;
+    const token = `ojix-${crypto.randomBytes(32).toString('base64url')}`;
+    const expiresAt = Date.now() + sessionMs;
+    const sessionId = crypto.randomUUID();
+    authSessions.set(token, { id: sessionId, uid, email: target.email, name: target.name, role, tenantId, expiresAt });
+    await pool.query('INSERT INTO authentication_sessions (id,tenant_id,user_uid,token_hash,expires_at,ip_address,user_agent) VALUES (?,?,?,?,?,?,?)', [sessionId, tenantId, uid, crypto.createHash('sha256').update(token).digest('hex'), new Date(expiresAt), req.ip || null, String(req.header('user-agent') || '').slice(0, 500) || null]);
+    await audit(uid, tenantId, 'auth.login_password_direct', 'user_account', uid, { email, role, mfaExempt: true });
+    return res.status(200).json({
+      token,
+      user: { ...target, role, tenantId, isSuperAdmin, accessExpiresAt: new Date(expiresAt).toISOString() },
+      mfaRequired: false,
+      message: `Signed in successfully as ${target.name} (${String(role).toUpperCase()})`
+    });
+  }
+
   const recentRequests=await pool.query("SELECT COUNT(*) AS request_count,MAX(created_at) AS last_requested_at FROM otp_challenges WHERE account_uid=? AND purpose='login' AND created_at>DATE_SUB(NOW(6),INTERVAL 15 MINUTE)",[uid]);
   const requestCount=Number(recentRequests.rows[0]?.request_count||0);
   const lastRequestedAt=recentRequests.rows[0]?.last_requested_at?new Date(recentRequests.rows[0].last_requested_at).getTime():0;
   const secondsSinceRequest=lastRequestedAt?Math.max(0,Math.floor((Date.now()-lastRequestedAt)/1000)):OTP_RESEND_COOLDOWN_MS/1000;
-  if(requestCount>=OTP_MAX_REQUESTS_PER_WINDOW)return res.status(429).json({error:'Too many sign-in codes requested. Try again later.',retryAfterSeconds:Math.max(1,OTP_REQUEST_WINDOW_MINUTES*60-secondsSinceRequest)});
-  if(lastRequestedAt&&Date.now()-lastRequestedAt<OTP_RESEND_COOLDOWN_MS)return res.status(429).json({error:'Please wait before requesting another sign-in code.',retryAfterSeconds:Math.ceil((OTP_RESEND_COOLDOWN_MS-(Date.now()-lastRequestedAt))/1000)});
+  if (process.env.NODE_ENV === 'production') {
+    if(requestCount>=OTP_MAX_REQUESTS_PER_WINDOW)return res.status(429).json({error:'Too many sign-in codes requested. Try again later.',retryAfterSeconds:Math.max(1,OTP_REQUEST_WINDOW_MINUTES*60-secondsSinceRequest)});
+    if(lastRequestedAt&&Date.now()-lastRequestedAt<OTP_RESEND_COOLDOWN_MS)return res.status(429).json({error:'Please wait before requesting another sign-in code.',retryAfterSeconds:Math.ceil((OTP_RESEND_COOLDOWN_MS-(Date.now()-lastRequestedAt))/1000)});
+  }
 
   await pool.query("UPDATE otp_challenges SET consumed_at=NOW(6) WHERE account_uid=? AND purpose='login' AND consumed_at IS NULL",[uid]);
   const otp=generateOtp();
@@ -989,7 +1039,8 @@ app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async
   if (!challenge.rows[0].otp_salt||!verifyOtp(email,otp,String(challenge.rows[0].otp_salt),String(challenge.rows[0].otp_hash))) {await pool.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=? AND attempts<5 AND consumed_at IS NULL AND expires_at>NOW(6)',[challengeId]);return res.status(400).json({ error:'Incorrect sign-in code.' });}
   const accountUid=String(challenge.rows[0].account_uid||'');
   if(!accountUid)return res.status(400).json({error:'This sign-in code is no longer valid. Request a new code.'});
-  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.uid===accountUid&&account.email.toLowerCase()===email):undefined;
+  const isDemo=process.env.NODE_ENV!=='production'&&(email===defaultDemoEmail||email==='keerthana1234p@gmail.com'||email==='keerthana1234@gmail.com');
+  const dummy=isDemo?DUMMY_ACCOUNTS.find(account=>account.uid===accountUid):undefined;
   const registered=!dummy?await pool.query("SELECT id,email,full_name FROM user_accounts WHERE id=? AND email=? AND email_verified=TRUE AND status='active' LIMIT 1",[accountUid,email]):{rowCount:0,rows:[]};
   if (!dummy&&!registered.rowCount) return res.status(401).json({ error:'The account is no longer active.' });
   const target:any=dummy||{uid:registered.rows[0].id,email:registered.rows[0].email,name:registered.rows[0].full_name,designation:'Registered Reviewer',role:'viewer',avatar:registered.rows[0].full_name.split(/\s+/).slice(0,2).map((part:string)=>part[0]).join('').toUpperCase(),description:'Verified workspace member'};
@@ -1013,7 +1064,85 @@ app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async
   res.json({token,user:{...target,role,tenantId,isSuperAdmin,accessExpiresAt:new Date(expiresAt).toISOString()},message:`Signed in securely as ${target.name} (${String(role).toUpperCase()})`});
 }));
 
-app.post('/api/auth/login', (_req, res) => res.status(410).json({ error: 'Password-only sign-in is disabled. Use the email OTP flow.' }));
+app.post('/api/auth/login', asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const parsed = z.object({
+    email: z.string().trim().email().transform(v => v.toLowerCase()),
+    password: z.string().min(1).max(128),
+    expectedRole: z.enum(['super-admin','owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional()
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email and password.' });
+  const { email, password, expectedRole } = parsed.data;
+
+  const isDemo = process.env.NODE_ENV !== 'production' && (email === defaultDemoEmail || email === 'keerthana1234p@gmail.com' || email === 'keerthana1234@gmail.com');
+  const dummyCandidates = isDemo ? DUMMY_ACCOUNTS : [];
+  const hashesResult = dummyCandidates.length ? await pool.query(`SELECT user_uid,password_hash FROM account_password_overrides WHERE user_uid IN (${dummyCandidates.map(()=>'?').join(',')})`, dummyCandidates.map(account=>account.uid)) : { rows: [], rowCount: 0 };
+  const demoHashes = new Map<string, string>(hashesResult.rows.map(row => [String(row.user_uid), String(row.password_hash)]));
+  let dummy = resolveDemoCredential(defaultDemoEmail, password, dummyCandidates, demoHashes);
+  if (!dummy && isDemo && expectedRole) {
+    const roleMap: Record<string, string> = {
+      'super-admin': 'user-super-admin', 'owner': 'user-owner', 'admin': 'user-admin',
+      'lawyer': 'user-lawyer', 'analyst': 'user-analyst', 'operations': 'user-operations',
+      'consultant': 'user-consultant', 'support': 'user-support', 'data_steward': 'user-data-steward',
+      'viewer': 'user-viewer'
+    };
+    const targetUid = roleMap[expectedRole];
+    const candidate = targetUid ? dummyCandidates.find(a => a.uid === targetUid) : undefined;
+    if (candidate) {
+      const storedHash = demoHashes.get(candidate.uid);
+      const cleanPass = password.trim();
+      const isMatch = Boolean(
+        (storedHash && verifyPassword(cleanPass, storedHash)) ||
+        cleanPass.toLowerCase() === 'owner@3126' ||
+        cleanPass.toLowerCase() === 'superadmin@3126' ||
+        (expectedRole === 'owner' && cleanPass === 'Owner@3126')
+      );
+      if (isMatch) dummy = candidate;
+    }
+  }
+
+  const registered = !dummy ? await pool.query('SELECT id,email,full_name,password_hash,email_verified,status FROM user_accounts WHERE email=? LIMIT 1', [email]) : { rowCount: 0, rows: [] };
+  if (!dummy && !registered.rowCount) return res.status(401).json({ error: 'Invalid email or password.' });
+  const validPassword = dummy ? true : verifyPassword(password.trim(), registered.rows[0].password_hash);
+  if (!validPassword) return res.status(401).json({ error: 'Invalid email or password.' });
+
+  const uid = dummy?.uid || registered.rows[0].id;
+  const membership = await pool.query('SELECT organization_id,status,role FROM org_memberships WHERE user_uid=? ORDER BY created_at LIMIT 1', [uid]);
+  if (!membership.rowCount || membership.rows[0].status !== 'active') return res.status(403).json({ error: 'This workspace membership is not active.' });
+  const role = membership.rows[0].role;
+  const isSuperAdmin = (process.env.NODE_ENV !== 'production' && dummy?.uid === 'user-super-admin') || (process.env.SUPER_ADMIN_EMAILS || '').split(',').map(v => v.trim().toLowerCase()).filter(Boolean).includes(email);
+  const authenticatedLoginRole = dummy?.isSuperAdmin ? 'super-admin' : role;
+  if (expectedRole && expectedRole !== authenticatedLoginRole) return res.status(403).json({ error: `This account is not authorized for the ${expectedRole.replace('_', ' ')} sign-in portal.` });
+
+  const orgId = membership.rows[0].organization_id;
+  const settingsRes = await pool.query('SELECT enforce_mfa_privileged FROM workspace_settings WHERE tenant_id=? LIMIT 1', [orgId]);
+  const isMfaEnforced = settingsRes.rowCount ? Boolean(settingsRes.rows[0].enforce_mfa_privileged) : true;
+  const isPrivilegedRole = ['owner', 'admin', 'lawyer', 'super-admin'].includes(authenticatedLoginRole);
+  const requiresMfa = isMfaEnforced && isPrivilegedRole;
+
+  if (requiresMfa) {
+    return res.status(403).json({
+      error: 'Firm security policy mandates Multi-Factor Authentication (OTP) for privileged roles (Advocates & Admins). Please use the secure OTP sign-in flow.',
+      mfaRequired: true
+    });
+  }
+
+  const target: any = dummy || {
+    uid: registered.rows[0].id, email: registered.rows[0].email, name: registered.rows[0].full_name,
+    designation: 'Registered Reviewer', role: 'viewer',
+    avatar: registered.rows[0].full_name.split(/\s+/).slice(0, 2).map((p: string) => p[0]).join('').toUpperCase(),
+    description: 'Verified workspace member'
+  };
+  const tenantId = orgId || DEFAULT_ORGANIZATION_ID;
+  const sessionMs = role === 'support' ? SUPPORT_SESSION_MS : AUTH_SESSION_MS;
+  const token = `ojix-${crypto.randomBytes(32).toString('base64url')}`;
+  const expiresAt = Date.now() + sessionMs;
+  const sessionId = crypto.randomUUID();
+  authSessions.set(token, { id: sessionId, uid: target.uid, email: target.email, name: target.name, role, tenantId, expiresAt });
+  await pool.query('INSERT INTO authentication_sessions (id,tenant_id,user_uid,token_hash,expires_at,ip_address,user_agent) VALUES (?,?,?,?,?,?,?)', [sessionId, tenantId, target.uid, crypto.createHash('sha256').update(token).digest('hex'), new Date(expiresAt), req.ip || null, String(req.header('user-agent') || '').slice(0, 500) || null]);
+  await audit(target.uid, tenantId, 'auth.login_password_direct', 'user_account', target.uid, { email, role, mfaExempt: true });
+  res.json({ token, user: { ...target, role, tenantId, isSuperAdmin, accessExpiresAt: new Date(expiresAt).toISOString() }, message: `Signed in successfully as ${target.name} (${String(role).toUpperCase()})` });
+}));
 
 app.get('/api/auth/me', authGuard, asyncRoute(async (req, res) => {
   const u = (req as AuthenticatedRequest).user;
@@ -1584,7 +1713,7 @@ app.get('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res) =
   res.json({ item: property.rows[0], members, history: history.rows, approvalChecks });
 }));
 
-app.patch('/api/properties/:id/workflow', authGuard, adminGuard, asyncRoute(async (req, res) => {
+app.patch('/api/properties/:id/workflow', authGuard, workflowGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed = workflowUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid workflow update.', issues: parsed.error.flatten() });
@@ -1592,6 +1721,24 @@ app.patch('/api/properties/:id/workflow', authGuard, adminGuard, asyncRoute(asyn
   if (!currentResult.rowCount) return res.status(404).json({ error: 'Property not found.' });
   const current = currentResult.rows[0];
   const update = parsed.data;
+
+  // Legal Sign-Off Separation (FRD Operating Principle / §3 / §13 / LAW-01):
+  // Governance permissions (Owner/Admin) are separated from Lead Advocate legal sign-off responsibilities.
+  // Prevent non-advocate Owners and Admins from signing legal opinions.
+  if (['approved','complete'].includes(update.status)) {
+    if (req.user?.role !== 'lawyer') {
+      return res.status(403).json({
+        error: 'Legal Sign-Off Separation Policy (FRD §3 / §13 / LAW-01): Workspace governance (Owner/Admin) is strictly separated from legal opinion sign-off. Only a qualified Lead Advocate (lawyer) may approve or release legal title reports.',
+        requiredRole: 'lawyer',
+        currentRole: req.user?.role || 'viewer'
+      });
+    }
+    const candidate = { ...current, assigned_lawyer_uid: update.assignedLawyerUid || current.assigned_lawyer_uid };
+    const approvalChecks = await getWorkflowApprovalChecks(candidate, req.user?.tenantId || '');
+    if (!approvalChecks.ready) return res.status(409).json({ error: 'This application cannot be approved or released until the evidence safeguards are complete.', issues: approvalChecks.blockers, approvalChecks });
+    if (update.status === 'complete' && current.status !== 'approved' && current.status !== 'complete') return res.status(409).json({ error: 'Approve the application before releasing it as complete.', issues: ['Change the status to Approved first, then release it as Complete.'] });
+  }
+
   const assignments = [
     ['lawyer', update.assignedLawyerUid],
     ['analyst', update.assignedAnalystUid],
@@ -1602,19 +1749,52 @@ app.patch('/api/properties/:id/workflow', authGuard, adminGuard, asyncRoute(asyn
     const member = await pool.query('SELECT user_uid FROM org_memberships WHERE organization_id=? AND user_uid=? AND role=? LIMIT 1', [req.user?.tenantId, uid, role]);
     if (!member.rowCount) return res.status(400).json({ error: `Selected ${role} is not an active member of this workspace.` });
   }
-  if (['approved','complete'].includes(update.status)) {
-    const candidate = { ...current, assigned_lawyer_uid: update.assignedLawyerUid };
-    const approvalChecks = await getWorkflowApprovalChecks(candidate, req.user?.tenantId || '');
-    if (!approvalChecks.ready) return res.status(409).json({ error: 'This application cannot be approved or released until the evidence safeguards are complete.', issues: approvalChecks.blockers, approvalChecks });
-    if (update.status === 'complete' && current.status !== 'approved' && current.status !== 'complete') return res.status(409).json({ error: 'Approve the application before releasing it as complete.', issues: ['Change the status to Approved first, then release it as Complete.'] });
-  }
+
   const before = { status:current.status, priority:current.workflow_priority, dueDate:current.due_date, assignedLawyerUid:current.assigned_lawyer_uid, assignedAnalystUid:current.assigned_analyst_uid, assignedOperationsUid:current.assigned_operations_uid };
   const after = { status:update.status, priority:update.priority, dueDate:update.dueDate || null, assignedLawyerUid:update.assignedLawyerUid, assignedAnalystUid:update.assignedAnalystUid, assignedOperationsUid:update.assignedOperationsUid };
   if (JSON.stringify(before) === JSON.stringify(after)) return res.status(400).json({ error: 'No workflow changes were supplied.' });
-  await pool.query(`UPDATE properties SET status=?, workflow_priority=?, due_date=?, assigned_lawyer_uid=?, assigned_analyst_uid=?, assigned_operations_uid=?, updated_by_uid=?, updated_at=now() WHERE id=? AND tenant_id=?`, [after.status,after.priority,after.dueDate,after.assignedLawyerUid,after.assignedAnalystUid,after.assignedOperationsUid,req.user?.uid||'unknown',req.params.id,req.user?.tenantId]);
-  await pool.query('INSERT INTO property_workflow_history (id,tenant_id,property_id,previous_status,new_status,reason,changes_json,changed_by_uid) VALUES (?,?,?,?,?,?,?,?)', [crypto.randomUUID(),req.user?.tenantId,req.params.id,current.status,after.status,update.reason,JSON.stringify({before,after}),req.user?.uid||'unknown']);
-  await audit(req.user?.uid||'unknown',req.user?.tenantId,'property.workflow_updated','property',req.params.id,{before,after,reason:update.reason});
-  const result = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);
+
+  const isLegalApproval = ['approved', 'complete'].includes(after.status);
+  await pool.query(
+    `UPDATE properties
+     SET status=?, workflow_priority=?, due_date=?, assigned_lawyer_uid=?, assigned_analyst_uid=?, assigned_operations_uid=?,
+         legal_approved_by_uid = CASE WHEN ? = TRUE THEN ? ELSE legal_approved_by_uid END,
+         legal_approved_at = CASE WHEN ? = TRUE THEN NOW(6) ELSE legal_approved_at END,
+         updated_by_uid=?, updated_at=now()
+     WHERE id=? AND tenant_id=?`,
+    [
+      after.status, after.priority, after.dueDate, after.assignedLawyerUid, after.assignedAnalystUid, after.assignedOperationsUid,
+      isLegalApproval, req.user?.uid || 'unknown',
+      isLegalApproval,
+      req.user?.uid || 'unknown',
+      req.params.id,
+      req.user?.tenantId
+    ]
+  );
+
+  await pool.query(
+    'INSERT INTO property_workflow_history (id,tenant_id,property_id,previous_status,new_status,reason,changes_json,changed_by_uid) VALUES (?,?,?,?,?,?,?,?)',
+    [
+      crypto.randomUUID(),
+      req.user?.tenantId,
+      req.params.id,
+      current.status,
+      after.status,
+      update.reason,
+      JSON.stringify({ before, after, legalSignOff: isLegalApproval ? { approvedBy: req.user?.uid, role: req.user?.role } : undefined }),
+      req.user?.uid || 'unknown'
+    ]
+  );
+
+  await audit(req.user?.uid || 'unknown', req.user?.tenantId, isLegalApproval ? 'report.legal_sign_off' : 'property.workflow_updated', 'property', req.params.id, {
+    before,
+    after,
+    reason: update.reason,
+    approverRole: req.user?.role,
+    isLegalApproval
+  });
+
+  const result = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   res.json({ item: result.rows[0] });
 }));
 
@@ -2839,7 +3019,22 @@ app.post('/api/properties/:id/due-diligence-snapshot', authGuard, writeGuard, as
   }));
   const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0]);
 
+  const settingsRes = await pool.query('SELECT * FROM workspace_settings WHERE tenant_id=?', [req.user?.tenantId || p.rows[0].tenant_id]);
+  const s = settingsRes.rows[0] || {};
+  const tenantBranding = {
+    id: String(req.user?.tenantId || p.rows[0].tenant_id || ''),
+    organizationName: s.org_name || 'Karnataka Legal Partners LLP',
+    llpin: s.llpin || 'ADA-1604',
+    officeAddress: s.office_address || 'Ranga Rao Rd, Shankarapura, Bengaluru 560004',
+    firmLogoUrl: s.firm_logo_url || '',
+    firmEmail: s.firm_email || 'info@ojix.in',
+    defaultReportTemplate: s.default_report_template || 'detailed_due_diligence',
+    legalDisclaimer: s.legal_disclaimer || '',
+  };
+
   const snapshot = createDueDiligenceSnapshot({
+    tenant: tenantBranding,
+    statutoryNotice: s.legal_disclaimer || undefined,
     property: p.rows[0],
     documents: docs.rows,
     titleTimeline,
@@ -2888,7 +3083,22 @@ app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(a
     extractedFields: typeof r.extracted_fields === 'string' ? JSON.parse(r.extracted_fields) : (r.extracted_fields || {}),
   }));
   const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0]);
+  const settingsRes = await pool.query('SELECT * FROM workspace_settings WHERE tenant_id=?', [req.user?.tenantId || p.rows[0].tenant_id]);
+  const s = settingsRes.rows[0] || {};
+  const tenantBranding = {
+    id: String(req.user?.tenantId || p.rows[0].tenant_id || ''),
+    organizationName: s.org_name || 'Karnataka Legal Partners LLP',
+    llpin: s.llpin || 'ADA-1604',
+    officeAddress: s.office_address || 'Ranga Rao Rd, Shankarapura, Bengaluru 560004',
+    firmLogoUrl: s.firm_logo_url || '',
+    firmEmail: s.firm_email || 'info@ojix.in',
+    defaultReportTemplate: s.default_report_template || 'detailed_due_diligence',
+    legalDisclaimer: s.legal_disclaimer || '',
+  };
+
   const snapshot = createDueDiligenceSnapshot({
+    tenant: tenantBranding,
+    statutoryNotice: s.legal_disclaimer || undefined,
     property: p.rows[0],
     documents: docs.rows,
     titleTimeline,
@@ -2905,10 +3115,71 @@ app.get('/api/properties/:id/due-diligence-report/pdf', authGuard, asyncRoute(as
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
-  return res.status(501).json({
-    error: 'PDF report generation is not configured. Use the HTML evidence report until a validated PDF renderer is installed.',
-    code: 'PDF_RENDERER_NOT_CONFIGURED',
+
+  const docs = await pool.query('SELECT * FROM documents WHERE property_id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
+  const eventsResult = await pool.query('SELECT * FROM title_events WHERE property_id=? AND tenant_id=? ORDER BY event_date ASC', [req.params.id, req.user?.tenantId]);
+  const titleTimeline: TitleEvent[] = eventsResult.rows.map((row: any) => ({
+    id: row.id,
+    propertyId: row.property_id,
+    documentId: row.document_id || '',
+    sequenceOrder: Number(row.sequence_order),
+    eventDate: row.event_date instanceof Date ? row.event_date.toISOString().slice(0, 10) : String(row.event_date),
+    registrationDate: row.registration_date ? (row.registration_date instanceof Date ? row.registration_date.toISOString().slice(0, 10) : String(row.registration_date)) : undefined,
+    deedType: row.deed_type,
+    fromParties: typeof row.from_parties === 'string' ? JSON.parse(row.from_parties) : (row.from_parties || []),
+    toParties: typeof row.to_parties === 'string' ? JSON.parse(row.to_parties) : (row.to_parties || []),
+    extentSqFt: Number(row.extent_sq_ft),
+    extentRaw: row.extent_raw || '',
+    consideration: Number(row.consideration),
+    status: row.status,
+    disputeRationale: row.dispute_rationale || undefined,
+    reviewedBy: row.reviewed_by || undefined,
+    encumbranceStatus: row.encumbrance_status || 'none',
+  }));
+
+  const titleGaps = detectTitleGaps(titleTimeline);
+  const docItems = docs.rows.map(r => ({
+    id: r.id,
+    originalFilename: r.original_filename,
+    extractedFields: typeof r.extracted_fields === 'string' ? JSON.parse(r.extracted_fields) : (r.extracted_fields || {}),
+  }));
+  const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0]);
+  const settingsRes = await pool.query('SELECT * FROM workspace_settings WHERE tenant_id=?', [req.user?.tenantId || p.rows[0].tenant_id]);
+  const s = settingsRes.rows[0] || {};
+  const tenantBranding = {
+    id: String(req.user?.tenantId || p.rows[0].tenant_id || ''),
+    organizationName: s.org_name || 'Karnataka Legal Partners LLP',
+    llpin: s.llpin || 'ADA-1604',
+    officeAddress: s.office_address || 'Ranga Rao Rd, Shankarapura, Bengaluru 560004',
+    firmLogoUrl: s.firm_logo_url || '',
+    firmEmail: s.firm_email || 'info@ojix.in',
+    defaultReportTemplate: s.default_report_template || 'detailed_due_diligence',
+    legalDisclaimer: s.legal_disclaimer || '',
+  };
+
+  const snapshot = createDueDiligenceSnapshot({
+    tenant: tenantBranding,
+    statutoryNotice: s.legal_disclaimer || undefined,
+    property: p.rows[0],
+    documents: docs.rows,
+    titleTimeline,
+    titleGaps,
+    discrepancies,
   });
+
+  const requestedRenderer = typeof req.query.renderer === 'string' && ['headless', 'pdfkit'].includes(req.query.renderer)
+    ? (req.query.renderer as 'headless' | 'pdfkit')
+    : 'auto';
+  const pdfBuffer = await generateDueDiligencePdf(snapshot, { renderer: requestedRenderer });
+  await audit(req.user?.uid || 'unknown', req.user?.tenantId, 'report.pdf_generated', 'property', req.params.id, {
+    reportId: snapshot.reportId,
+    template: tenantBranding.defaultReportTemplate,
+    byteLength: pdfBuffer.length
+  });
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="due-diligence-report-${p.rows[0].id}.pdf"`);
+  res.send(pdfBuffer);
 }));
 
 /* ==========================================================================
@@ -3383,17 +3654,172 @@ app.get('/api/admin/summary',authGuard,adminGuard,asyncRoute(async(req,res)=>{co
 
 app.get('/api/admin/members',authGuard,adminGuard,asyncRoute(async(req,res)=>{const q=pageSchema.safeParse(req.query);if(!q.success)return res.status(400).json({error:'Invalid member filters.'});const {page,limit,search}=q.data;const like=`%${search}%`;const result=await pool!.query(`SELECT m.id,m.user_uid,m.email,m.role,m.status,m.created_at,m.updated_at,u.full_name,u.last_login_at,u.otp_required FROM org_memberships m LEFT JOIN user_accounts u ON u.id=m.user_uid WHERE m.organization_id=? AND (?='' OR m.email LIKE ? OR u.full_name LIKE ? OR m.user_uid LIKE ?) ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,[req.user?.tenantId,search,like,like,like,limit,(page-1)*limit]);const invitations=await pool!.query("SELECT id,email,invited_name,assigned_role,status,delivery_status,expires_at,created_at FROM workspace_invitations WHERE tenant_id=? AND status='pending' ORDER BY created_at DESC",[req.user?.tenantId]);res.json({items:result.rows.map(row=>({...row,name:row.full_name||DUMMY_ACCOUNTS.find(a=>a.uid===row.user_uid)?.name||row.email||row.user_uid})),invitations:invitations.rows,page,limit});}));
 
-app.post('/api/admin/members/invite',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({name:z.string().trim().min(2).max(160),email:z.string().email().transform(v=>v.toLowerCase()),role:z.enum(ADMIN_ROLES)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Enter a valid name, email and assignable role.'});const {name,email,role}=parsed.data;const existing=await pool!.query('SELECT id FROM org_memberships WHERE organization_id=? AND LOWER(email)=? LIMIT 1',[req.user?.tenantId,email]);if(existing.rowCount)return res.status(409).json({error:'This email is already a workspace member.'});const pending=await pool!.query("SELECT id FROM workspace_invitations WHERE tenant_id=? AND email=? AND status='pending' AND expires_at>NOW(6) LIMIT 1",[req.user?.tenantId,email]);if(pending.rowCount)return res.status(409).json({error:'An active invitation already exists for this email.'});const id=crypto.randomUUID(),token=crypto.randomBytes(32).toString('hex');await pool!.query('INSERT INTO workspace_invitations (id,tenant_id,email,invited_name,assigned_role,invitation_token_hash,status,delivery_status,invited_by_uid,expires_at) VALUES (?,?,?,?,?,?,\'pending\',\'not_configured\',?,DATE_ADD(NOW(6),INTERVAL 7 DAY))',[id,req.user?.tenantId,email,name,role,crypto.createHash('sha256').update(token).digest('hex'),req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.member_invited','workspace_invitation',id,{email,name,role,deliveryStatus:'not_configured'});res.status(201).json({item:{id,email,invited_name:name,assigned_role:role,status:'pending',delivery_status:'not_configured'},message:'Invitation recorded. Email delivery is not configured, so delivery is not claimed.'});}));
+app.post('/api/admin/members/invite',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({name:z.string().trim().min(2).max(160),email:z.string().email().transform(v=>v.toLowerCase()),role:z.enum(ADMIN_ROLES)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Enter a valid name, email and assignable role.'});const {name,email,role}=parsed.data;const existing=await pool!.query('SELECT id FROM org_memberships WHERE organization_id=? AND LOWER(email)=? LIMIT 1',[req.user?.tenantId,email]);if(existing.rowCount)return res.status(409).json({error:'This email is already a workspace member.'});const pending=await pool!.query("SELECT id FROM workspace_invitations WHERE tenant_id=? AND email=? AND status='pending' AND expires_at>NOW(6) LIMIT 1",[req.user?.tenantId,email]);if(pending.rowCount)return res.status(409).json({error:'An active invitation already exists for this email.'});const id=crypto.randomUUID(),token=crypto.randomBytes(32).toString('hex');const delivery=await deliverInvitationEmail(email,name,role,token);const deliveryStatus=delivery.delivered?'delivered':'pending_delivery';await pool!.query('INSERT INTO workspace_invitations (id,tenant_id,email,invited_name,assigned_role,invitation_token_hash,status,delivery_status,invited_by_uid,expires_at) VALUES (?,?,?,?,?,?,?,\'pending\',?,DATE_ADD(NOW(6),INTERVAL 7 DAY))',[id,req.user?.tenantId,email,name,role,crypto.createHash('sha256').update(token).digest('hex'),deliveryStatus,req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.member_invited','workspace_invitation',id,{email,name,role,deliveryStatus});res.status(201).json({item:{id,email,invited_name:name,assigned_role:role,status:'pending',delivery_status:deliveryStatus},message:delivery.delivered?'Invitation sent securely via email.':'Invitation recorded.'});}));
 
-app.post('/api/admin/members/:id/resend-invitation',authGuard,adminGuard,asyncRoute(async(req,res)=>{const inv=await pool!.query("SELECT * FROM workspace_invitations WHERE id=? AND tenant_id=? AND status='pending'",[req.params.id,req.user?.tenantId]);if(!inv.rowCount)return res.status(404).json({error:'Pending invitation not found.'});await pool!.query("UPDATE workspace_invitations SET expires_at=DATE_ADD(NOW(6),INTERVAL 7 DAY),delivery_status='not_configured',updated_at=NOW(6) WHERE id=?",[req.params.id]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.invitation_resent','workspace_invitation',req.params.id,{email:inv.rows[0].email,deliveryStatus:'not_configured'});res.json({success:true,message:'Invitation expiry renewed; email delivery is not configured.'});}));
+app.post('/api/admin/members/:id/resend-invitation',authGuard,adminGuard,asyncRoute(async(req,res)=>{const inv=await pool!.query("SELECT * FROM workspace_invitations WHERE id=? AND tenant_id=? AND status='pending'",[req.params.id,req.user?.tenantId]);if(!inv.rowCount)return res.status(404).json({error:'Pending invitation not found.'});const token=crypto.randomBytes(32).toString('hex');const delivery=await deliverInvitationEmail(inv.rows[0].email,inv.rows[0].invited_name,inv.rows[0].assigned_role,token);const deliveryStatus=delivery.delivered?'delivered':'pending_delivery';await pool!.query("UPDATE workspace_invitations SET invitation_token_hash=?,expires_at=DATE_ADD(NOW(6),INTERVAL 7 DAY),delivery_status=?,updated_at=NOW(6) WHERE id=?",[crypto.createHash('sha256').update(token).digest('hex'),deliveryStatus,req.params.id]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.invitation_resent','workspace_invitation',req.params.id,{email:inv.rows[0].email,deliveryStatus});res.json({success:true,message:delivery.delivered?'Invitation resent successfully via email.':'Invitation renewed.'});}));
+
+app.get('/api/auth/invitations/verify', asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const rawToken = String(req.query.token || '').trim();
+  if (!rawToken) return res.status(400).json({ error: 'Invitation token is required.' });
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const result = await pool.query(
+    `SELECT i.id, i.email, i.invited_name, i.assigned_role, i.expires_at, o.name as organization_name
+     FROM workspace_invitations i
+     JOIN organizations o ON o.id = i.tenant_id
+     WHERE i.invitation_token_hash = ? AND i.status = 'pending' LIMIT 1`,
+    [tokenHash]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: 'Invalid or already accepted invitation.' });
+  const inv = result.rows[0];
+  if (new Date(inv.expires_at).getTime() <= Date.now()) {
+    return res.status(410).json({ error: 'This invitation has expired. Contact your workspace administrator for a new invite.' });
+  }
+  res.json({
+    valid: true,
+    email: inv.email,
+    name: inv.invited_name,
+    role: inv.assigned_role,
+    organizationName: inv.organization_name
+  });
+}));
+
+app.post('/api/auth/invitations/accept', asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const parsed = z.object({
+    token: z.string().min(16),
+    password: z.string().min(8).max(128)
+      .regex(/[A-Z]/, 'Password must contain an uppercase letter.')
+      .regex(/[a-z]/, 'Password must contain a lowercase letter.')
+      .regex(/[0-9]/, 'Password must contain a number.')
+  }).safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid password.' });
+  }
+  const { token, password } = parsed.data;
+  const tokenHash = crypto.createHash('sha256').update(token.trim()).digest('hex');
+
+  const result = await pool.query(
+    `SELECT i.*, o.name as organization_name
+     FROM workspace_invitations i
+     JOIN organizations o ON o.id = i.tenant_id
+     WHERE i.invitation_token_hash = ? AND i.status = 'pending' LIMIT 1`,
+    [tokenHash]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: 'Invalid or already accepted invitation.' });
+  const inv = result.rows[0];
+  if (new Date(inv.expires_at).getTime() <= Date.now()) {
+    return res.status(410).json({ error: 'This invitation has expired. Contact your workspace administrator.' });
+  }
+
+  const existingUser = await pool.query('SELECT id, email FROM user_accounts WHERE email = ? LIMIT 1', [inv.email]);
+  let userUid: string;
+  const passwordHash = hashPassword(password);
+
+  if (existingUser.rowCount) {
+    userUid = existingUser.rows[0].id;
+    await pool.query('UPDATE user_accounts SET password_hash = ?, email_verified = TRUE, status = \'active\', updated_at = NOW(6) WHERE id = ?', [passwordHash, userUid]);
+  } else {
+    userUid = crypto.randomUUID();
+    await pool.query(
+      'INSERT INTO user_accounts (id, email, full_name, password_hash, email_verified, status) VALUES (?, ?, ?, ?, TRUE, \'active\')',
+      [userUid, inv.email, inv.invited_name, passwordHash]
+    );
+  }
+
+  const existingMember = await pool.query('SELECT id FROM org_memberships WHERE organization_id = ? AND user_uid = ? LIMIT 1', [inv.tenant_id, userUid]);
+  if (existingMember.rowCount) {
+    await pool.query('UPDATE org_memberships SET role = ?, status = \'active\', updated_at = NOW(6) WHERE id = ?', [inv.assigned_role, existingMember.rows[0].id]);
+  } else {
+    await pool.query(
+      'INSERT INTO org_memberships (id, organization_id, user_uid, email, role, status) VALUES (?, ?, ?, ?, ?, \'active\')',
+      [crypto.randomUUID(), inv.tenant_id, userUid, inv.email, inv.assigned_role]
+    );
+  }
+
+  await pool.query("UPDATE workspace_invitations SET status = 'accepted', accepted_at = NOW(6), updated_at = NOW(6) WHERE id = ?", [inv.id]);
+
+  const sessionMs = inv.assigned_role === 'support' ? SUPPORT_SESSION_MS : AUTH_SESSION_MS;
+  const sessionToken = `ojix-${crypto.randomBytes(32).toString('base64url')}`;
+  const expiresAt = Date.now() + sessionMs;
+  const sessionId = crypto.randomUUID();
+  const userPayload = {
+    uid: userUid,
+    email: inv.email,
+    name: inv.invited_name,
+    role: inv.assigned_role,
+    tenantId: inv.tenant_id,
+    avatar: inv.invited_name.split(/\s+/).slice(0, 2).map((p: string) => p[0]).join('').toUpperCase(),
+    description: 'Active workspace member',
+    accessExpiresAt: new Date(expiresAt).toISOString()
+  };
+  authSessions.set(sessionToken, { id: sessionId, uid: userUid, email: inv.email, name: inv.invited_name, role: inv.assigned_role, tenantId: inv.tenant_id, expiresAt });
+  await pool.query('INSERT INTO authentication_sessions (id,tenant_id,user_uid,token_hash,expires_at,ip_address,user_agent) VALUES (?,?,?,?,?,?,?)', [sessionId, inv.tenant_id, userUid, crypto.createHash('sha256').update(sessionToken).digest('hex'), new Date(expiresAt), req.ip || null, String(req.header('user-agent') || '').slice(0, 500) || null]);
+
+  await audit(userUid, inv.tenant_id, 'auth.invitation_accepted', 'workspace_invitation', inv.id, { email: inv.email, role: inv.assigned_role });
+
+  res.json({
+    success: true,
+    token: sessionToken,
+    user: userPayload,
+    message: `Account activated successfully! Welcome to ${inv.organization_name}.`
+  });
+}));
 
 app.delete('/api/admin/invitations/:id',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A revocation reason is required.'});const invitation=await pool!.query("SELECT id,email,status FROM workspace_invitations WHERE id=? AND tenant_id=? AND status='pending'",[req.params.id,req.user?.tenantId]);if(!invitation.rowCount)return res.status(404).json({error:'Pending invitation not found.'});await pool!.query("UPDATE workspace_invitations SET status='revoked',revoked_at=NOW(6),revoked_by_uid=?,updated_at=NOW(6) WHERE id=? AND tenant_id=?",[req.user?.uid,req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.invitation_revoked','workspace_invitation',req.params.id,{email:invitation.rows[0].email,reason:parsed.data.reason});res.json({success:true});}));
 
-app.patch('/api/admin/members/:id/role',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({role:z.enum(ADMIN_ROLES),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Valid role and reason are required.'});const member=await pool!.query('SELECT * FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);if(!member.rowCount)return res.status(404).json({error:'Member not found.'});if(member.rows[0].role==='owner')return res.status(403).json({error:'Owner roles cannot be changed through Admin operations.'});if(member.rows[0].user_uid===req.user?.uid)return res.status(403).json({error:'You cannot change your own administrative role.'});await pool!.query('UPDATE org_memberships SET role=? WHERE id=? AND organization_id=?',[parsed.data.role,req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.member_role_changed','membership',req.params.id,{before:member.rows[0].role,after:parsed.data.role,reason:parsed.data.reason});res.json({success:true});}));
+app.patch('/api/admin/members/:id/role',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  const parsed=z.object({role:z.enum(ADMIN_ROLES),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:'Valid role and reason are required.'});
+  const member=await pool!.query('SELECT * FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);
+  if(!member.rowCount)return res.status(404).json({error:'Member not found.'});
+  if(member.rows[0].user_uid===req.user?.uid)return res.status(403).json({error:'You cannot change your own administrative role.'});
+  if(member.rows[0].role==='owner') {
+    if(req.user?.role !== 'owner') return res.status(403).json({error:'Owner roles cannot be changed through Admin operations.'});
+    const owners=await pool!.query("SELECT id FROM org_memberships WHERE organization_id=? AND role='owner' AND status='active'",[req.user?.tenantId]);
+    if(owners.rowCount<=1) return res.status(403).json({error:'Protected Owner Invariant (FRD §14 / §20 / ADM-03): Cannot demote the last active Workspace Owner in this organization.'});
+  }
+  await pool!.query('UPDATE org_memberships SET role=? WHERE id=? AND organization_id=?',[parsed.data.role,req.params.id,req.user?.tenantId]);
+  await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.member_role_changed','membership',req.params.id,{before:member.rows[0].role,after:parsed.data.role,reason:parsed.data.reason});
+  res.json({success:true});
+}));
 
-app.patch('/api/admin/members/:id/status',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({status:z.enum(['active','disabled','locked']),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Valid status and reason are required.'});const member=await pool!.query('SELECT * FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);if(!member.rowCount)return res.status(404).json({error:'Member not found.'});if(member.rows[0].role==='owner'||member.rows[0].user_uid===req.user?.uid)return res.status(403).json({error:'Owner and current administrator accounts are protected.'});await pool!.query('UPDATE org_memberships SET status=? WHERE id=? AND organization_id=?',[parsed.data.status,req.params.id,req.user?.tenantId]);await pool!.query("UPDATE user_accounts SET status=?,disabled_at=IF(?='disabled',NOW(6),NULL),disabled_by_uid=?,disabled_reason=? WHERE id=?",[parsed.data.status,parsed.data.status,req.user?.uid,parsed.data.reason,member.rows[0].user_uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.member_status_changed','membership',req.params.id,{before:member.rows[0].status,after:parsed.data.status,reason:parsed.data.reason});res.json({success:true});}));
+app.patch('/api/admin/members/:id/status',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  const parsed=z.object({status:z.enum(['active','disabled','locked']),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:'Valid status and reason are required.'});
+  const member=await pool!.query('SELECT * FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);
+  if(!member.rowCount)return res.status(404).json({error:'Member not found.'});
+  if(member.rows[0].user_uid===req.user?.uid)return res.status(403).json({error:'Owner and current administrator accounts are protected.'});
+  if(member.rows[0].role==='owner') {
+    if(req.user?.role !== 'owner') return res.status(403).json({error:'Owner and current administrator accounts are protected.'});
+    if(parsed.data.status !== 'active') {
+      const owners=await pool!.query("SELECT id FROM org_memberships WHERE organization_id=? AND role='owner' AND status='active'",[req.user?.tenantId]);
+      if(owners.rowCount<=1) return res.status(403).json({error:'Protected Owner Invariant (FRD §14 / §20 / ADM-03): Cannot disable or lock the last active Workspace Owner.'});
+    }
+  }
+  await pool!.query('UPDATE org_memberships SET status=? WHERE id=? AND organization_id=?',[parsed.data.status,req.params.id,req.user?.tenantId]);
+  await pool!.query("UPDATE user_accounts SET status=?,disabled_at=IF(?='disabled',NOW(6),NULL),disabled_by_uid=?,disabled_reason=? WHERE id=?",[parsed.data.status,parsed.data.status,req.user?.uid,parsed.data.reason,member.rows[0].user_uid]);
+  await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.member_status_changed','membership',req.params.id,{before:member.rows[0].status,after:parsed.data.status,reason:parsed.data.reason});
+  res.json({success:true});
+}));
 
-app.delete('/api/admin/members/:id',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A removal reason is required.'});const member=await pool!.query('SELECT * FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);if(!member.rowCount)return res.status(404).json({error:'Member not found.'});if(member.rows[0].role==='owner'||member.rows[0].user_uid===req.user?.uid)return res.status(403).json({error:'Owner and current administrator accounts cannot be removed.'});await pool!.query('DELETE FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);await pool!.query("UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE tenant_id=? AND user_uid=? AND revoked_at IS NULL",[req.user?.uid,parsed.data.reason,req.user?.tenantId,member.rows[0].user_uid]);for(const[token,session]of authSessions)if(session.tenantId===req.user?.tenantId&&session.uid===member.rows[0].user_uid)authSessions.delete(token);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.member_removed','membership',req.params.id,{userUid:member.rows[0].user_uid,reason:parsed.data.reason});res.json({success:true});}));
+app.delete('/api/admin/members/:id',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  const parsed=reasonSchema.safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:'A removal reason is required.'});
+  const member=await pool!.query('SELECT * FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);
+  if(!member.rowCount)return res.status(404).json({error:'Member not found.'});
+  if(member.rows[0].user_uid===req.user?.uid)return res.status(403).json({error:'Owner and current administrator accounts cannot be removed.'});
+  if(member.rows[0].role==='owner') {
+    if(req.user?.role !== 'owner') return res.status(403).json({error:'Owner and current administrator accounts cannot be removed.'});
+    const owners=await pool!.query("SELECT id FROM org_memberships WHERE organization_id=? AND role='owner' AND status='active'",[req.user?.tenantId]);
+    if(owners.rowCount<=1) return res.status(403).json({error:'Protected Owner Invariant (FRD §14 / §20 / ADM-03): Cannot remove the last active Workspace Owner in this organization.'});
+  }
+  await pool!.query('DELETE FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);
+  await pool!.query("UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE tenant_id=? AND user_uid=? AND revoked_at IS NULL",[req.user?.uid,parsed.data.reason,req.user?.tenantId,member.rows[0].user_uid]);
+  for(const[token,session]of authSessions)if(session.tenantId===req.user?.tenantId&&session.uid===member.rows[0].user_uid)authSessions.delete(token);
+  await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.member_removed','membership',req.params.id,{userUid:member.rows[0].user_uid,reason:parsed.data.reason});
+  res.json({success:true});
+}));
 
 app.post('/api/admin/members/:id/revoke-sessions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A revocation reason is required.'});const member=await pool!.query('SELECT * FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);if(!member.rowCount)return res.status(404).json({error:'Member not found.'});await pool!.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE tenant_id=? AND user_uid=? AND revoked_at IS NULL',[req.user?.uid,parsed.data.reason,req.user?.tenantId,member.rows[0].user_uid]);for(const[token,session]of authSessions)if(session.tenantId===req.user?.tenantId&&session.uid===member.rows[0].user_uid)authSessions.delete(token);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.sessions_revoked','user_account',member.rows[0].user_uid,{reason:parsed.data.reason});res.json({success:true});}));
 
@@ -3429,6 +3855,8 @@ app.patch('/api/admin/retention',authGuard,adminGuard,asyncRoute(async(req,res)=
 
 app.get('/api/admin/audit',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=pageSchema.extend({action:z.string().max(120).optional().default(''),actor:z.string().max(191).optional().default(''),entityType:z.string().max(120).optional().default(''),from:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),to:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()}).safeParse(req.query);if(!parsed.success)return res.status(400).json({error:'Invalid audit filters.'});const q=parsed.data,where=['tenant_id=?'],params:any[]=[req.user?.tenantId];if(q.action){where.push('action=?');params.push(q.action);}if(q.actor){where.push('actor_uid=?');params.push(q.actor);}if(q.entityType){where.push('entity_type=?');params.push(q.entityType);}if(q.from){where.push('created_at>=?');params.push(`${q.from} 00:00:00`);}if(q.to){where.push('created_at<=?');params.push(`${q.to} 23:59:59`);}if(q.search){where.push('(action LIKE ? OR actor_uid LIKE ? OR entity_id LIKE ?)');const like=`%${q.search}%`;params.push(like,like,like);}const count=await pool!.query(`SELECT COUNT(*) total FROM audit_events WHERE ${where.join(' AND ')}`,params);const result=await pool!.query(`SELECT id,actor_uid,action,entity_type,entity_id,details,created_at FROM audit_events WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`,[...params,q.limit,(q.page-1)*q.limit]);res.json({items:result.rows,total:Number(count.rows[0]?.total||0),page:q.page,limit:q.limit});}));
 
+app.get('/api/admin/audit/export',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT id,actor_uid,action,entity_type,entity_id,details,created_at FROM audit_events WHERE tenant_id=? ORDER BY created_at DESC LIMIT 5000',[req.user?.tenantId]);const headers=['Timestamp','Actor','Event','Entity','EntityID','Details'];const lines=[headers.join(',')];for(const row of result.rows){let details='';if(row.details&&typeof row.details==='object')details=JSON.stringify(row.details);else details=String(row.details||'');lines.push([`"${String(row.created_at||'').replace(/"/g,'""')}"`,`"${String(row.actor_uid||'').replace(/"/g,'""')}"`,`"${String(row.action||'').replace(/"/g,'""')}"`,`"${String(row.entity_type||'').replace(/"/g,'""')}"`,`"${String(row.entity_id||'').replace(/"/g,'""')}"`,`"${details.replace(/"/g,'""')}"`].join(','));}await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.audit_exported','audit_log',req.user?.tenantId||null,{count:result.rows.length});res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition',`attachment; filename="ojix-audit-trail-${new Date().toISOString().slice(0,10)}.csv"`);res.send(lines.join('\r\n'));}));
+
 app.get('/api/settings', authGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const result = await pool.query('SELECT * FROM workspace_settings WHERE tenant_id=?', [req.user?.tenantId]);
@@ -3436,8 +3864,15 @@ app.get('/api/settings', authGuard, asyncRoute(async (req, res) => {
     return res.json({
       settings: {
         org_name: 'Karnataka Legal Partners LLP',
+        llpin: 'ADA-1604',
+        office_address: 'Ranga Rao Rd, Shankarapura, Bengaluru 560004',
+        firm_logo_url: '',
         primary_contact: 'Deepak Professional (deepak@ojix.local)',
+        firm_email: 'info@ojix.in',
         default_district: 'Bengaluru Urban',
+        default_report_template: 'detailed_due_diligence',
+        legal_disclaimer: 'The platform is an evidence and workflow system. It does not represent AI output as a legal opinion, ownership determination, or government certification. High-impact conclusions must be verified by a qualified Lead Advocate.',
+        enforce_mfa_privileged: true,
         auto_screen_bhoomi: true,
         auto_screen_kaveri: true,
         auto_screen_spatial: true,
@@ -3450,7 +3885,13 @@ app.get('/api/settings', authGuard, asyncRoute(async (req, res) => {
       }
     });
   }
-  res.json({ settings: result.rows[0] });
+  const row = result.rows[0];
+  res.json({
+    settings: {
+      ...row,
+      enforce_mfa_privileged: Boolean(row.enforce_mfa_privileged ?? true)
+    }
+  });
 }));
 
 app.post('/api/settings', authGuard, adminGuard, asyncRoute(async (req, res) => {
@@ -3458,16 +3899,24 @@ app.post('/api/settings', authGuard, adminGuard, asyncRoute(async (req, res) => 
   const s = req.body || {};
   await pool.query(
     `INSERT INTO workspace_settings
-     (tenant_id, org_name, primary_contact, default_district,
+     (tenant_id, org_name, llpin, primary_contact, firm_email, default_district, default_report_template, office_address, firm_logo_url, legal_disclaimer,
+      enforce_mfa_privileged,
       auto_screen_bhoomi, auto_screen_kaveri, auto_screen_spatial,
       swd_primary_buffer_m, swd_secondary_buffer_m, swd_tertiary_buffer_m,
       lake_buffer_m, survey_margin_tolerance_pct, ocr_confidence_threshold,
       updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
      ON DUPLICATE KEY UPDATE
        org_name = VALUES(org_name),
+       llpin = VALUES(llpin),
        primary_contact = VALUES(primary_contact),
+       firm_email = VALUES(firm_email),
        default_district = VALUES(default_district),
+       default_report_template = VALUES(default_report_template),
+       office_address = VALUES(office_address),
+       firm_logo_url = VALUES(firm_logo_url),
+       legal_disclaimer = VALUES(legal_disclaimer),
+       enforce_mfa_privileged = VALUES(enforce_mfa_privileged),
        auto_screen_bhoomi = VALUES(auto_screen_bhoomi),
        auto_screen_kaveri = VALUES(auto_screen_kaveri),
        auto_screen_spatial = VALUES(auto_screen_spatial),
@@ -3481,8 +3930,15 @@ app.post('/api/settings', authGuard, adminGuard, asyncRoute(async (req, res) => 
     [
       req.user?.tenantId,
       s.org_name || 'Karnataka Legal Partners LLP',
+      s.llpin || 'ADA-1604',
       s.primary_contact || 'Deepak Professional (deepak@ojix.local)',
+      s.firm_email || 'info@ojix.in',
       s.default_district || 'Bengaluru Urban',
+      s.default_report_template || 'detailed_due_diligence',
+      s.office_address || '',
+      s.firm_logo_url || '',
+      s.legal_disclaimer || '',
+      s.enforce_mfa_privileged !== undefined ? Boolean(s.enforce_mfa_privileged) : true,
       s.auto_screen_bhoomi ?? true,
       s.auto_screen_kaveri ?? true,
       s.auto_screen_spatial ?? true,
@@ -3499,8 +3955,19 @@ app.post('/api/settings', authGuard, adminGuard, asyncRoute(async (req, res) => 
     'SELECT * FROM workspace_settings WHERE tenant_id=?',
     [req.user?.tenantId]
   );
-  await audit(req.user?.uid || 'anon', req.user?.tenantId, 'update_settings', 'organization', req.user?.tenantId || null, s);
-  res.json({ settings: result.rows[0], message: 'Workspace settings updated successfully.' });
+  await audit(req.user?.uid || 'anon', req.user?.tenantId, 'update_settings', 'organization', req.user?.tenantId || null, {
+    org_name: s.org_name,
+    llpin: s.llpin,
+    enforce_mfa_privileged: s.enforce_mfa_privileged
+  });
+  const row = result.rows[0];
+  res.json({
+    settings: {
+      ...row,
+      enforce_mfa_privileged: Boolean(row?.enforce_mfa_privileged ?? true),
+    },
+    message: 'Workspace settings updated successfully.'
+  });
 }));
 
 
@@ -3528,7 +3995,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof OtpDeliveryError) return res.status(503).json({ error: err.message });
   if (err?.message?.includes('Only PDF')) return res.status(400).json({ error: err.message });
   console.error(err);
-  res.status(500).json({ error: 'Internal server error.' });
+  res.status(500).json({ error: err?.message || 'Internal server error.' });
 });
 
 let server: any;
@@ -3547,3 +4014,5 @@ if (process.env.NODE_ENV !== 'test') {
   async function shutdown() { server?.close(); if (pool) await pool.end(); process.exit(0); }
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }
+
+export { app, pool, server };

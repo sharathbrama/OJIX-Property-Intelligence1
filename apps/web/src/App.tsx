@@ -11,6 +11,7 @@ import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import {
   Activity,
   AlertTriangle,
+  Archive,
   ArrowDownRight,
   ArrowUpRight,
   BadgeCheck,
@@ -51,6 +52,7 @@ import {
   GitMerge,
   Scale,
   UserCheck,
+  Users,
   LogOut,
   Key,
 } from "lucide-react";
@@ -195,10 +197,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 const dateLabel = (date?: string) =>
   date
     ? new Date(date).toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    })
     : "—";
 const pretty = (value?: string) =>
   value
@@ -216,8 +218,8 @@ const propertyIdentityLabel = (
 ) =>
   property.property_type === "non_agricultural"
     ? [property.property_identifier_type, property.property_identifier]
-        .filter(Boolean)
-        .join(": ") || "Property number not recorded"
+      .filter(Boolean)
+      .join(": ") || "Property number not recorded"
     : `Survey ${property.survey_number || "—"}${property.subdivision ? ` · Hissa ${property.subdivision}` : ""}`;
 const initials = (name: string) =>
   name
@@ -285,7 +287,8 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "source-registry",
     "settings",
     "api-console",
-    "super-admin",
+    "workflow-guide",
+    ...ADMIN_PAGES,
   ],
   admin: ["overview", "settings", ...ADMIN_PAGES],
   lawyer: [
@@ -325,7 +328,7 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
   viewer: ["overview", "properties", "property"],
 };
 const canAccessPage = (user: UserAccount, page: AppPage) =>
-  (page === "workflow-guide" && user.role !== "owner") ||
+  page === "workflow-guide" ||
   (page === "super-admin"
     ? Boolean(user.isSuperAdmin)
     : ROLE_PAGES[user.role].includes(page));
@@ -409,7 +412,7 @@ export default function App() {
     if (saved) {
       try {
         return JSON.parse(saved);
-      } catch {}
+      } catch { }
     }
     return null;
   });
@@ -463,7 +466,7 @@ export default function App() {
       .then((data) => {
         if (data.accounts) setAvailableAccounts(data.accounts);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -567,32 +570,38 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
-      setShowRoleSwitcher(false);
-      localStorage.removeItem("ojix_auth_token");
-      localStorage.removeItem("ojix_user");
-      setAuthToken("");
-      setCurrentUser(null);
+      const res = await fetch(`${API}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid: targetUid, password: "ojix123" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to switch identity");
+      localStorage.setItem("ojix_auth_token", data.token);
+      localStorage.setItem("ojix_user", JSON.stringify(data.user));
+      setAuthToken(data.token);
+      setCurrentUser(data.user);
+      localStorage.setItem("ojix_portal_mode", "workspace");
+      setPortalMode("workspace");
       setPage("overview");
-      setNotice(`Sign in again to authenticate as ${availableAccounts.find((account) => account.uid === targetUid)?.name || "the selected account"}.`);
+      updateBrowserUrl("overview");
+      setSelected(null);
+      setDocs([]);
+      setFindings([]);
+      setRiskSummary(null);
+      setShowRoleSwitcher(false);
+      setNotice(
+        `Active session switched to ${data.user.name} (${data.user.role.toUpperCase()})`,
+      );
     } catch (err: any) {
-      setError(`Unable to switch account: ${err.message}`);
+      setError(`Role switch failed: ${err.message}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const handleLogout = useCallback((reason: "manual" | "inactivity" = "manual") => {
-    authFetch(`${API}/api/auth/logout`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason }),
-    }).catch(() => {});
-    if (reason === "inactivity") {
-      const message = "Your session has expired due to inactivity. Please log in again.";
-      sessionStorage.setItem("ojix_session_expired_message", message);
-      setSessionExpiredMessage(message);
-      localStorage.setItem("ojix_session_event", JSON.stringify({ type: "logout", reason, at: Date.now() }));
-    }
+  const handleLogout = () => {
+    authFetch(`${API}/api/auth/logout`, { method: "POST" }).catch(() => {});
     localStorage.removeItem("ojix_auth_token");
     localStorage.removeItem("ojix_user");
     localStorage.removeItem("ojix_portal_mode");
@@ -1258,7 +1267,7 @@ export default function App() {
           <div className="nav-label super-admin-nav-label">PLATFORM CONTROL</div>
           <nav className="super-admin-nav">
             <button className={`nav-item ${page === "super-admin" ? "active" : ""}`} onClick={() => navigate("super-admin")}>
-              <ShieldAlert size={18}/><span>Super Admin Console</span>
+              <ShieldAlert size={18} /><span>Super Admin Console</span>
             </button>
           </nav>
         </>}
@@ -1271,7 +1280,9 @@ export default function App() {
           <ChevronDown size={15} />
         </div>
         <div className="nav-label">
-          {currentUser.role === "admin"
+          {currentUser.role === "owner"
+            ? "MANAGING PARTNER / OWNER"
+            : currentUser.role === "admin"
             ? "ADMINISTRATION"
             : currentUser.role === "lawyer"
               ? "LEGAL REVIEW"
@@ -1296,7 +1307,9 @@ export default function App() {
           >
             <LayoutDashboard size={18} />
             <span>
-              {currentUser.role === "admin"
+              {currentUser.role === "owner"
+                ? "Owner Dashboard"
+                : currentUser.role === "admin"
                 ? "Admin Overview"
                 : currentUser.role === "lawyer"
                   ? "Lawyer Overview"
@@ -1329,8 +1342,8 @@ export default function App() {
                     : currentUser.role === "data_steward"
                       ? "Reference Data QA"
                       : ["lawyer", "analyst", "operations"].includes(
-                            currentUser.role,
-                          )
+                        currentUser.role,
+                      )
                         ? "Assigned Applications"
                         : "Properties"}
               </span>
@@ -1376,79 +1389,86 @@ export default function App() {
             "support",
             "data_steward",
           ].includes(currentUser.role) && (
-            <button
-              className={`nav-item ${page === "all-findings" ? "active" : ""}`}
-              onClick={() => navigate("all-findings")}
-            >
-              <ShieldAlert size={18} />
-              <span>
-                {currentUser.role === "lawyer"
-                  ? "Legal Issues"
-                  : currentUser.role === "analyst"
-                    ? "Preliminary Findings"
-                    : currentUser.role === "consultant"
-                      ? "Issue Register"
-                      : "Risk reviews"}
-              </span>
-            </button>
-          )}
+              <button
+                className={`nav-item ${page === "all-findings" ? "active" : ""}`}
+                onClick={() => navigate("all-findings")}
+              >
+                <ShieldAlert size={18} />
+                <span>
+                  {currentUser.role === "lawyer"
+                    ? "Legal Issues"
+                    : currentUser.role === "analyst"
+                      ? "Preliminary Findings"
+                      : currentUser.role === "consultant"
+                        ? "Issue Register"
+                        : "Risk reviews"}
+                </span>
+              </button>
+            )}
           {!["admin", "lawyer", "operations", "viewer", "support"].includes(
             currentUser.role,
           ) && (
-            <button
-              className={`nav-item ${page === "all-maps" ? "active" : ""}`}
-              onClick={() => navigate("all-maps")}
-            >
-              <MapIcon size={18} />
-              <span>
-                {currentUser.role === "analyst"
-                  ? "Map & GIS"
-                  : currentUser.role === "consultant"
-                    ? "Map Context"
-                    : currentUser.role === "data_steward"
-                      ? "GIS Layer QA"
-                      : "Map intelligence"}
-              </span>
-            </button>
-          )}
+              <button
+                className={`nav-item ${page === "all-maps" ? "active" : ""}`}
+                onClick={() => navigate("all-maps")}
+              >
+                <MapIcon size={18} />
+                <span>
+                  {currentUser.role === "analyst"
+                    ? "Map & GIS"
+                    : currentUser.role === "consultant"
+                      ? "Map Context"
+                      : currentUser.role === "data_steward"
+                        ? "GIS Layer QA"
+                        : "Map intelligence"}
+                </span>
+              </button>
+            )}
         </nav>
         {!["admin", "analyst", "operations", "viewer", "support"].includes(
           currentUser.role,
         ) && (
-          <>
-            <div className="nav-label nav-label-spaced">TOOLS</div>
-            <nav>
-              {currentUser.role !== "data_steward" && (
-                <button
-                  className={`nav-item ${page === "legal-research" ? "active" : ""}`}
-                  onClick={() => navigate("legal-research")}
-                >
-                  <BookOpen size={18} />
-                  <span>Legal research</span>
-                </button>
-              )}
-              {currentUser.role !== "lawyer" && (
-                <button
-                  className={`nav-item ${page === "source-registry" ? "active" : ""}`}
-                  onClick={() => navigate("source-registry")}
-                >
-                  <Activity size={18} />
-                  <span>Source registry</span>
-                </button>
-              )}
-            </nav>
-          </>
-        )}
-        <div className="sidebar-bottom">
-          {currentUser.role !== "owner" && (
-            <button
-              className={`nav-item ${page === "workflow-guide" ? "active" : ""}`}
-              onClick={() => navigate("workflow-guide")}
-            >
-              <CircleHelp size={18} />
-              <span>Workflow Guide</span>
-            </button>
+            <>
+              <div className="nav-label nav-label-spaced">TOOLS</div>
+              <nav>
+                {currentUser.role !== "data_steward" && (
+                  <button
+                    className={`nav-item ${page === "legal-research" ? "active" : ""}`}
+                    onClick={() => navigate("legal-research")}
+                  >
+                    <BookOpen size={18} />
+                    <span>Legal research</span>
+                  </button>
+                )}
+                {currentUser.role !== "lawyer" && (
+                  <button
+                    className={`nav-item ${page === "source-registry" ? "active" : ""}`}
+                    onClick={() => navigate("source-registry")}
+                  >
+                    <Activity size={18} />
+                    <span>Source registry</span>
+                  </button>
+                )}
+                {(currentUser.role === "owner" || currentUser.role === "admin") && (
+                  <button
+                    className={`nav-item ${page === "admin-audit" ? "active" : ""}`}
+                    onClick={() => navigate("admin-audit")}
+                  >
+                    <ClipboardCheck size={18} />
+                    <span>Audit trail</span>
+                  </button>
+                )}
+              </nav>
+            </>
           )}
+        <div className="sidebar-bottom">
+          <button
+            className={`nav-item ${page === "workflow-guide" ? "active" : ""}`}
+            onClick={() => navigate("workflow-guide")}
+          >
+            <CircleHelp size={18} />
+            <span>Workflow Guide</span>
+          </button>
           {currentUser.role !== "admin" && (
             <div className="secure-note">
               <ShieldCheck size={16} />
@@ -1458,7 +1478,7 @@ export default function App() {
               </div>
             </div>
           )}
-          {currentUser.role === "admin" && (
+          {["owner", "admin"].includes(currentUser.role) && (
             <button
               className={`nav-item ${ADMIN_PAGES.includes(page as AdminSection) ? "active" : ""}`}
               onClick={() => navigate("admin-overview")}
@@ -1735,6 +1755,7 @@ export default function App() {
                 accounts={availableAccounts}
                 loading={loading}
                 currentUser={currentUser}
+                onCreate={() => setShowCreate(true)}
                 onOpen={openProperty}
                 onNavigate={navigate}
                 onPropertyUpdated={(item) => setProperties((current) => current.map((property) => property.id === item.id ? { ...property, ...item } : property))}
@@ -1836,6 +1857,7 @@ export default function App() {
               key={page}
               apiUrl={API}
               section={page as AdminSection}
+              currentUser={currentUser}
               onNavigate={(next) => navigate(next)}
             />
           )}
@@ -2879,6 +2901,7 @@ function OwnerDashboard({
   accounts,
   loading,
   currentUser,
+  onCreate,
   onOpen,
   onNavigate,
   onPropertyUpdated,
@@ -2890,31 +2913,12 @@ function OwnerDashboard({
   accounts: UserAccount[];
   loading: boolean;
   currentUser: UserAccount;
+  onCreate?: () => void;
   onOpen: (property: Property) => void;
   onPropertyUpdated: (property: Property) => void;
-  onNavigate: (
-    page:
-      | "properties"
-      | "settings"
-      | "source-registry"
-      | "all-documents"
-      | "all-findings",
-  ) => void;
+  onNavigate: (page: Exclude<AppPage, "property">) => void;
 }) {
   const [workflowProperty, setWorkflowProperty] = useState<Property | null>(null);
-  const [workflowSearch, setWorkflowSearch] = useState("");
-  const [workflowFilter, setWorkflowFilter] = useState("all");
-  const [analyticsData, setAnalyticsData] = useState<any>(dashboardData?.analytics || null);
-  const [analyticsLoading, setAnalyticsLoading] = useState(false);
-  const [analyticsError, setAnalyticsError] = useState("");
-  useEffect(() => { if (dashboardData?.analytics) setAnalyticsData(dashboardData.analytics); }, [dashboardData?.analytics]);
-  const updateAnalyticsRange = async (from:string,to:string) => {
-    setAnalyticsLoading(true);
-    setAnalyticsError("");
-    try { const result=await api<any>(`/api/owner/dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);setAnalyticsData(result.analytics); }
-    catch (rangeError) { setAnalyticsError((rangeError as Error).message || "Analytics could not be updated."); }
-    finally { setAnalyticsLoading(false); }
-  };
   const districts = Object.entries(
     properties.reduce<Record<string, number>>((result, property) => {
       const district = property.district || "Not recorded";
@@ -2931,8 +2935,8 @@ function OwnerDashboard({
   const isOverdue = (property: Property) =>
     Boolean(
       property.due_date &&
-        isOpen(property) &&
-        new Date(property.due_date).getTime() < today.getTime(),
+      isOpen(property) &&
+      new Date(property.due_date).getTime() < today.getTime(),
     );
   const priorityWeight: Record<string, number> = {
     urgent: 4,
@@ -2946,33 +2950,13 @@ function OwnerDashboard({
   const workflowRows = [...dashboardWorkflow].sort(
     (a, b) =>
       Number(isOverdue(b)) -
-        Number(isOverdue(a)) +
-        (priorityWeight[b.workflow_priority || "normal"] || 0) -
-        (priorityWeight[a.workflow_priority || "normal"] || 0) ||
+      Number(isOverdue(a)) +
+      (priorityWeight[b.workflow_priority || "normal"] || 0) -
+      (priorityWeight[a.workflow_priority || "normal"] || 0) ||
       (a.due_date || "9999").localeCompare(b.due_date || "9999"),
   );
-  const filteredWorkflowRows = workflowRows.filter((property: any) => {
-    const term = workflowSearch.trim().toLowerCase();
-    const matchesSearch = !term || [property.name, property.application_number, property.village, property.district, property.review_stage, property.next_action]
-      .some((value) => String(value || "").toLowerCase().includes(term));
-    const matchesFilter = workflowFilter === "all" ||
-      (workflowFilter === "overdue" ? isOverdue(property) : property.status === workflowFilter);
-    return matchesSearch && matchesFilter;
-  });
-  const metrics = dashboardData?.metrics || {};
-  const overdueCount = Number(metrics.overdue_tasks) || properties.filter(isOverdue).length;
-  const readyCount = Number(metrics.ready_for_legal_review ?? overview.ready_for_review) || 0;
-  const documentReviewCount = Number(metrics.documents_requiring_review) || 0;
-  const pendingActions = Array.isArray(dashboardData?.pendingActions) ? dashboardData.pendingActions : [];
-  const recentFindings = Array.isArray(dashboardData?.recentFindings) ? dashboardData.recentFindings : (overview.recentFindings || []);
-  const teamWorkload = Array.isArray(dashboardData?.teamWorkload) ? dashboardData.teamWorkload : [];
-  const reports = Array.isArray(dashboardData?.reports) ? dashboardData.reports : [];
-  const recentActivity = Array.isArray(dashboardData?.recentActivity) ? dashboardData.recentActivity : [];
-  const evidenceSources = dashboardData?.evidenceSources || {};
-  const openPropertyById = (id?: string) => {
-    const property = properties.find((item) => item.id === id) || dashboardWorkflow.find((item: Property) => item.id === id);
-    if (property) onOpen(property);
-  };
+  const overdueCount = properties.filter(isOverdue).length;
+  const readyCount = Number(overview.ready_for_review) || 0;
   return (
     <div className="owner-dashboard">
       <div className="owner-welcome">
@@ -2985,6 +2969,14 @@ function OwnerDashboard({
           </p>
         </div>
         <div className="owner-actions">
+          {onCreate && (
+            <button
+              className="primary-btn"
+              onClick={onCreate}
+            >
+              <Plus size={16} /> New Application
+            </button>
+          )}
           <button
             className="secondary-btn"
             onClick={() => document.getElementById("owner-pending-actions")?.scrollIntoView({ behavior: "smooth" })}
@@ -2992,7 +2984,7 @@ function OwnerDashboard({
             <ClipboardCheck size={15} /> Pending actions
           </button>
           <button
-            className="primary-btn"
+            className="secondary-btn"
             onClick={() => onNavigate("properties")}
           >
             <BriefcaseBusiness size={16} /> View portfolio
@@ -3154,10 +3146,6 @@ function OwnerDashboard({
             </button>
           </div>
         </div>
-        <div className="owner-workflow-tools">
-          <label><Search size={14}/><input value={workflowSearch} onChange={(event)=>setWorkflowSearch(event.target.value)} placeholder="Search matter, location or next action" aria-label="Search workflow register"/></label>
-          <select value={workflowFilter} onChange={(event)=>setWorkflowFilter(event.target.value)} aria-label="Filter workflow register"><option value="all">All stages</option><option value="overdue">Overdue</option><option value="documents_pending">Documents pending</option><option value="in_review">Evidence review</option><option value="clarification_required">Clarification required</option><option value="ready_for_review">Ready for legal review</option><option value="approved">Approved</option><option value="complete">Completed</option></select>
-        </div>
         {loading ? (
           <div className="loading-state">
             <LoaderCircle className="spin" /> Loading workflow…
@@ -3178,7 +3166,7 @@ function OwnerDashboard({
                 </tr>
               </thead>
               <tbody>
-                {filteredWorkflowRows.slice(0, 20).map((property: any) => (
+                {workflowRows.slice(0, 12).map((property) => (
                   <tr
                     key={property.id}
                     className={isOverdue(property) ? "overdue" : ""}
@@ -3224,7 +3212,7 @@ function OwnerDashboard({
                       <div className="owner-workflow-actions">
                         <StatusPill status={property.status}/>
                         <button className="application-view assign-team" onClick={() => setWorkflowProperty(property)}>
-                          <UserCheck size={13}/> Assign team
+                          <UserCheck size={13} /> Assign team
                         </button>
                         <button className="application-view" onClick={() => onOpen(property)}>
                           Open <ArrowUpRight size={13} />
@@ -3237,14 +3225,19 @@ function OwnerDashboard({
             </table>
           </div>
         ) : (
-          <div className="analyst-ready">
+          <div className="analyst-ready" style={{ padding: "28px" }}>
             <BadgeCheck size={20} />
-            <span>No property applications are currently recorded.</span>
+            <span>
+              {registerSearch.trim() || registerFilter !== "all"
+                ? "No property applications match your filter."
+                : "No property applications are currently recorded."}
+            </span>
           </div>
         )}
       </section>
       {workflowProperty && <PropertyWorkflowModal
         property={workflowProperty}
+        currentUser={currentUser}
         onClose={() => setWorkflowProperty(null)}
         onSaved={(item) => {
           onPropertyUpdated(item);
@@ -3260,24 +3253,56 @@ function OwnerDashboard({
         </section>
         <section className="panel owner-insight-card">
           <div className="panel-head">
-            <div><h3>Team workload</h3><p>Assignments and review load by active team member</p></div><UserCheck size={18} className="panel-head-icon"/>
+            <div>
+              <h3>Owner controls</h3>
+              <p>Firm-wide oversight and configuration</p>
+            </div>
           </div>
-          <div className="owner-workload-list">{teamWorkload.length?teamWorkload.map((member:any)=>{const assigned=Number(member.assigned_matters||0);const pending=Number(member.pending_reviews||0);const completed=Number(member.completed_tasks||0);const total=Math.max(assigned+completed,1);return <div key={member.user_uid}><span className="owner-workload-avatar">{String(member.name||member.email).slice(0,1).toUpperCase()}</span><span><strong>{member.name||member.email}</strong><small>{pretty(member.role)} · {assigned} assigned · {pending} pending · {completed} completed</small><i><b style={{width:`${Math.min(100,(assigned/Math.max(total,1))*100)}%`}}/></i></span></div>}):<OwnerEmpty message="No review-team assignments are available."/>}</div>
-        </section>
-        <section className="panel owner-insight-card">
-          <div className="panel-head"><div><h3>Reports awaiting action</h3><p>Review and submission queue</p></div><FileText size={18} className="panel-head-icon"/></div>
-          <div className="owner-insight-list">{reports.length?reports.map((report:any)=><button key={report.property_id} onClick={()=>openPropertyById(report.property_id)}><span className="owner-report-icon"><FileCheck2 size={14}/></span><span><strong>{report.property_name}</strong><small>{report.action} · {memberName(report.assigned_owner)} · {report.due_date?dateLabel(report.due_date):'No due date'}</small></span><ArrowUpRight size={13}/></button>):<OwnerEmpty message="No reports are awaiting action."/>}</div>
-        </section>
-        <section className="panel owner-insight-card">
-          <div className="panel-head"><div><h3>Evidence source status</h3><p>Verification state for recorded workspace evidence</p></div><Activity size={18} className="panel-head-icon"/></div>
-          <div className="owner-source-status"><div><span>Connected sources</span><strong>{Number(evidenceSources.connected_sources||0)}</strong></div><div><span>Verification completed</span><strong className="success">{Number(evidenceSources.verification_completed||0)}</strong></div><div><span>Verification pending</span><strong className="warning">{Number(evidenceSources.verification_pending||0)}</strong></div><div><span>Failed verification</span><strong className="danger">{Number(evidenceSources.failed_verification||0)}</strong></div><p>Last synchronization: {evidenceSources.last_synchronization?dateLabel(evidenceSources.last_synchronization):'No synchronized source recorded'}</p></div>
+          <button onClick={() => onNavigate("settings")}>
+            <Settings2 />
+            <span>
+              <strong>Organisation and retention</strong>
+              <small>Users, roles, branding and data controls</small>
+            </span>
+            <ArrowUpRight />
+          </button>
+          <button onClick={() => onNavigate("source-registry")}>
+            <Activity />
+            <span>
+              <strong>Source health</strong>
+              <small>Connections, authority and freshness</small>
+            </span>
+            <ArrowUpRight />
+          </button>
+          <button onClick={() => onNavigate("all-documents")}>
+            <FolderOpen />
+            <span>
+              <strong>Evidence repository</strong>
+              <small>Tenant-wide document register</small>
+            </span>
+            <ArrowUpRight />
+          </button>
+          <button onClick={() => onNavigate("all-findings")}>
+            <ShieldAlert />
+            <span>
+              <strong>Review oversight</strong>
+              <small>Findings across all applications</small>
+            </span>
+            <ArrowUpRight />
+          </button>
         </section>
       </div>
-      <section className="panel owner-activity-panel">
-        <div className="panel-head"><div><h3>Recent workspace activity</h3><p>Matter, evidence, review and report events</p></div><Activity size={18} className="panel-head-icon"/></div>
-        <div className="owner-activity-list">{recentActivity.length?recentActivity.map((event:any)=><button key={event.id} onClick={()=>event.entity_type==='property'&&openPropertyById(event.entity_id)}><span className="owner-activity-dot"/><time>{dateLabel(event.created_at)}</time><span><strong>{pretty(event.action)}</strong><small>{event.actor_name||event.actor_uid}</small></span>{event.entity_type==='property'&&<ArrowUpRight size={13}/>}</button>):<OwnerEmpty message="No recent workspace activity is available."/>}</div>
-      </section>
-      <div className="owner-boundary"><Scale size={17}/><div><strong>Operational oversight and legal responsibility remain separate</strong><p>The Workspace Owner coordinates delivery. Final legal conclusions remain the responsibility of the assigned qualified Legal Reviewer.</p></div></div>
+      <div className="owner-boundary">
+        <Scale size={17} />
+        <div>
+          <strong>Governance and legal responsibility remain separate</strong>
+          <p>
+            The Owner controls the organisation and may oversee delivery. Final
+            legal conclusions must still be recorded by a qualified Lead
+            Advocate with evidence and rationale.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3788,7 +3813,7 @@ function AnalystDashboard({
             {docsLoading
               ? "—"
               : documents.filter((doc) => doc.processing_status === "completed")
-                  .length}
+                .length}
           </strong>
           <p>Available for evidence review</p>
         </div>
@@ -3951,8 +3976,8 @@ function AnalystDashboard({
                   )}
                   {(property.latitude === null ||
                     property.longitude === null) && (
-                    <small>Map point missing</small>
-                  )}
+                      <small>Map point missing</small>
+                    )}
                 </div>
                 <ArrowUpRight size={14} />
               </button>
@@ -5311,7 +5336,7 @@ function PortfolioCommandCenter({
       value: Math.max(
         0,
         (Number(overview.total) || 0) -
-          (Number(overview.missing_documents) || 0),
+        (Number(overview.missing_documents) || 0),
       ),
       isDocument: false,
     },
@@ -5561,10 +5586,10 @@ function PropertiesPage({
         ? a.name.localeCompare(b.name)
         : sort === "survey_asc"
           ? (a.survey_number || "").localeCompare(
-              b.survey_number || "",
-              undefined,
-              { numeric: true },
-            )
+            b.survey_number || "",
+            undefined,
+            { numeric: true },
+          )
           : new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
     );
   const totalPages = Math.max(
@@ -5965,52 +5990,52 @@ function PropertyPage({
   };
   const requiredDetails = isOperations
     ? [
-        {
-          label: "Source documents",
-          complete: docs.length > 0,
-          target: "documents" as const,
-        },
-      ]
+      {
+        label: "Source documents",
+        complete: docs.length > 0,
+        target: "documents" as const,
+      },
+    ]
     : [
-        {
-          label:
-            property.property_type === "agricultural"
-              ? "Survey number"
-              : "Property number",
-          complete: Boolean(
-            property.property_type === "agricultural"
-              ? property.survey_number
-              : property.property_identifier,
-          ),
-          target: "summary" as const,
-        },
-        {
-          label: "Normalized extent",
-          complete:
-            property.extent_value !== null && Boolean(property.extent_unit),
-          target: "summary" as const,
-        },
-        {
-          label: "Map coordinates",
-          complete: property.latitude !== null && property.longitude !== null,
-          target: "map" as const,
-        },
-        {
-          label: "Four-side boundaries",
-          complete: Boolean(
-            property.boundary_north &&
-              property.boundary_south &&
-              property.boundary_east &&
-              property.boundary_west,
-          ),
-          target: "summary" as const,
-        },
-        {
-          label: "Source documents",
-          complete: docs.length > 0,
-          target: "documents" as const,
-        },
-      ];
+      {
+        label:
+          property.property_type === "agricultural"
+            ? "Survey number"
+            : "Property number",
+        complete: Boolean(
+          property.property_type === "agricultural"
+            ? property.survey_number
+            : property.property_identifier,
+        ),
+        target: "summary" as const,
+      },
+      {
+        label: "Normalized extent",
+        complete:
+          property.extent_value !== null && Boolean(property.extent_unit),
+        target: "summary" as const,
+      },
+      {
+        label: "Map coordinates",
+        complete: property.latitude !== null && property.longitude !== null,
+        target: "map" as const,
+      },
+      {
+        label: "Four-side boundaries",
+        complete: Boolean(
+          property.boundary_north &&
+          property.boundary_south &&
+          property.boundary_east &&
+          property.boundary_west,
+        ),
+        target: "summary" as const,
+      },
+      {
+        label: "Source documents",
+        complete: docs.length > 0,
+        target: "documents" as const,
+      },
+    ];
   const completedDetails = requiredDetails.filter(
     (item) => item.complete,
   ).length;
@@ -6059,8 +6084,8 @@ function PropertyPage({
             <strong>
               {property.property_type === "agricultural"
                 ? [property.survey_number, property.subdivision]
-                    .filter(Boolean)
-                    .join(" / ") || "Not recorded"
+                  .filter(Boolean)
+                  .join(" / ") || "Not recorded"
                 : property.property_identifier || "Not recorded"}
             </strong>
           </div>
@@ -6128,8 +6153,8 @@ function PropertyPage({
                   value={
                     property.property_type === "agricultural"
                       ? [property.survey_number, property.subdivision]
-                          .filter(Boolean)
-                          .join(" / ")
+                        .filter(Boolean)
+                        .join(" / ")
                       : property.property_identifier
                   }
                 />
@@ -6208,8 +6233,8 @@ function PropertyPage({
             <strong>
               {property.property_type === "agricultural"
                 ? [property.survey_number, property.subdivision]
-                    .filter(Boolean)
-                    .join(" / ") || "Not recorded"
+                  .filter(Boolean)
+                  .join(" / ") || "Not recorded"
                 : property.property_identifier || "Not recorded"}
             </strong>
           </div>
@@ -6274,8 +6299,8 @@ function PropertyPage({
                   value={
                     property.property_type === "agricultural"
                       ? [property.survey_number, property.subdivision]
-                          .filter(Boolean)
-                          .join(" / ")
+                        .filter(Boolean)
+                        .join(" / ")
                       : property.property_identifier
                   }
                 />
@@ -7305,6 +7330,7 @@ function PropertyPage({
       {showWorkflow && (
         <PropertyWorkflowModal
           property={property}
+          currentUser={currentUser}
           onClose={() => setShowWorkflow(false)}
           onSaved={(item) => {
             onWorkflowUpdated(item);
@@ -7318,10 +7344,12 @@ function PropertyPage({
 
 function PropertyWorkflowModal({
   property,
+  currentUser,
   onClose,
   onSaved,
 }: {
   property: Property;
+  currentUser?: UserAccount | null;
   onClose: () => void;
   onSaved: (property: Property) => void;
 }) {
@@ -7454,11 +7482,20 @@ function PropertyWorkflowModal({
                     Clarification Required
                   </option>
                   <option value="ready_for_review">Ready for Approval</option>
-                  <option value="approved">Approved</option>
-                  <option value="complete">Released / Complete</option>
+                  <option value="approved" disabled={currentUser?.role !== "lawyer"}>
+                    Approved {currentUser?.role !== "lawyer" ? "(Lead Advocate required)" : ""}
+                  </option>
+                  <option value="complete" disabled={currentUser?.role !== "lawyer"}>
+                    Released / Complete {currentUser?.role !== "lawyer" ? "(Lead Advocate required)" : ""}
+                  </option>
                   <option value="closed">Closed</option>
                   <option value="archived">Archived</option>
                 </select>
+                {currentUser?.role !== "lawyer" && (
+                  <small style={{ color: "#64748b", fontSize: "11px", marginTop: "4px" }}>
+                    Per FRD legal sign-off policy, only a qualified Lead Advocate may grant Approved or Released status.
+                  </small>
+                )}
               </label>
               <label className="form-field">
                 <span>
@@ -8574,7 +8611,7 @@ function escapeHtml(text: string) {
     /[&<>"']/g,
     (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        c
+      c
       ] || c,
   );
 }
@@ -8941,25 +8978,25 @@ function CreatePropertyModal({
     setForm((p) =>
       propertyType === "agricultural"
         ? {
-            ...p,
-            propertyType,
-            propertyIdentifier: "",
-            propertyIdentifierType: "",
-            extentUnit: ["acre", "gunta", "cent", "hectare"].includes(
-              p.extentUnit,
-            )
-              ? p.extentUnit
-              : "acre",
-          }
+          ...p,
+          propertyType,
+          propertyIdentifier: "",
+          propertyIdentifierType: "",
+          extentUnit: ["acre", "gunta", "cent", "hectare"].includes(
+            p.extentUnit,
+          )
+            ? p.extentUnit
+            : "acre",
+        }
         : {
-            ...p,
-            propertyType,
-            surveyNumber: "",
-            subdivision: "",
-            extentUnit: ["sq_ft", "sq_m"].includes(p.extentUnit)
-              ? p.extentUnit
-              : "sq_ft",
-          },
+          ...p,
+          propertyType,
+          surveyNumber: "",
+          subdivision: "",
+          extentUnit: ["sq_ft", "sq_m"].includes(p.extentUnit)
+            ? p.extentUnit
+            : "sq_ft",
+        },
     );
   const selectDistrict = (value: string, option?: LocationOption) => {
     setRtcLookup(null);

@@ -37,6 +37,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
   readOnly = false,
 }) => {
   const [loading, setLoading] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [snapshotSuccess, setSnapshotSuccess] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>('');
 
@@ -70,11 +71,25 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
   };
 
   const handleDownloadPdf = async () => {
-    const response=await authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-report/pdf`);
-    if(!response.ok)return alert('PDF export is unavailable because no validated PDF renderer is configured. Use Printable HTML.');
-    const url=URL.createObjectURL(await response.blob());
-    const anchor=document.createElement('a');anchor.href=url;anchor.download=`${property.name.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}-approved-report.pdf`;anchor.click();
-    window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+    setDownloadingPdf(true);
+    try {
+      const response = await authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-report/pdf`);
+      if (!response.ok) {
+        const err = await response.text().catch(() => '');
+        return alert(`PDF generation failed (${response.status}): ${err || 'Please try again.'}`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${property.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-due-diligence-report.pdf`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err: any) {
+      alert(`Download failed: ${err?.message || 'Network error'}`);
+    } finally {
+      setDownloadingPdf(false);
+    }
   };
 
   const handleOpenHtml = async () => {
@@ -135,7 +150,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
           </button>
           <button
             onClick={handleDownloadPdf}
-            disabled
+            disabled={downloadingPdf}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -143,14 +158,14 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
               padding: '8px 14px',
               borderRadius: '8px',
               border: 'none',
-              background: '#2b6cb0',
+              background: downloadingPdf ? '#4a5568' : '#2b6cb0',
               color: '#fff',
-              cursor: 'pointer',
+              cursor: downloadingPdf ? 'wait' : 'pointer',
               fontWeight: 600,
               fontSize: '0.875rem',
             }}
           >
-            <Download size={16} /> PDF unavailable
+            <Download size={16} /> {downloadingPdf ? 'Generating PDF...' : 'Download Report PDF'}
           </button>
         </div>
       </div>

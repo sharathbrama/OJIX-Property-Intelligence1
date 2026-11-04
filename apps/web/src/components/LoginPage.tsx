@@ -35,8 +35,12 @@ const sanitizePersonNameInput=(value:string)=>value.replace(/[^\p{L} '\-]/gu,'')
 const formatRegistrationPhone=(countryCode:string,value:string)=>{const digits=value.replace(/\D/g,'').slice(0,countryCode==='+91'||countryCode==='+1'?10:15);if(countryCode==='+91')return digits.replace(/(\d{5})(?=\d)/,'$1 ');if(countryCode==='+1')return digits.replace(/(\d{3})(\d{0,3})(\d{0,4})/,(_,a,b,c)=>[a,b,c].filter(Boolean).join(' '));return digits.replace(/(\d{3})(?=\d)/g,'$1 ').trim();};
 
 export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
-  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
+  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'|'accept-invite'>(() => {
     const path = window.location.pathname.replace(/\/$/, '');
+    const searchParams = new URLSearchParams(window.location.search);
+    if (path === '/accept-invite' || searchParams.has('token')) {
+      return 'accept-invite';
+    }
     return path === '/register' ? 'register' : 'landing';
   });
   const [loginCardOpen, setLoginCardOpen] = useState(() => Boolean(expectedRole) || window.location.pathname.startsWith('/login'));
@@ -49,6 +53,21 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [inviteToken, setInviteToken] = useState<string>(() => {
+    return new URLSearchParams(window.location.search).get('token') || '';
+  });
+  const [inviteDetails, setInviteDetails] = useState<{
+    valid: boolean;
+    email: string;
+    invitedName: string;
+    assignedRole: string;
+    tenantId: string;
+    expiresAt: string;
+  } | null>(null);
+  const [invitePassword, setInvitePassword] = useState<string>('');
+  const [inviteConfirmPassword, setInviteConfirmPassword] = useState<string>('');
+  const [inviteError, setInviteError] = useState<string>('');
+  const [inviteLoading, setInviteLoading] = useState<boolean>(false);
   const [registerName, setRegisterName] = useState('');
   const [registerFirstName, setRegisterFirstName] = useState('');
   const [registerMiddleName, setRegisterMiddleName] = useState('');
@@ -301,13 +320,19 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       const res = await fetch(`${apiUrl}/api/auth/login/request-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, expectedRole:requestedRole, deliveryChannel })
+        body: JSON.stringify({ email, password, expectedRole:requestedRole })
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const error = new Error(data.error || 'Failed to authenticate') as Error & { retryAfterSeconds?: number };
+        const message = data.error || `Server error (${res.status}). Please try again.`;
+        const error = new Error(message) as Error & { retryAfterSeconds?: number };
         error.retryAfterSeconds = Number(data.retryAfterSeconds) || undefined;
         throw error;
+      }
+
+      if (data.token && data.user) {
+        onLoginSuccess(data.token, data.user, requestedRole);
+        return;
       }
 
       setChallengeId(data.challengeId);
@@ -451,27 +476,67 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     }
   };
 
+  useEffect(() => {
+    if (mode !== 'accept-invite') return;
+    if (!inviteToken) {
+      setInviteError('No invitation token provided. Please use the activation link received in your invitation email.');
+      return;
+    }
+    setInviteLoading(true);
+    setInviteError('');
+    fetch(`${apiUrl}/api/auth/invitations/verify?token=${encodeURIComponent(inviteToken)}`)
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Invalid or expired invitation token.');
+        setInviteDetails(data);
+      })
+      .catch(err => {
+        setInviteError(err instanceof Error ? err.message : 'Invalid invitation.');
+      })
+      .finally(() => setInviteLoading(false));
+  }, [mode, inviteToken, apiUrl]);
+
+  const handleAcceptInvite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!invitePassword || invitePassword.length < 8) {
+      setInviteError('Password must be at least 8 characters.');
+      return;
+    }
+    if (invitePassword !== inviteConfirmPassword) {
+      setInviteError('Passwords do not match.');
+      return;
+    }
+    setInviteLoading(true);
+    setInviteError('');
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/invitations/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: inviteToken,
+          password: invitePassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Account activation failed.');
+      if (data.token && data.user) {
+        onLoginSuccess(data.token, data.user, data.user.role);
+      } else {
+        navigateAuth('login');
+      }
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : 'Failed to activate account.');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
   const currentAccount = dummyAccounts.find(a => a.uid === selectedUid) || (selectedUid ? dummyAccounts[0] : {
     uid: '', email, name: registerName || 'Registered member', designation: 'Registered Reviewer',
     role: 'viewer' as UserRole, avatar: (registerName || 'RM').split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase(),
     description: 'Verified read-only workspace member'
   });
-  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card">
-    <img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/>
-    <span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span>
-    <h1>Confirm your secure sign-in</h1>
-    <p>Enter the six-digit code sent by {otpDeliveryMode==='sms'?'SMS':'email'} to <strong>{otpDeliveryTarget||email}</strong>. It can be used once.</p>
-    <div className="otp-delivery-options" aria-label="Verification code delivery method">
-      <button type="button" className={otpDeliveryMode==='email'?'active':''} disabled={loading||resendSecondsLeft>0} onClick={()=>requestLoginOtp('email')}><Mail size={15}/><span><strong>Email</strong><small>{otpDeliveryMode==='email'?otpDeliveryTarget:'Send a new code'}</small></span></button>
-      <button type="button" className={otpDeliveryMode==='sms'?'active':''} disabled={loading||resendSecondsLeft>0} onClick={()=>requestLoginOtp('sms')}><Smartphone size={15}/><span><strong>Verified mobile</strong><small>{otpDeliveryMode==='sms'?otpDeliveryTarget:'Send SMS code'}</small></span></button>
-    </div>
-    <p role="timer" aria-live="polite">{timeLeft>0?`Code expires in ${Math.floor(timeLeft/60)}:${String(timeLeft%60).padStart(2,'0')}`:'Code expired. Generate a new code.'}</p>
-    {developmentOtpAutofilled&&<div className="executive-alert service"><ShieldCheck size={16}/><span>Local development mobile OTP was generated and autofilled. This feature is disabled in production.</span></div>}
-    {error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}
-    <form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6||timeLeft===0}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form>
-    <div className="executive-otp-actions"><button onClick={()=>{setMode('landing');setLoginCardOpen(true);setOtp('');setError('');}}>Back to sign in</button><button disabled={loading||resendSecondsLeft>0} onClick={()=>requestLoginOtp(otpDeliveryMode)}>{resendSecondsLeft>0?`Resend code in ${resendSecondsLeft}s`:`Resend by ${otpDeliveryMode==='sms'?'SMS':'email'}`}</button></div>
-    <p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p>
-  </section></main>;
+  if(mode==='login-otp') return <main className="executive-otp-shell"><section className="executive-otp-card"><img className="executive-logo otp-logo" src="/assets/ojix-primary-dark.png" alt="OJIX Property Intelligence"/><span className="executive-secure-pill"><ShieldCheck size={13}/> TWO-STEP VERIFICATION</span><h1>Confirm your secure sign-in</h1><p>Enter the six-digit code sent by email to <strong>{otpDeliveryTarget || email}</strong>. It can be used once.</p><p role="timer" aria-live="polite">{timeLeft>0?`Code expires in ${Math.floor(timeLeft/60)}:${String(timeLeft%60).padStart(2,'0')}`:'Code expired. Generate a new code.'}</p>{error&&<div className="executive-alert error"><AlertCircle size={16}/><span>{error}</span></div>}<form onSubmit={verifyLoginOtp}><label>Verification code<input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" value={otp} onChange={event=>setOtp(event.target.value.replace(/\D/g,''))} placeholder="000000"/></label><button className="executive-submit" disabled={loading||otp.length!==6||timeLeft===0}>{loading?<><span className="executive-spinner"/> Verifying…</>:<>Verify and enter workspace <ArrowRight/></>}</button></form><div className="executive-otp-actions"><button onClick={()=>{setMode('login');setOtp('');setError('');}}>Back to sign in</button><button disabled={loading||resendSecondsLeft>0} onClick={handleLogin as any}>{resendSecondsLeft>0?`Resend code in ${resendSecondsLeft}s`:'Generate a new code'}</button></div><p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p></section></main>;
 
   if (mode !== 'login' && mode !== 'landing') {
     const isOtp = mode === 'otp';
@@ -539,8 +604,8 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
             {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
             {!recoveryStep&&<form className="executive-login-form landing-modal-form" onSubmit={handleLogin}>
               <div className="login-selected-role"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Signing in as</small><strong>{roleLoginCopy[selectedRole]?.label}</strong></span></div>
-              <label><span>Work email</span><div className="executive-input"><UserCheck/><input autoFocus type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
-              <label><span>Password</span><div className="executive-input"><Lock/><input type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} required/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff/>:<Eye/>}</button></div></label>
+              <label><span>Work email</span><div className="executive-input"><UserCheck/><input autoFocus type="email" autoComplete="username" value={email} onChange={event=>{setEmail(event.target.value);setError('');}} required placeholder="name@organisation.com"/></div></label>
+              <label><span>Password</span><div className="executive-input"><Lock/><input type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={event=>{setPassword(event.target.value);setError('');}} required/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff/>:<Eye/>}</button></div></label>
               <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/>Code expires in 10 minutes</span><button type="button" onClick={openPasswordRecovery}>Forgot password?</button></div>
               <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'||!selectedRole}>{loading?<><span className="executive-spinner"/>Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
             </form>}

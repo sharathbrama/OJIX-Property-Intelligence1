@@ -4,16 +4,16 @@ ON DUPLICATE KEY UPDATE id=VALUES(id);
 INSERT INTO org_memberships (id, organization_id, user_uid, email, role)
 VALUES 
   (UUID(), '11111111-1111-4111-8111-111111111111', 'local-developer', 'developer@localhost', 'owner'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-super-admin', 'mrsharath3126@gmail.com', 'owner'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-owner', 'mrsharath3126@gmail.com', 'owner'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-admin', 'mrsharath3126@gmail.com', 'admin'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-lawyer', 'mrsharath3126@gmail.com', 'lawyer'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-analyst', 'mrsharath3126@gmail.com', 'analyst'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-operations', 'mrsharath3126@gmail.com', 'operations'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-consultant', 'mrsharath3126@gmail.com', 'consultant'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-support', 'mrsharath3126@gmail.com', 'support'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-data-steward', 'mrsharath3126@gmail.com', 'data_steward'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-viewer', 'mrsharath3126@gmail.com', 'viewer')
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-super-admin', 'keerthana1234p@gmail.com', 'owner'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-owner', 'keerthana1234p@gmail.com', 'owner'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-admin', 'keerthana1234p@gmail.com', 'admin'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-lawyer', 'keerthana1234p@gmail.com', 'lawyer'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-analyst', 'keerthana1234p@gmail.com', 'analyst'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-operations', 'keerthana1234p@gmail.com', 'operations'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-consultant', 'keerthana1234p@gmail.com', 'consultant'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-support', 'keerthana1234p@gmail.com', 'support'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-data-steward', 'keerthana1234p@gmail.com', 'data_steward'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-viewer', 'keerthana1234p@gmail.com', 'viewer')
 ON DUPLICATE KEY UPDATE id=id;
 
 -- Synthetic example only. This is not an official parcel, survey, Rajakaluve, lake or planning dataset.
