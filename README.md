@@ -88,17 +88,13 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
 
 6. Open the web app and sign in with a configured demo account or a verified registered account. Protected API routes require an authenticated session.
 
-### Deploy the web frontend to Vercel
-
-The Vercel project root is the repository root (`.`) because the npm workspace lockfile is there. Build settings, SPA refresh routing, team protection, production environment setup and current deployment status are documented in the [deployment runbook](docs/DEPLOYMENT.md). Production requires `VITE_API_URL` to point to the separately hosted API's HTTPS origin; the current Vercel project has no API URL configured yet.
-
 ### Platform Super Admin
 
-Production bootstrap uses API-only secrets `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`. The API creates the account once, hashes the initial password, assigns the protected `super_admin` role and preserves existing passwords on redeploy. Platform endpoints enforce server-side Super Admin authorization. See the [bootstrap runbook](docs/DEPLOYMENT.md#super-admin-bootstrap-and-access).
+Optional bootstrap credentials `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD` create the platform account on API startup. The API hashes the initial password and preserves an existing password. Platform endpoints enforce server-side Super Admin authorization.
 
 ### Run the complete stack with Docker
 
-To run MariaDB, the API, and the production web build together:
+To run MariaDB, the API, and the optimized web build together:
 
 ```bash
 docker compose up --build
@@ -204,7 +200,7 @@ Recommended target architecture from the FRD:
 - Operations: Cloud Logging, Monitoring, Error Reporting, backups, point-in-time recovery, alerting and CI/CD.
 - Infrastructure: Terraform and GitHub Actions after the cloud project, billing, IAM and secrets are approved.
 
-Do not deploy real client documents to this local setup. Before a pilot with client data, finish Firebase sign-in, tenant/role management, private cloud storage, malware scanning, encryption/retention policies, backup restore tests, dependency scanning, integration tests, rate limits and a security review.
+Use synthetic data in this local setup. Before handling client documents, complete Firebase sign-in, tenant/role management, private storage, malware scanning, encryption and retention policies, backup restore checks, dependency scanning, integration coverage, rate limits and a security review.
 
 ## Importing spatial data
 

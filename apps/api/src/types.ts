@@ -37,6 +37,8 @@ export interface ExtractedParty {
   role: 'seller' | 'buyer' | 'donor' | 'donee' | 'owner' | 'executant' | 'claimant' | 'occupant' | string;
   relationship?: string; // e.g., "S/o Ramaswamy", "W/o Krishna", "D/o Venkataraman"
   address?: string;
+  age?: number;
+  ownershipShare?: string;
   panOrId?: string;
   evidenceAnchor?: EvidenceAnchor;
 }
@@ -65,6 +67,12 @@ export interface PropertySchedule {
   hobli?: string;
   taluk?: string;
   district?: string;
+  khataNumber?: string;
+  mutationReference?: string;
+  landClassification?: string;
+  description?: string;
+  totalExtent?: PropertyExtent;
+  transferredExtent?: PropertyExtent;
   extent: PropertyExtent;
   boundaries: FourSideBoundaries;
   evidenceAnchor?: EvidenceAnchor;
@@ -74,6 +82,27 @@ export interface Consideration {
   amount: number;
   currency: 'INR';
   marketValue?: number;
+  evidenceAnchor?: EvidenceAnchor;
+}
+
+export interface ExtractedFinancialItem {
+  category: 'sale_consideration' | 'stamp_duty' | 'registration_fee' | 'service_fee' | 'other_charge' | 'challan' | string;
+  label: string;
+  amount?: number;
+  currency: 'INR';
+  paymentDate?: string;
+  reference?: string;
+  certificate?: string;
+  evidenceAnchor?: EvidenceAnchor;
+}
+
+export interface ExtractedOwnershipEvent {
+  eventType: string;
+  eventDate?: string;
+  from?: string;
+  to?: string;
+  reference?: string;
+  sourceStatus: 'mentioned_in_deed' | 'registered_document';
   evidenceAnchor?: EvidenceAnchor;
 }
 
@@ -105,6 +134,10 @@ export interface ReviewState {
 export interface ExtractedDocumentFields {
   documentType: KarnatakaDocumentType;
   documentNumber: string;
+  registrationNumber?: string;
+  stampPaperNumber?: string;
+  stampPaperDetails?: string;
+  language?: string[];
   registrationDate?: string;
   executionDate?: string;
   subRegistrarOffice?: string;
@@ -112,6 +145,8 @@ export interface ExtractedDocumentFields {
   parties: ExtractedParty[];
   propertySchedule: PropertySchedule;
   consideration?: Consideration;
+  financialItems?: ExtractedFinancialItem[];
+  ownershipEvents?: ExtractedOwnershipEvent[];
   encumbranceEntries?: EncumbranceEntry[];
   overallConfidence: number; // 0.0 to 1.0
   fieldConfidence: Record<string, number>;

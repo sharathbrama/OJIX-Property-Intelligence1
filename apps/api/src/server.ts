@@ -13,10 +13,9 @@ import mysql from 'mysql2/promise';
 import { z } from 'zod';
 import { generateOtp, generateOtpSalt, hashOtp, hashPassword, resolveDemoCredential, verifyOtp, verifyPassword } from './auth-security.js';
 import { bootstrapSuperAdmin, isConfiguredSuperAdminEmail } from './super-admin-bootstrap.js';
-import { validateProductionEnvironment } from './production-config.js';
 import { sendOtpEmailWithSmtp } from './otp-email.js';
 import { calculateRisk, buildBaselineFindings, type RiskFinding } from './risk-engine.js';
-import { extractDocument, type ExtractionInput } from './document-extractor.js';
+import { extractDocument } from './document-extractor.js';
 import type { ExtractedDocumentFields, KarnatakaDocumentType } from './types.js';
 import {
   buildTitleDAG,
@@ -52,8 +51,8 @@ import {
 import { legalResearchEngine, type StatutoryProvision } from './legal-research-engine.js';
 import { sourceRegistryEngine, type RegistryName, type RegistryVerificationResult, type DirectRegistryQueryParams } from './source-registry-engine.js';
 import { retrieveRtc, rtcSearchSchema } from './rtc-retrieval-service.js';
-import { runLocalOcr } from './local-ocr.js';
 import { buildTenantObjectKey, createDocumentStorage } from './document-storage.js';
+import { ocrAccess, type OcrRole } from './ocr-access.js';
 
 
 dotenv.config();
@@ -68,7 +67,6 @@ const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
 const documentStorage = createDocumentStorage();
 
-validateProductionEnvironment();
 
 fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -97,18 +95,10 @@ function pendingDocumentFields(_documentId: string, documentType: string, classi
     extractionMetadata: {
       source: 'pending',
       status: 'manual_review',
-      message: 'Local Kannada and English OCR is ready. Extracted facts still require reviewer confirmation.',
+      message: 'Document AI extraction has not started. Extracted facts require reviewer confirmation.',
     },
     reviewState: { isVerified: false, overrides: {} },
   };
-}
-
-function usableExtractedText(value: unknown): string {
-  if (typeof value !== 'string') return '';
-  const text = value.trim();
-  if (text.length < 20 || text.startsWith('%PDF-')) return '';
-  const printable = [...text.slice(0, 4000)].filter(char => /[\p{L}\p{N}\p{P}\p{Z}\n\r\t]/u.test(char)).length;
-  return printable / Math.min(text.length, 4000) >= 0.85 ? text : '';
 }
 
 type DbResult = {
@@ -200,7 +190,9 @@ if (process.env.FIREBASE_PROJECT_ID) {
 }
 
 app.disable('x-powered-by');
-if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
+const configuredProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
+if (Number.isInteger(configuredProxyHops) && configuredProxyHops > 0) app.set('trust proxy', configuredProxyHops);
+else if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
 const allowedCorsOrigins = corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
 app.use(cors({
@@ -210,7 +202,7 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '25mb' }));
 app.use('/api', rateLimit({
   windowMs: 60_000,
   limit: process.env.NODE_ENV === 'production' ? (process.env.RATE_LIMIT_MAX ? Number(process.env.RATE_LIMIT_MAX) : 120) : 10_000,
@@ -477,7 +469,7 @@ function writeGuard(req: Request, res: Response, next: NextFunction) {
 
 function documentIntakeGuard(req: Request, res: Response, next: NextFunction) {
   const user = (req as AuthenticatedRequest).user;
-  if (!user || !['owner', 'admin', 'lawyer', 'analyst', 'operations'].includes(user.role || '')) {
+  if (!user || !ocrAccess.canIntake(user.role as OcrRole)) {
     return res.status(403).json({
       error: 'Document intake permission is required.',
       requiredRoles: ['owner', 'admin', 'lawyer', 'analyst', 'operations'],
@@ -530,7 +522,7 @@ async function releasedMatterGuard(req: Request, res: Response, next: NextFuncti
   const user = (req as AuthenticatedRequest).user;
   if (user?.role !== 'viewer') return next();
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const released = await pool.query("SELECT id FROM properties WHERE id=? AND tenant_id=? AND status='complete' LIMIT 1", [req.params.id, user.tenantId]);
+  const released = await pool.query("SELECT id FROM properties WHERE id=? AND tenant_id=? AND status IN ('approved','complete') LIMIT 1", [req.params.id, user.tenantId]);
   if (!released.rowCount) return res.status(404).json({ error: 'Released matter not found.' });
   next();
 }
@@ -1092,7 +1084,18 @@ app.post('/api/auth/logout', authGuard, (req, res) => {
 
 app.use('/api/properties/:id', authGuard, businessDataGuard, asyncRoute(releasedMatterGuard));
 app.use(['/api/documents', '/api/findings', '/api/legal-research', '/api/source-registry', '/api/spatial'], authGuard, businessDataGuard);
-app.use(['/api/documents', '/api/source-registry', '/api/spatial', '/api/properties/:id/documents'], authGuard, viewerInternalDataGuard);
+app.use(['/api/documents', '/api/source-registry', '/api/spatial'], authGuard, viewerInternalDataGuard);
+app.use('/api/properties/:id/documents', authGuard, asyncRoute(async(req,res,next)=>{
+  if(!pool)return res.status(503).json({error:'Database not configured.'});
+  const user=(req as AuthenticatedRequest).user;
+  if(user?.role==='support'||user?.role==='data_steward')return res.status(403).json({error:'This role cannot access confidential document records.'});
+  const property=await pool.query('SELECT assigned_lawyer_uid,assigned_analyst_uid,assigned_operations_uid FROM properties WHERE id=? AND tenant_id=?',[req.params.id,user?.tenantId]);
+  if(!property.rowCount)return res.status(404).json({error:'Property not found.'});
+  const row=property.rows[0];
+  const assigned=(user?.role==='lawyer'&&row.assigned_lawyer_uid===user.uid)||(user?.role==='analyst'&&row.assigned_analyst_uid===user.uid)||(user?.role==='operations'&&(!row.assigned_operations_uid||row.assigned_operations_uid===user.uid))||['owner','admin','consultant','viewer'].includes(user?.role||'');
+  if(!assigned)return res.status(404).json({error:'Matter not found.'});
+  next();
+}));
 app.use(['/api/findings', '/api/legal-research', '/api/properties/:id/workflow', '/api/properties/:id/title-chain', '/api/properties/:id/title-events', '/api/properties/:id/discrepancies', '/api/properties/:id/spatial-screening', '/api/properties/:id/due-diligence-snapshot'], authGuard, legalDecisionDataGuard);
 
 app.get('/api/locations/districts', authGuard, asyncRoute(async (_req, res) => {
@@ -1186,7 +1189,7 @@ app.patch('/api/rtc/:id/confirmation', authGuard, rtcLookupGuard, asyncRoute(asy
 
 app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured. Start MariaDB and set DATABASE_URL.' });
-  if (_req.user?.role === 'support') return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:'local_development', ocr:'local_tesseract', gisLayers:'unavailable' }, supportScope:'diagnostics_only' });
+  if (_req.user?.role === 'support') { const configured=await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[_req.user.tenantId]);return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:documentStorage.provider==='supabase'?'supabase_private':'local_development', ocr:configured.rowCount&&process.env.OCR_WORKER_TOKEN?'google_document_ai_configured':'not_configured', gisLayers:'unavailable' }, supportScope:'diagnostics_only' }); }
   const result = await pool.query(
     `SELECT COUNT(*) AS total,
        SUM(CASE WHEN p.status='in_review' THEN 1 ELSE 0 END) AS in_review,
@@ -1527,13 +1530,16 @@ app.post('/api/properties', authGuard, writeGuard, asyncRoute(async (req, res) =
 
 app.get('/api/properties/:id', authGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const result = await pool.query("SELECT * FROM properties WHERE id=? AND tenant_id=? AND ? <> 'support' AND (? <> 'viewer' OR status='complete') AND (? <> 'lawyer' OR assigned_lawyer_uid=?) AND (? <> 'analyst' OR assigned_analyst_uid=?) AND (? <> 'operations' OR assigned_operations_uid=? OR assigned_operations_uid IS NULL OR assigned_operations_uid='')", [req.params.id, req.user?.tenantId, req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '']);
+  const result = await pool.query("SELECT * FROM properties WHERE id=? AND tenant_id=? AND ? <> 'support' AND (? NOT IN ('viewer','consultant') OR status IN ('approved','complete')) AND (? <> 'lawyer' OR assigned_lawyer_uid=?) AND (? <> 'analyst' OR assigned_analyst_uid=?) AND (? <> 'operations' OR assigned_operations_uid=? OR assigned_operations_uid IS NULL OR assigned_operations_uid='')", [req.params.id, req.user?.tenantId, req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '']);
   if (!result.rowCount) return res.status(404).json({ error: 'Property not found.' });
-  const documents = req.user?.role === 'viewer'
-    ? { rows: [] }
-    : await pool.query('SELECT id, original_filename, mime_type, size_bytes, sha256, doc_type, doc_type_custom, classification_confidence, classification_source, manual_review_status, processing_status, extracted_fields, created_at FROM documents WHERE property_id=? AND tenant_id=? ORDER BY created_at DESC', [req.params.id, req.user?.tenantId]);
+  const documents = ['viewer','consultant'].includes(req.user?.role || '')
+    ? await pool.query("SELECT id, original_filename, mime_type, size_bytes, sha256, doc_type, doc_type_custom, classification_confidence, classification_source, manual_review_status, processing_status, review_status, extracted_fields, extracted_text, created_at FROM documents WHERE property_id=? AND tenant_id=? AND review_status='approved' ORDER BY created_at DESC", [req.params.id, req.user?.tenantId])
+    : ['support','data_steward'].includes(req.user?.role || '') ? { rows: [] }
+    : await pool.query('SELECT id, original_filename, mime_type, size_bytes, sha256, doc_type, doc_type_custom, classification_confidence, classification_source, manual_review_status, processing_status, review_status, extracted_fields, extracted_text, created_at FROM documents WHERE property_id=? AND tenant_id=? ORDER BY created_at DESC', [req.params.id, req.user?.tenantId]);
   const findings = ['owner','admin','lawyer','analyst','consultant'].includes(req.user?.role || '')
-    ? await pool.query('SELECT * FROM risk_findings WHERE property_id=? AND tenant_id=? ORDER BY created_at DESC', [req.params.id, req.user?.tenantId])
+    ? (['consultant','viewer'].includes(req.user?.role || '')
+      ? await pool.query("SELECT * FROM risk_findings WHERE property_id=? AND tenant_id=? AND evidence_status='verified' ORDER BY created_at DESC", [req.params.id, req.user?.tenantId])
+      : await pool.query('SELECT * FROM risk_findings WHERE property_id=? AND tenant_id=? ORDER BY created_at DESC', [req.params.id, req.user?.tenantId]))
     : { rows: [] };
   res.json({ item: result.rows[0], documents: documents.rows, findings: findings.rows });
 }));
@@ -1965,6 +1971,17 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
     );
 
     inserted.push(result.rows[0]);
+    // Intake creates the shared provider job; it never runs OCR in the request process.
+    const configured = await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?', [req.user?.tenantId]);
+    if (configured.rowCount && process.env.OCR_WORKER_TOKEN) {
+      await pool.query(
+        `INSERT INTO document_processing_jobs (id,tenant_id,property_id,document_id,requested_by_uid,status)
+         VALUES (?,?,?,?,?,'queued')`,
+        [crypto.randomUUID(), req.user?.tenantId, req.params.id, documentId, req.user?.uid || 'unknown']
+      );
+      await pool.query("UPDATE documents SET processing_status='queued' WHERE id=? AND tenant_id=?", [documentId, req.user?.tenantId]);
+      result.rows[0].processing_status = 'queued';
+    }
   }
   const importedTypes = inserted.map((item: any) => item.doc_type).filter(Boolean);
   await audit(req.user?.uid || 'unknown', req.user?.tenantId, 'document.uploaded', 'property', req.params.id, { count: inserted.length, documentTypes: importedTypes });
@@ -1975,7 +1992,108 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
       verificationStatus: 'manual_review_required'
     });
   }
-  res.status(201).json({ items: inserted, note: 'Files uploaded. OCR extraction is pending; source facts require manual review.' });
+  res.status(201).json({ items: inserted, note: 'Files uploaded. OCR jobs are queued when Document AI is configured; extracted facts always require human review.' });
+}));
+
+app.get('/api/properties/:id/documents/:docId/jobs', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const doc = await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?', [req.params.docId, req.params.id, req.user?.tenantId]);
+  if (!doc.rowCount) return res.status(404).json({ error: 'Document not found.' });
+  const jobs = await pool.query(`SELECT id,status,progress,attempts,max_attempts,pages_processed,estimated_cost_usd,error_code,error_message,started_at,completed_at,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND property_id=? AND document_id=? ORDER BY created_at DESC`, [req.user?.tenantId, req.params.id, req.params.docId]);
+  res.json({ items: jobs.rows });
+}));
+
+app.post('/api/properties/:id/documents/:docId/jobs', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const doc = await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?', [req.params.docId, req.params.id, req.user?.tenantId]);
+  if (!doc.rowCount) return res.status(404).json({ error: 'Document not found.' });
+  const configured = await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?', [req.user?.tenantId]);
+  if (!configured.rowCount) return res.status(409).json({ error: 'Google Document AI is not configured for this workspace.', code: 'DOCUMENT_AI_NOT_CONFIGURED' });
+  if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker authentication is not configured on the server.',code:'OCR_WORKER_NOT_CONFIGURED'});
+  const active = await pool.query("SELECT id FROM document_processing_jobs WHERE tenant_id=? AND document_id=? AND status IN ('queued','processing') LIMIT 1", [req.user?.tenantId, req.params.docId]);
+  if (active.rowCount) return res.status(202).json({ jobId: active.rows[0].id, status: 'already_queued' });
+  const jobId = crypto.randomUUID();
+  await pool.query(`INSERT INTO document_processing_jobs (id,tenant_id,property_id,document_id,requested_by_uid,status) VALUES (?,?,?,?,?,'queued')`, [jobId, req.user?.tenantId, req.params.id, req.params.docId, req.user?.uid || 'unknown']);
+  await pool.query("UPDATE documents SET processing_status='queued',review_status='pending' WHERE id=? AND tenant_id=?", [req.params.docId, req.user?.tenantId]);
+  await audit(req.user?.uid || 'unknown', req.user?.tenantId, 'document.ocr_queued', 'document', req.params.docId, { jobId });
+  res.status(202).json({ jobId, status: 'queued' });
+}));
+
+// Rebuild structured fields from saved OCR output without calling Google again.
+// This preserves immutable OCR text/tokens and records a distinct extraction run.
+app.post('/api/properties/:id/documents/:docId/rebuild-fields', authGuard, asyncRoute(async (req,res) => {
+  if (!pool) return res.status(503).json({error:'Database not configured.'});
+  if (req.user?.role !== 'analyst') return res.status(403).json({error:'Only an Associate / Analyst may rebuild extraction fields.'});
+  const document = await pool.query('SELECT id,original_filename,mime_type,extracted_text,review_status FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[req.params.docId,req.params.id,req.user.tenantId]);
+  if (!document.rowCount) return res.status(404).json({error:'Document not found.'});
+  if (document.rows[0].review_status === 'approved') return res.status(409).json({error:'Approved evidence cannot be rebuilt; ask the Lead Advocate to reopen its review first.'});
+  const latest = await pool.query('SELECT provider_version,page_count,raw_ocr_text,raw_ocr_tokens,raw_provider_response FROM document_extraction_runs WHERE tenant_id=? AND document_id=? ORDER BY created_at DESC LIMIT 1',[req.user.tenantId,req.params.docId]);
+  const rawText = String(latest.rows[0]?.raw_ocr_text || document.rows[0].extracted_text || '');
+  if (!rawText) return res.status(409).json({error:'No preserved OCR text is available to rebuild fields.'});
+  let tokens: any[] = [];
+  try {
+    const value = latest.rows[0]?.raw_ocr_tokens;
+    tokens = Array.isArray(value) ? value : typeof value === 'string' ? JSON.parse(value) : [];
+    if (!Array.isArray(tokens)) tokens = [];
+  } catch { tokens = []; }
+  const fields = extractDocument({text:rawText,tokens},{documentId:req.params.docId,filename:document.rows[0].original_filename,mimeType:document.rows[0].mime_type});
+  const runId = crypto.randomUUID();
+  const jobId = crypto.randomUUID();
+  const pageCount = Number(latest.rows[0]?.page_count || 0);
+  await pool.query(`INSERT INTO document_processing_jobs (id,tenant_id,property_id,document_id,requested_by_uid,status,progress,pages_processed,estimated_cost_usd,completed_at) VALUES (?,?,?,?,?,'completed',100,?,0,NOW(6))`,[jobId,req.user.tenantId,req.params.id,req.params.docId,req.user.uid||'unknown',pageCount]);
+  await pool.query(`INSERT INTO document_extraction_runs (id,tenant_id,property_id,document_id,job_id,provider,provider_version,page_count,raw_ocr_text,raw_ocr_tokens,raw_provider_response,extracted_fields,created_by_uid) VALUES (?,?,?,?,?,'ojix_structured_reextract','kannada-schedule-v2',?,?,?,?,?,?)`,[runId,req.user.tenantId,req.params.id,req.params.docId,jobId,pageCount,rawText,JSON.stringify(tokens),latest.rows[0]?.raw_provider_response||null,JSON.stringify(fields),req.user.uid||'unknown']);
+  await pool.query(`UPDATE documents SET extracted_fields=?,processing_status='manual_review',manual_review_status='required',review_status='pending',approved_by_uid=NULL,approved_at=NULL WHERE id=? AND tenant_id=?`,[JSON.stringify(fields),req.params.docId,req.user.tenantId]);
+  await audit(req.user.uid||'unknown',req.user.tenantId,'document.structured_fields_rebuilt','document',req.params.docId,{runId,source:'preserved_ocr',pageCount});
+  res.json({success:true,runId,extractedFields:fields,ocrReprocessed:false});
+}));
+
+app.get('/api/properties/:id/documents/:docId/extraction-history', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const doc = await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?', [req.params.docId, req.params.id, req.user?.tenantId]);
+  if (!doc.rowCount) return res.status(404).json({ error: 'Document not found.' });
+  const [runs, changes, reviews] = await Promise.all([
+    pool.query('SELECT id,job_id,provider,provider_version,schema_version,page_count,created_by_uid,created_at FROM document_extraction_runs WHERE tenant_id=? AND document_id=? ORDER BY created_at DESC', [req.user?.tenantId, req.params.docId]),
+    pool.query('SELECT id,field_path,previous_value,new_value,action,rationale,actor_uid,actor_role,created_at FROM document_field_history WHERE tenant_id=? AND document_id=? ORDER BY created_at', [req.user?.tenantId, req.params.docId]),
+    pool.query('SELECT id,from_status,to_status,decision,rationale,actor_uid,actor_role,created_at FROM document_review_history WHERE tenant_id=? AND document_id=? ORDER BY created_at', [req.user?.tenantId, req.params.docId]),
+  ]);
+  res.json({ runs: runs.rows, fieldHistory: changes.rows, reviewHistory: reviews.rows });
+}));
+
+// Worker callback is authenticated independently from user sessions and accepts only worker-produced results.
+app.post('/internal/ocr/jobs/complete', asyncRoute(async (req, res) => {
+  const expected = process.env.OCR_WORKER_TOKEN || '';
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!expected || supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return res.status(401).json({ error: 'Worker authentication failed.' });
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const payloadSchema = z.object({ jobId:z.string().uuid(), text:z.string().max(20_000_000), tokens:z.array(z.any()).max(100_000), rawProviderResponse:z.string().max(1_000_000).optional(), pageCount:z.number().int().nonnegative(), providerVersion:z.string().max(120).optional() });
+  const parsed = payloadSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error:'Invalid OCR result payload.' });
+  const jobResult = await pool.query(`SELECT j.*,d.original_filename,d.mime_type FROM document_processing_jobs j JOIN documents d ON d.id=j.document_id AND d.tenant_id=j.tenant_id WHERE j.id=?`, [parsed.data.jobId]);
+  if (!jobResult.rowCount || jobResult.rows[0].status !== 'processing') return res.status(409).json({ error:'OCR job is missing or no longer processing.' });
+  const job = jobResult.rows[0];
+  const extracted = extractDocument({ text: parsed.data.text, tokens: parsed.data.tokens }, { documentId:job.document_id, filename:job.original_filename, mimeType:job.mime_type });
+  const runId = crypto.randomUUID();
+  await pool.query(`INSERT INTO document_extraction_runs (id,tenant_id,property_id,document_id,job_id,provider,provider_version,page_count,raw_ocr_text,raw_ocr_tokens,raw_provider_response,extracted_fields,created_by_uid) VALUES (?,?,?,?,?,'google_document_ai',?,?,?,?,?,?,?)`, [runId,job.tenant_id,job.property_id,job.document_id,job.id,parsed.data.providerVersion || null,parsed.data.pageCount,parsed.data.text,JSON.stringify(parsed.data.tokens),parsed.data.rawProviderResponse || null,JSON.stringify(extracted),job.requested_by_uid]);
+  await pool.query(`UPDATE documents SET extracted_text=?,extracted_fields=?,processing_status='manual_review',manual_review_status='required',review_status='pending',approved_by_uid=NULL,approved_at=NULL WHERE id=? AND tenant_id=?`, [parsed.data.text,JSON.stringify(extracted),job.document_id,job.tenant_id]);
+  const estimatedCost=Math.max(0,Number(process.env.DOCUMENT_AI_ESTIMATED_COST_PER_PAGE_USD||0))*parsed.data.pageCount;
+  await pool.query(`UPDATE document_processing_jobs SET status='completed',progress=100,pages_processed=?,estimated_cost_usd=?,completed_at=NOW(6),updated_at=NOW(6) WHERE id=?`, [parsed.data.pageCount,estimatedCost,job.id]);
+  await audit(job.requested_by_uid,job.tenant_id,'document.ocr_completed','document',job.document_id,{jobId:job.id,runId,pageCount:parsed.data.pageCount,overallConfidence:extracted.overallConfidence});
+  res.json({ success:true, runId });
+}));
+
+app.post('/internal/ocr/jobs/fail', asyncRoute(async (req,res)=>{
+  const expected=process.env.OCR_WORKER_TOKEN||'';const supplied=String(req.headers.authorization||'').replace(/^Bearer\s+/i,'');
+  if(!expected||supplied.length!==expected.length||!crypto.timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)))return res.status(401).json({error:'Worker authentication failed.'});
+  if(!pool)return res.status(503).json({error:'Database not configured.'});
+  const input=z.object({jobId:z.string().uuid(),errorCode:z.string().trim().min(1).max(80),errorMessage:z.string().trim().min(1).max(1000)}).safeParse(req.body);
+  if(!input.success)return res.status(400).json({error:'Invalid worker failure payload.'});
+  const job=await pool.query('SELECT * FROM document_processing_jobs WHERE id=?',[input.data.jobId]);
+  if(!job.rowCount||job.rows[0].status!=='processing')return res.status(409).json({error:'OCR job is missing or no longer processing.'});
+  const status=Number(job.rows[0].attempts)<Number(job.rows[0].max_attempts)?'retry_wait':'failed';
+  await pool.query('UPDATE document_processing_jobs SET status=?,progress=0,error_code=?,error_message=?,updated_at=NOW(6) WHERE id=?',[status,input.data.errorCode,input.data.errorMessage,input.data.jobId]);
+  await pool.query("UPDATE documents SET processing_status='failed' WHERE id=? AND tenant_id=?",[job.rows[0].document_id,job.rows[0].tenant_id]);
+  await audit('document-ai-worker',job.rows[0].tenant_id,'document.ocr_failed','document',job.rows[0].document_id,{jobId:input.data.jobId,status,errorCode:input.data.errorCode});
+  res.json({success:true,status});
 }));
 
 app.get('/api/properties/:id/documents/:docId/file', authGuard, asyncRoute(async (req, res) => {
@@ -1986,6 +2104,10 @@ app.get('/api/properties/:id/documents/:docId/file', authGuard, asyncRoute(async
   );
   if (!docResult.rowCount) return res.status(404).json({ error: 'Document not found.' });
   const doc = docResult.rows[0];
+  if (['consultant','viewer'].includes(req.user?.role || '')) {
+    const released = await pool.query("SELECT status FROM properties WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);
+    if (!released.rowCount || !['approved','complete'].includes(String(released.rows[0].status)) || doc.review_status !== 'approved') return res.status(404).json({error:'Approved evidence not found.'});
+  } else if (['data_steward','support'].includes(req.user?.role || '')) return res.status(403).json({error:'This role cannot access confidential document files.'});
 
   if (String(doc.storage_key).startsWith('supabase:')) {
     const signedUrl = await documentStorage.createSignedUrl(String(doc.storage_key), 60);
@@ -2017,10 +2139,14 @@ app.get('/api/properties/:id/documents/:docId/file', authGuard, asyncRoute(async
 app.post('/api/properties/:id/documents/:docId/signed-url', authGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const docResult = await pool.query(
-    'SELECT id, storage_key FROM documents WHERE id=? AND property_id=? AND tenant_id=?',
+    'SELECT id, storage_key,review_status FROM documents WHERE id=? AND property_id=? AND tenant_id=?',
     [req.params.docId, req.params.id, req.user?.tenantId]
   );
   if (!docResult.rowCount) return res.status(404).json({ error: 'Document not found.' });
+  if (['consultant','viewer'].includes(req.user?.role || '')) {
+    const released = await pool.query("SELECT status FROM properties WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);
+    if (!released.rowCount || !['approved','complete'].includes(String(released.rows[0].status)) || docResult.rows[0].review_status !== 'approved') return res.status(404).json({error:'Approved evidence not found.'});
+  } else if (['data_steward','support'].includes(req.user?.role || '')) return res.status(403).json({error:'This role cannot access confidential document files.'});
 
   const configuredTtl = Number(process.env.SIGNED_URL_TTL_SECONDS || 300);
   const requestedTtl = Number(req.body?.expiresInSeconds || configuredTtl);
@@ -2046,96 +2172,20 @@ app.post('/api/properties/:id/documents/:docId/signed-url', authGuard, asyncRout
   res.json({ url, expiresInSeconds, expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(), provider: 'supabase' });
 }));
 
-app.post('/api/properties/:id/documents/:docId/extract', authGuard, writeGuard, asyncRoute(async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const docResult = await pool.query(
-    'SELECT * FROM documents WHERE id=? AND property_id=? AND tenant_id=?',
-    [req.params.docId, req.params.id, req.user?.tenantId]
-  );
-  if (!docResult.rowCount) return res.status(404).json({ error: 'Document not found.' });
-  const doc = docResult.rows[0];
-
-  if (String(doc.storage_key).startsWith('supabase:') && !usableExtractedText(req.body?.text) && !req.body?.jsonPayload && !req.body?.tokens) {
-    return res.status(409).json({
-      error: 'Cloud document OCR requires the background-worker adapter. Supply extracted text/provider output or use local storage in the sandbox.',
-      code: 'CLOUD_OCR_WORKER_NOT_CONFIGURED',
-    });
-  }
-
-  const { safePath, isTraversal } = resolveSafeUploadPath(doc.storage_key);
-  if (isTraversal || !safePath) {
-    return res.status(403).json({ error: 'Access denied: invalid file path traversal.' });
-  }
-
-  let suppliedText = usableExtractedText(req.body?.text) || usableExtractedText(doc.extracted_text);
-  const hasProviderPayload = req.body?.jsonPayload && typeof req.body.jsonPayload === 'object';
-  const hasOcrTokens = Array.isArray(req.body?.tokens) && req.body.tokens.length > 0;
-  if (!suppliedText && !hasProviderPayload && !hasOcrTokens) {
-    if (!fs.existsSync(safePath)) return res.status(404).json({ error: 'Document file not found on disk.' });
-    try {
-      const ocr = await runLocalOcr(safePath, doc.mime_type || 'application/octet-stream');
-      suppliedText = ocr.text;
-    } catch (error) {
-      console.error('Local OCR failed:', error);
-      return res.status(422).json({
-        error: error instanceof Error ? error.message : 'Automatic OCR could not read this document.',
-        code: 'OCR_FAILED',
-      });
-    }
-  }
-
-  const extractionInput: ExtractionInput = {
-    text: suppliedText || undefined,
-    tokens: req.body?.tokens || undefined,
-    jsonPayload: req.body?.jsonPayload || undefined,
-  };
-
-  const extracted = extractDocument(extractionInput, {
-    documentId: doc.id,
-    filename: doc.original_filename,
-    mimeType: doc.mime_type,
-  });
-
-  const processingStatus = extracted.overallConfidence >= 0.60 ? 'completed' : 'manual_review';
-  const extractedText = extractionInput.text || '';
-
-  await pool.query(
-    `UPDATE documents
-     SET doc_type = ?,
-         extracted_fields = ?,
-         extracted_text = COALESCE(NULLIF(?, ''), extracted_text),
-         processing_status = ?,
-         manual_review_status = ?
-     WHERE id = ? AND property_id = ? AND tenant_id = ?`,
-    [
-      extracted.documentType,
-      JSON.stringify(extracted),
-      extractedText,
-      processingStatus,
-      processingStatus === 'completed' ? 'not_required' : 'required',
-      doc.id,
-      req.params.id,
-      req.user?.tenantId,
-    ]
-  );
-
-  const updateResult = await pool.query(
-    `SELECT id, property_id, original_filename, mime_type, size_bytes,
-            sha256, doc_type, processing_status, extracted_fields, created_at
-     FROM documents
-     WHERE id=? AND property_id=? AND tenant_id=?`,
-    [doc.id, req.params.id, req.user?.tenantId]
-  );
-
-  await audit(req.user?.uid || 'unknown', req.user?.tenantId, 'document.extracted', 'document', doc.id, {
-    docType: extracted.documentType,
-    overallConfidence: extracted.overallConfidence,
-  });
-
-  res.json({
-    document: updateResult.rows[0],
-    extractedFields: extracted,
-  });
+app.post('/api/properties/:id/documents/:docId/extract', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error:'Database not configured.' });
+  const doc=await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[req.params.docId,req.params.id,req.user?.tenantId]);
+  if(!doc.rowCount)return res.status(404).json({error:'Document not found.'});
+  const configured=await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[req.user?.tenantId]);
+  if(!configured.rowCount)return res.status(409).json({error:'Google Document AI is not configured for this workspace.',code:'DOCUMENT_AI_NOT_CONFIGURED'});
+  if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker authentication is not configured on the server.',code:'OCR_WORKER_NOT_CONFIGURED'});
+  const active=await pool.query("SELECT id FROM document_processing_jobs WHERE tenant_id=? AND document_id=? AND status IN ('queued','processing') LIMIT 1",[req.user?.tenantId,req.params.docId]);
+  if(active.rowCount)return res.status(202).json({jobId:active.rows[0].id,status:'already_queued'});
+  const jobId=crypto.randomUUID();
+  await pool.query("INSERT INTO document_processing_jobs (id,tenant_id,property_id,document_id,requested_by_uid,status) VALUES (?,?,?,?,?,'queued')",[jobId,req.user?.tenantId,req.params.id,req.params.docId,req.user?.uid||'unknown']);
+  await pool.query("UPDATE documents SET processing_status='queued',review_status='pending' WHERE id=? AND tenant_id=?",[req.params.docId,req.user?.tenantId]);
+  await audit(req.user?.uid||'unknown',req.user?.tenantId,'document.ocr_queued','document',req.params.docId,{jobId});
+  res.status(202).json({jobId,status:'queued'});
 }));
 
 function documentVerificationIssues(fields: ExtractedDocumentFields): string[] {
@@ -2161,7 +2211,9 @@ function documentVerificationIssues(fields: ExtractedDocumentFields): string[] {
 }
 
 function propertyDocumentIdentityIssues(fields: ExtractedDocumentFields, property: any): string[] {
-  const clean = (value: unknown) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Preserve Unicode letters so Kannada schedule values are compared as
+  // evidence instead of being stripped to empty and treated as a match.
+  const clean = (value: unknown) => String(value || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
   const missing = (value: unknown) => !value || ['notrecorded','notspecified','none','unknown'].includes(clean(value));
   const issues: string[] = [];
   const documentSurvey = clean(fields.propertySchedule?.surveyNumber);
@@ -2178,10 +2230,14 @@ function propertyDocumentIdentityIssues(fields: ExtractedDocumentFields, propert
   if (!missing(fields.propertySchedule?.village) && expectedVillage && documentVillage !== expectedVillage) {
     issues.push(`Village does not match application village ${property.village}.`);
   }
-  if (missing(fields.propertySchedule?.surveyNumber) && missing(fields.propertySchedule?.village)) {
-    issues.push('Survey/Hissa and village are missing, so the document cannot be linked confidently to this application.');
-  }
+  if (missing(fields.propertySchedule?.surveyNumber)) issues.push('Survey number is missing; property identity cannot be confirmed.');
+  if (missing(fields.propertySchedule?.village)) issues.push('Village is missing; property identity cannot be confirmed.');
   return issues;
+}
+
+function propertyDocumentIdentityMatches(fields: ExtractedDocumentFields, property: any): boolean {
+  return propertyDocumentIdentityIssues(fields, property).length === 0 &&
+    Boolean(fields.propertySchedule?.surveyNumber && fields.propertySchedule?.village);
 }
 
 app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, asyncRoute(async (req, res) => {
@@ -2191,6 +2247,7 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
     [req.params.docId, req.params.id, req.user?.tenantId]
   );
   if (!docResult.rowCount) return res.status(404).json({ error: 'Document not found.' });
+  if (!req.user || !ocrAccess.canCorrect(req.user.role as OcrRole)) return res.status(403).json({ error:'OCR field correction permission is required.' });
   const doc = docResult.rows[0];
 
   let currentFields: ExtractedDocumentFields =
@@ -2236,6 +2293,7 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
   if (fieldPath) {
     const previousValue = getNestedValue(currentFields, fieldPath);
     setNestedValue(currentFields, fieldPath, newValue);
+    await pool.query(`INSERT INTO document_field_history (id,tenant_id,property_id,document_id,field_path,previous_value,new_value,action,rationale,actor_uid,actor_role) VALUES (?,?,?,?,?,?,?,'corrected',?,?,?)`, [crypto.randomUUID(),doc.tenant_id,req.params.id,doc.id,fieldPath,JSON.stringify(previousValue ?? null),JSON.stringify(newValue ?? null),String(rationale).trim(),req.user?.uid || 'unknown',req.user?.role || 'unknown']);
     currentFields.reviewState.overrides[fieldPath] = {
       previousValue,
       newValue,
@@ -2247,9 +2305,11 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
 
   if (overrides && typeof overrides === 'object') {
     for (const [key, ov] of Object.entries(overrides as Record<string, any>)) {
-      const prev = ov.previousValue !== undefined ? ov.previousValue : getNestedValue(currentFields, key);
+      // Always derive the old value from the server snapshot so the audit log cannot be client-forged.
+      const prev = getNestedValue(currentFields, key);
       const next = ov.newValue;
       setNestedValue(currentFields, key, next);
+      await pool.query(`INSERT INTO document_field_history (id,tenant_id,property_id,document_id,field_path,previous_value,new_value,action,rationale,actor_uid,actor_role) VALUES (?,?,?,?,?,?,?,'corrected',?,?,?)`, [crypto.randomUUID(),doc.tenant_id,req.params.id,doc.id,key,JSON.stringify(prev ?? null),JSON.stringify(next ?? null),String(ov.rationale || rationale).trim(),req.user?.uid || 'unknown',req.user?.role || 'unknown']);
       currentFields.reviewState.overrides[key] = {
         previousValue: prev,
         newValue: next,
@@ -2261,6 +2321,7 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
   }
 
   if (req.body?.isVerified !== undefined) {
+    if (Boolean(req.body.isVerified)) return res.status(409).json({error:'Evidence approval must use the reviewer submission workflow.',code:'USE_DOCUMENT_REVIEW_WORKFLOW'});
     if (Boolean(req.body.isVerified) && !['owner', 'lawyer'].includes(req.user?.role || '')) {
       return res.status(403).json({ error: 'Only the Owner or Lead Advocate can verify document evidence.', requiredRoles: ['owner', 'lawyer'], currentRole: req.user?.role || 'viewer' });
     }
@@ -2313,6 +2374,52 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
     document: updateResult.rows[0],
     extractedFields: currentFields,
   });
+}));
+
+app.post('/api/properties/:id/documents/:docId/submit-review', authGuard, asyncRoute(async (req,res) => {
+  if (!pool) return res.status(503).json({error:'Database not configured.'});
+  if (!req.user || !ocrAccess.canSubmit(req.user.role as OcrRole)) return res.status(403).json({error:'Analyst submission permission is required.'});
+  const doc = await pool.query('SELECT * FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[req.params.docId,req.params.id,req.user?.tenantId]);
+  if (!doc.rowCount) return res.status(404).json({error:'Document not found.'});
+  if (!doc.rows[0].extracted_text) return res.status(409).json({error:'OCR extraction must finish before review submission.'});
+  const fields = doc.rows[0].extracted_fields || {};
+  const property = await pool.query('SELECT survey_number,subdivision,village,district FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);
+  const identityIssues = property.rowCount ? propertyDocumentIdentityIssues(fields,property.rows[0]) : ['Property case was not found.'];
+  const identityMatches = property.rowCount ? propertyDocumentIdentityMatches(fields,property.rows[0]) : false;
+  if (!identityMatches) {
+    await audit(req.user?.uid||'unknown',req.user?.tenantId,'document.property_association_blocked','document',req.params.docId,{propertyId:req.params.id,identityIssues});
+    return res.status(409).json({error:'Document identity does not match the current property case. Automatic property association is blocked; analyst review is required.',code:'PROPERTY_IDENTITY_MISMATCH',issues:identityIssues});
+  }
+  await pool.query("UPDATE documents SET review_status='submitted' WHERE id=? AND tenant_id=?",[req.params.docId,req.user?.tenantId]);
+  await pool.query(`INSERT INTO document_review_history (id,tenant_id,property_id,document_id,from_status,to_status,decision,rationale,actor_uid,actor_role) VALUES (?,?,?,?,?,'submitted','submit',?,?,?)`,[crypto.randomUUID(),req.user?.tenantId,req.params.id,req.params.docId,doc.rows[0].review_status || 'pending',String(req.body?.comment || 'Submitted for reviewer approval.').slice(0,4000),req.user?.uid || 'unknown',req.user?.role || 'unknown']);
+  await audit(req.user?.uid || 'unknown',req.user?.tenantId,'document.submitted_for_review','document',req.params.docId,{overallConfidence:fields.overallConfidence || 0});
+  res.json({success:true,reviewStatus:'submitted'});
+}));
+
+app.post('/api/properties/:id/documents/:docId/review', authGuard, legalReviewerGuard, asyncRoute(async (req,res) => {
+  if (!pool) return res.status(503).json({error:'Database not configured.'});
+  if(!req.user || !ocrAccess.canDecide(req.user.role as OcrRole))return res.status(403).json({error:'Only the assigned Lead Advocate may approve or reject OCR evidence.',requiredRoles:['lawyer']});
+  const input = z.object({decision:z.enum(['approve','reject','dispute']),rationale:z.string().trim().min(3).max(4000)}).safeParse(req.body);
+  if (!input.success) return res.status(400).json({error:'A valid decision and review reason are required.'});
+  const doc = await pool.query('SELECT * FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[req.params.docId,req.params.id,req.user?.tenantId]);
+  if (!doc.rowCount) return res.status(404).json({error:'Document not found.'});
+  const fromStatus = String(doc.rows[0].review_status || 'pending');
+  if (fromStatus !== 'submitted') return res.status(409).json({error:'Only analyst-submitted evidence can be reviewed.'});
+  const fields = doc.rows[0].extracted_fields || {};
+  const decision = input.data.decision;
+  if (decision === 'approve') {
+    const issues = documentVerificationIssues(fields);
+    const property = await pool.query('SELECT survey_number,subdivision,village,district FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);
+    const identityIssues = property.rowCount ? propertyDocumentIdentityIssues(fields,property.rows[0]) : ['Property was not found.'];
+    const identityMatches = property.rowCount ? propertyDocumentIdentityMatches(fields,property.rows[0]) : false;
+    if (issues.length || !identityMatches) return res.status(409).json({error:'Evidence cannot be approved until required fields and property identity are resolved.',issues:[...issues,...identityIssues]});
+  }
+  const nextStatus = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'disputed';
+  fields.reviewState = {...(fields.reviewState || {}),isVerified:decision === 'approve',verifiedByUid:decision === 'approve' ? req.user?.uid : undefined,verifiedAt:decision === 'approve' ? new Date().toISOString() : undefined};
+  await pool.query(`UPDATE documents SET review_status=?,approved_by_uid=?,approved_at=?,extracted_fields=?,processing_status=?,manual_review_status=? WHERE id=? AND tenant_id=?`,[nextStatus,decision==='approve' ? req.user?.uid : null,decision==='approve' ? new Date() : null,JSON.stringify(fields),decision==='approve'?'completed':'manual_review',decision==='approve'?'completed':'required',req.params.docId,req.user?.tenantId]);
+  await pool.query(`INSERT INTO document_review_history (id,tenant_id,property_id,document_id,from_status,to_status,decision,rationale,actor_uid,actor_role) VALUES (?,?,?,?,?,?,?,?,?,?)`,[crypto.randomUUID(),req.user?.tenantId,req.params.id,req.params.docId,fromStatus,nextStatus,decision,input.data.rationale,req.user?.uid || 'unknown',req.user?.role || 'unknown']);
+  await audit(req.user?.uid || 'unknown',req.user?.tenantId,`document.${nextStatus}`,'document',req.params.docId,{fromStatus,toStatus:nextStatus,rationale:input.data.rationale});
+  res.json({success:true,reviewStatus:nextStatus});
 }));
 
 const titleEventSchema = z.object({
@@ -2760,8 +2867,13 @@ app.get('/api/properties/:id/report', authGuard, asyncRoute(async (req, res) => 
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
-  const docs = await pool.query('SELECT id, original_filename, mime_type, size_bytes, sha256, processing_status, extracted_fields, created_at FROM documents WHERE property_id=? AND tenant_id=? ORDER BY created_at', [req.params.id, req.user?.tenantId]);
-  const findings = await pool.query('SELECT code, title, severity, points, explanation, evidence_status, next_action, created_at FROM risk_findings WHERE property_id=? AND tenant_id=? ORDER BY created_at', [req.params.id, req.user?.tenantId]);
+  if (['consultant','viewer'].includes(req.user?.role || '') && !['approved','complete'].includes(String(p.rows[0].status))) return res.status(404).json({error:'Approved report not found.'});
+  const docs = ['consultant','viewer'].includes(req.user?.role || '')
+    ? await pool.query("SELECT id, original_filename, mime_type, size_bytes, sha256, processing_status, extracted_fields, created_at FROM documents WHERE property_id=? AND tenant_id=? AND review_status='approved' ORDER BY created_at", [req.params.id, req.user?.tenantId])
+    : await pool.query('SELECT id, original_filename, mime_type, size_bytes, sha256, processing_status, extracted_fields, created_at FROM documents WHERE property_id=? AND tenant_id=? ORDER BY created_at', [req.params.id, req.user?.tenantId]);
+  const findings = ['consultant','viewer'].includes(req.user?.role || '')
+    ? await pool.query("SELECT code, title, severity, points, explanation, evidence_status, next_action, created_at FROM risk_findings WHERE property_id=? AND tenant_id=? AND evidence_status='verified' ORDER BY created_at", [req.params.id, req.user?.tenantId])
+    : await pool.query('SELECT code, title, severity, points, explanation, evidence_status, next_action, created_at FROM risk_findings WHERE property_id=? AND tenant_id=? ORDER BY created_at', [req.params.id, req.user?.tenantId]);
   const body = { reportVersion: '0.1', generatedAt: new Date().toISOString(), generatedAtTimezone: 'UTC', property: p.rows[0], documents: docs.rows.map((document:any) => ({ ...document, evidenceUrl: `/api/properties/${encodeURIComponent(req.params.id)}/documents/${encodeURIComponent(document.id)}/file` })), findings: findings.rows, reviewNotice: 'This report is an evidence-organising aid and is not a legal opinion, ownership certificate, encumbrance certificate, or government verification. Confirm findings against current official records and qualified professional advice.', dataLimitations: ['Government integrations are not enabled.', 'Uploaded documents require human review unless a configured OCR provider result is recorded.', 'Spatial conclusions require active permitted datasets and are unknown when none are available.'] };
   res.setHeader('Content-Disposition', `attachment; filename="ojix-property-report-${p.rows[0].id}.json"`);
   res.type('application/json').send(JSON.stringify(body, null, 2));
@@ -2778,10 +2890,9 @@ app.get('/api/properties/:id/discrepancies', authGuard, asyncRoute(async (req, r
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
 
-  const docs = await pool.query(
-    'SELECT id, original_filename, doc_type, extracted_fields FROM documents WHERE property_id=? AND tenant_id=?',
-    [req.params.id, req.user?.tenantId]
-  );
+  const docs = ['consultant','viewer'].includes(req.user?.role || '')
+    ? await pool.query("SELECT id, original_filename, doc_type, extracted_fields FROM documents WHERE property_id=? AND tenant_id=? AND review_status='approved'",[req.params.id,req.user?.tenantId])
+    : await pool.query('SELECT id, original_filename, doc_type, extracted_fields FROM documents WHERE property_id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);
 
   const docItems = docs.rows.map(r => ({
     id: r.id,
@@ -2859,9 +2970,14 @@ app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(a
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
+  if (['consultant','viewer'].includes(req.user?.role || '') && !['approved','complete'].includes(String(p.rows[0].status))) return res.status(404).json({error:'Approved report not found.'});
 
-  const docs = await pool.query('SELECT * FROM documents WHERE property_id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
-  const eventsResult = await pool.query('SELECT * FROM title_events WHERE property_id=? AND tenant_id=? ORDER BY event_date ASC', [req.params.id, req.user?.tenantId]);
+  const docs = ['consultant','viewer'].includes(req.user?.role || '')
+    ? await pool.query("SELECT * FROM documents WHERE property_id=? AND tenant_id=? AND review_status='approved'", [req.params.id, req.user?.tenantId])
+    : await pool.query('SELECT * FROM documents WHERE property_id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
+  const eventsResult = ['consultant','viewer'].includes(req.user?.role || '')
+    ? await pool.query("SELECT * FROM title_events WHERE property_id=? AND tenant_id=? AND status='verified' ORDER BY event_date ASC",[req.params.id,req.user?.tenantId])
+    : await pool.query('SELECT * FROM title_events WHERE property_id=? AND tenant_id=? ORDER BY event_date ASC',[req.params.id,req.user?.tenantId]);
   const titleTimeline: TitleEvent[] = eventsResult.rows.map((row: any) => ({
     id: row.id,
     propertyId: row.property_id,
@@ -3187,9 +3303,9 @@ app.get('/api/documents/all', authGuard, asyncRoute(async (req, res) => {
             p.name as property_name,p.application_number,p.survey_number,p.village,p.district
      FROM documents d
      JOIN properties p ON d.property_id=p.id
-     WHERE d.tenant_id=? AND (? <> 'lawyer' OR p.assigned_lawyer_uid=?) AND (? <> 'analyst' OR p.assigned_analyst_uid=?) AND (? <> 'operations' OR p.assigned_operations_uid=? OR p.assigned_operations_uid IS NULL OR p.assigned_operations_uid='')
+     WHERE d.tenant_id=? AND (? <> 'lawyer' OR p.assigned_lawyer_uid=?) AND (? <> 'analyst' OR p.assigned_analyst_uid=?) AND (? <> 'operations' OR p.assigned_operations_uid=? OR p.assigned_operations_uid IS NULL OR p.assigned_operations_uid='') AND (? NOT IN ('consultant','viewer') OR (d.review_status='approved' AND p.status IN ('approved','complete')))
      ORDER BY d.created_at DESC LIMIT 200`,
-    [req.user?.tenantId,req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'']
+    [req.user?.tenantId,req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer']
   );
   res.json({ items: result.rows, count: result.rows.length });
 }));
@@ -3200,9 +3316,9 @@ app.get('/api/findings/all', authGuard, asyncRoute(async (req, res) => {
     `SELECT f.*, p.name as property_name, p.survey_number, p.village, p.district
      FROM risk_findings f
      JOIN properties p ON f.property_id=p.id
-     WHERE f.tenant_id=? AND (? <> 'lawyer' OR p.assigned_lawyer_uid=?) AND (? <> 'analyst' OR p.assigned_analyst_uid=?) AND (? <> 'operations' OR p.assigned_operations_uid=?)
+     WHERE f.tenant_id=? AND (? <> 'lawyer' OR p.assigned_lawyer_uid=?) AND (? <> 'analyst' OR p.assigned_analyst_uid=?) AND (? <> 'operations' OR p.assigned_operations_uid=?) AND (? NOT IN ('consultant','viewer') OR f.evidence_status='verified')
      ORDER BY f.created_at DESC LIMIT 200`,
-    [req.user?.tenantId,req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'']
+    [req.user?.tenantId,req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer']
   );
   const severityCounts = { critical: 0, high: 0, medium: 0, low: 0, unverified: 0 };
   for (const r of result.rows) {
@@ -3212,7 +3328,7 @@ app.get('/api/findings/all', authGuard, asyncRoute(async (req, res) => {
 }));
 
 const ADMIN_ROLES=['admin','lawyer','analyst','operations','consultant','support','data_steward','viewer'] as const;
-const ROLE_PERMISSIONS:Record<string,string[]>={owner:['workspace_admin','member_admin','property_edit','document_intake','document_review','legal_review','source_governance','audit_read','retention_admin'],admin:['workspace_admin','member_admin','property_edit','document_intake','document_review','source_governance','audit_read','retention_admin'],lawyer:['property_edit','document_intake','document_review','legal_review'],analyst:['property_edit','document_intake','document_review'],operations:['document_intake'],consultant:['property_read','document_read'],support:['diagnostics_read'],data_steward:['source_governance','property_read','document_read'],viewer:['property_read']};
+const ROLE_PERMISSIONS:Record<string,string[]>={owner:['workspace_admin','member_admin','property_edit','document_intake','ocr_correct','ocr_submit','legal_review','source_governance','audit_read','retention_admin'],admin:['workspace_admin','member_admin','property_edit','document_intake','document_ai_config','source_governance','audit_read','retention_admin'],lawyer:['property_read','document_read','document_intake','evidence_approve','legal_review'],analyst:['property_edit','document_read','document_intake','ocr_correct','ocr_submit'],operations:['document_intake','ocr_job_retry'],consultant:['property_read','approved_document_read','approved_report_export'],support:['diagnostics_read','scoped_ocr_retry'],data_steward:['source_governance','ocr_mapping_admin'],viewer:['property_read','approved_evidence_read','approved_report_read']};
 const reasonSchema=z.object({reason:z.string().trim().min(3).max(500)});
 const pageSchema=z.object({page:z.coerce.number().int().min(1).default(1),limit:z.coerce.number().int().min(1).max(100).default(25),search:z.string().trim().max(120).optional().default('')});
 
@@ -3416,7 +3532,16 @@ app.patch('/api/admin/documents/:id/manual-review',authGuard,adminGuard,asyncRou
 
 for(const action of ['reject','delete'] as const){const method=action==='delete'?'delete':'post';(app as any)[method](`/api/admin/documents/:id${action==='reject'?'/reject':''}`,authGuard,adminGuard,asyncRoute(async(req:AuthenticatedRequest,res:Response)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A reason is required.'});const status=action==='reject'?'rejected':'quarantined';const result=await pool!.query("UPDATE documents SET governance_status=?,governance_reason=?,governance_by_uid=?,governance_at=NOW(6),manual_review_status='required' WHERE id=? AND tenant_id=?",[status,parsed.data.reason,req.user?.uid,req.params.id,req.user?.tenantId]);if(!result.rowCount)return res.status(404).json({error:'Document not found.'});await audit(req.user?.uid||'unknown',req.user?.tenantId,`admin.document_${status}`,'document',req.params.id,{reason:parsed.data.reason,softDelete:true});res.json({success:true,softDelete:true});}));}
 
-app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}const emailConfigured=Boolean(process.env.SMTP_USER?.trim()&&process.env.SMTP_PASS?.trim()&&(process.env.SMTP_HOST?.trim()||process.env.SMTP_USER?.trim().endsWith('@gmail.com')));res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:documentStorage.provider==='supabase'?'supabase_private':'local_development',testSupported:false,detail:documentStorage.provider==='supabase'?'Private Supabase Storage with server-created expiring links.':'Local sandbox storage; configure Supabase for private cloud objects and expiring links.'},{id:'ocr',label:'OCR and extraction',state:'configured',testSupported:false,detail:'Local Tesseract OCR with Kannada and English language models.'},{id:'email',label:'OTP email delivery',state:emailConfigured?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false}]});}));
+app.get('/api/admin/document-ai/config',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT project_id,location,processor_id,processor_version,language_hints,updated_by_uid,updated_at FROM document_ai_config WHERE tenant_id=?',[req.user?.tenantId]);res.json({configured:Boolean(result.rowCount),config:result.rows[0]||null,credentials:'server_side_only'});}));
+app.put('/api/admin/document-ai/config',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({projectId:z.string().trim().min(1).max(255),location:z.string().trim().min(1).max(80),processorId:z.string().trim().min(1).max(255),processorVersion:z.string().trim().max(255).optional(),languageHints:z.array(z.string().trim().min(2).max(12)).max(10).optional()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Valid Google Document AI processor settings are required.'});const c=parsed.data;await pool!.query(`INSERT INTO document_ai_config (tenant_id,project_id,location,processor_id,processor_version,language_hints,updated_by_uid) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE project_id=VALUES(project_id),location=VALUES(location),processor_id=VALUES(processor_id),processor_version=VALUES(processor_version),language_hints=VALUES(language_hints),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,c.projectId,c.location,c.processorId,c.processorVersion||null,JSON.stringify(c.languageHints||[]),req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.document_ai_configured','integration','google_document_ai',{projectId:c.projectId,location:c.location,processorId:c.processorId});res.json({success:true,credentials:'server_side_only'});}));
+app.get('/api/admin/document-ai/metrics',authGuard,adminGuard,asyncRoute(async(req,res)=>{const [stats,failures]=await Promise.all([pool!.query(`SELECT status,COUNT(*) jobs,COALESCE(SUM(pages_processed),0) pages,COALESCE(SUM(estimated_cost_usd),0) estimated_cost_usd FROM document_processing_jobs WHERE tenant_id=? AND created_at>=DATE_SUB(NOW(),INTERVAL 30 DAY) GROUP BY status`,[req.user?.tenantId]),pool!.query(`SELECT id,document_id,status,attempts,error_code,error_message,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND status IN ('failed','retry_wait') ORDER BY updated_at DESC LIMIT 100`,[req.user?.tenantId])]);res.json({windowDays:30,estimatedCostPerPageUsd:Number(process.env.DOCUMENT_AI_ESTIMATED_COST_PER_PAGE_USD||0),stats:stats.rows,failures:failures.rows});}));
+app.get('/api/ocr/mappings',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT source_field,canonical_field,normalization_rule,active,updated_by_uid,updated_at FROM ocr_field_mappings WHERE tenant_id=? ORDER BY source_field',[req.user?.tenantId]);res.json({items:result.rows});}));
+app.get('/api/ocr/document-types',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT source_category,canonical_doc_type,active,updated_by_uid,updated_at FROM ocr_document_type_mappings WHERE tenant_id=? ORDER BY source_category',[req.user?.tenantId]);res.json({items:result.rows});}));
+app.put('/api/ocr/document-types/:sourceCategory',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const canonicalTypes=['sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney','encumbrance_certificate','rtc_pahani','mutation_record','survey_sketch_tippan','khata_e_khata','property_tax_receipt','layout_approval_conversion_order','master_plan_zoning_document','court_order_legal_notice','other','e_khata','mutation_extract','survey_sketch','tax_receipt','conversion_order','layout_approval','court_order'];const parsed=z.object({canonicalDocType:z.enum(canonicalTypes as [string,...string[]]),active:z.boolean()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid canonical document category.'});await pool!.query(`INSERT INTO ocr_document_type_mappings (tenant_id,source_category,canonical_doc_type,active,updated_by_uid) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE canonical_doc_type=VALUES(canonical_doc_type),active=VALUES(active),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,req.params.sourceCategory,parsed.data.canonicalDocType,parsed.data.active,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'data_steward.document_type_mapping_updated','ocr_document_type_mapping',req.params.sourceCategory,parsed.data);res.json({success:true});}));
+app.put('/api/ocr/mappings/:sourceField',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const parsed=z.object({canonicalField:z.string().trim().min(1).max(255),normalizationRule:z.enum(['trim','uppercase','lowercase','digits_only','survey_number','extent','date']),active:z.boolean()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid field mapping.'});await pool!.query(`INSERT INTO ocr_field_mappings (tenant_id,source_field,canonical_field,normalization_rule,active,updated_by_uid) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE canonical_field=VALUES(canonical_field),normalization_rule=VALUES(normalization_rule),active=VALUES(active),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,req.params.sourceField,parsed.data.canonicalField,parsed.data.normalizationRule,parsed.data.active,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'data_steward.ocr_mapping_updated','ocr_field_mapping',req.params.sourceField,parsed.data);res.json({success:true});}));
+app.get('/api/support/ocr/jobs',authGuard,asyncRoute(async(req,res)=>{if(req.user?.role!=='support')return res.status(403).json({error:'Scoped OJIX Support role required.'});const rows=await pool!.query(`SELECT id,status,progress,attempts,max_attempts,error_code,started_at,completed_at,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND created_at>=DATE_SUB(NOW(),INTERVAL 24 HOUR) ORDER BY created_at DESC LIMIT 100`,[req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'support.ocr_diagnostics_viewed','ocr_jobs','tenant',{windowHours:24,rowCount:rows.rows.length});res.json({windowHours:24,items:rows.rows});}));
+app.post('/api/support/ocr/jobs/:id/retry',authGuard,asyncRoute(async(req,res)=>{if(req.user?.role!=='support')return res.status(403).json({error:'Scoped OJIX Support role required.'});const job=await pool!.query('SELECT id,status,document_id FROM document_processing_jobs WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!job.rowCount)return res.status(404).json({error:'OCR diagnostic job not found.'});if(!['failed','retry_wait'].includes(String(job.rows[0].status)))return res.status(409).json({error:'Only failed OCR jobs can be retried.'});if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker is not configured.'});await pool!.query("UPDATE document_processing_jobs SET status='queued',progress=0,attempts=0,error_code=NULL,error_message=NULL,started_at=NULL,completed_at=NULL,updated_at=NOW(6) WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);await pool!.query("UPDATE documents SET processing_status='queued' WHERE id=? AND tenant_id=?",[job.rows[0].document_id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'support.ocr_job_retried','ocr_job',req.params.id,{documentId:job.rows[0].document_id});res.status(202).json({success:true,status:'queued'});}));
+app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}const emailConfigured=Boolean(process.env.SMTP_USER?.trim()&&process.env.SMTP_PASS?.trim()&&(process.env.SMTP_HOST?.trim()||process.env.SMTP_USER?.trim().endsWith('@gmail.com')));const ai=await pool!.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[(_req as AuthenticatedRequest).user?.tenantId]);const workerReady=Boolean(process.env.OCR_WORKER_TOKEN);res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:documentStorage.provider==='supabase'?'supabase_private':'local_development',testSupported:false,detail:documentStorage.provider==='supabase'?'Private Supabase Storage with server-created expiring links.':'Local sandbox storage; configure private storage for production.'},{id:'ocr',label:'Google Document AI',state:ai.rowCount&&workerReady?'configured':ai.rowCount?'worker_not_configured':'not_configured',testSupported:false,detail:!ai.rowCount?'Configure project, location, and processor.':!workerReady?'Processor settings are saved, but OCR_WORKER_TOKEN is missing on the server.':'Processor and worker token are configured; Google credentials are resolved by the worker at runtime.'},{id:'email',label:'OTP email delivery',state:emailConfigured?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false}]});}));
 app.post('/api/admin/integrations/:id/test',authGuard,adminGuard,asyncRoute(async(req,res)=>{if(req.params.id!=='mariadb')return res.status(501).json({error:'A live connection test is unsupported for this integration.'});await pool!.query('SELECT 1');await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.integration_tested','integration','mariadb',{result:'connected'});res.json({state:'connected',checkedAt:new Date().toISOString()});}));
 
 app.get('/api/admin/sessions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT s.id,s.user_uid,s.created_at,s.last_activity_at,s.expires_at,s.ip_address,s.user_agent,m.email,m.role FROM authentication_sessions s LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid WHERE s.tenant_id=? AND s.revoked_at IS NULL AND s.expires_at>NOW(6) ORDER BY s.last_activity_at DESC',[req.user?.tenantId]);res.json({items:result.rows});}));
@@ -3534,7 +3659,6 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 let server: any;
 if (process.env.NODE_ENV !== 'test') {
   void (async () => {
-    if (!pool && process.env.NODE_ENV === 'production') throw new Error('DATABASE_URL is required to start the production API.');
     if (pool) {
       const bootstrap = await bootstrapSuperAdmin(pool as unknown as import('./super-admin-bootstrap.js').BootstrapPool);
       if (bootstrap.configured) console.log(`Super Admin bootstrap ready (${bootstrap.created ? 'created' : 'account preserved'}).`);

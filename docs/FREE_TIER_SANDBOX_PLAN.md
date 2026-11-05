@@ -4,7 +4,7 @@ This plan is for synthetic and non-sensitive test data. It is not approval to st
 
 ## Recommended sandbox stack
 
-- **Vercel:** React/Vite web application preview deployments.
+- **Local web app:** React/Vite served by the local Docker stack.
 - **Supabase:** private document bucket and short-lived signed URLs.
 - **Existing MariaDB:** keep the current database locally during the first sandbox phase. Moving this MySQL/MariaDB schema to Neon or Supabase PostgreSQL is a separate migration because the SQL and spatial behavior differ.
 - **Firebase Authentication:** optional next step because the API already verifies Firebase ID tokens.
@@ -25,7 +25,7 @@ This avoids combining two database migrations with the document-storage work. Su
    SIGNED_URL_TTL_SECONDS=300
    ```
 
-4. Never add `SUPABASE_SERVICE_ROLE_KEY` to a `VITE_` variable, browser bundle, committed file, or Vercel frontend environment.
+4. Never add `SUPABASE_SERVICE_ROLE_KEY` to a `VITE_` variable, browser bundle or committed file.
 5. Restart the API. New uploads use tenant/property/document object keys. Existing locally stored documents continue to use their authenticated API route.
 
 The endpoint below returns a link valid for 30–900 seconds for Supabase objects:
@@ -39,10 +39,6 @@ Content-Type: application/json
 
 Every cloud signed-link request is tenant-scoped and recorded in the audit log. Local sandbox files return the existing authenticated API URL instead of pretending to be cryptographically time-limited.
 
-## Vercel boundary
-
-Deploy `apps/web` to Vercel and configure `VITE_API_BASE_URL` with the HTTPS URL of the API. The current stateful Express/MariaDB API and local OCR executable should not be forced into a Vercel function. Host that API separately when the sandbox needs remote access, or keep it local during UI work.
-
 ## Next implementation slices
 
 1. Add a quarantine status and malware-scanner adapter (ClamAV locally; webhook/provider adapter in cloud).
@@ -52,6 +48,6 @@ Deploy `apps/web` to Vercel and configure `VITE_API_BASE_URL` with the HTTPS URL
 5. Add document versions, lawyer approval and signed report snapshots.
 6. Import only licensed GIS datasets with source, date, CRS and verification metadata.
 
-## Deferred production work
+## Before using client data
 
-MFA policy, key management, legal retention, immutable backups, restore drills, official government-data licences, production monitoring, load testing and authorized penetration testing remain production gates.
+MFA policy, key management, legal retention, immutable backups, restore drills, official government-data licences, monitoring, load testing and authorized penetration testing remain future security work.

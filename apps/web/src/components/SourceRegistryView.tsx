@@ -84,6 +84,11 @@ export function SourceRegistryView({
   const [queryActiveTab, setQueryActiveTab] = useState<string>('bhoomi');
   const [copiedHash, setCopiedHash] = useState<boolean>(false);
   const [importingProp, setImportingProp] = useState<boolean>(false);
+  const [ocrMappings, setOcrMappings] = useState<any[]>([]);
+  const [mappingForm, setMappingForm] = useState({sourceField:'',canonicalField:'',normalizationRule:'trim'});
+  const [docTypeMappings,setDocTypeMappings]=useState<any[]>([]);
+  const [docTypeForm,setDocTypeForm]=useState({sourceCategory:'',canonicalDocType:'other'});
+  const [mappingError, setMappingError] = useState('');
 
   useEffect(() => {
     fetchHealth();
@@ -97,6 +102,17 @@ export function SourceRegistryView({
       fetchExistingVerifications(selectedPropertyId);
     }
   }, [selectedPropertyId]);
+
+  useEffect(() => {
+    if (currentUser?.role !== 'data_steward') return;
+    Promise.all([authFetch(`${apiUrl}/api/ocr/mappings`).then(r=>r.json()),authFetch(`${apiUrl}/api/ocr/document-types`).then(r=>r.json())]).then(([fields,types])=>{setOcrMappings(fields.items||[]);setDocTypeMappings(types.items||[]);}).catch(()=>setMappingError('Could not load OCR mappings.'));
+  }, [apiUrl,currentUser?.role]);
+
+  const saveOcrMapping = async (event:React.FormEvent) => {
+    event.preventDefault();setMappingError('');
+    try { const response=await authFetch(`${apiUrl}/api/ocr/mappings/${encodeURIComponent(mappingForm.sourceField)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({canonicalField:mappingForm.canonicalField,normalizationRule:mappingForm.normalizationRule,active:true})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not save mapping.');const refreshed=await authFetch(`${apiUrl}/api/ocr/mappings`);setOcrMappings((await refreshed.json()).items||[]);setMappingForm({sourceField:'',canonicalField:'',normalizationRule:'trim'});}catch(e){setMappingError((e as Error).message);}
+  };
+  const saveDocTypeMapping=async(event:React.FormEvent)=>{event.preventDefault();setMappingError('');try{const response=await authFetch(`${apiUrl}/api/ocr/document-types/${encodeURIComponent(docTypeForm.sourceCategory)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({canonicalDocType:docTypeForm.canonicalDocType,active:true})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not save category mapping.');const refreshed=await authFetch(`${apiUrl}/api/ocr/document-types`);setDocTypeMappings((await refreshed.json()).items||[]);setDocTypeForm({sourceCategory:'',canonicalDocType:'other'});}catch(e){setMappingError((e as Error).message);}};
 
   const fetchHealth = async (probe = false) => {
     setLoading(true);
@@ -263,6 +279,7 @@ export function SourceRegistryView({
 
   return (
     <div className="source-registry-view">
+      {currentUser?.role==='data_steward'&&<section className="panel admin-data-panel"><div className="panel-head"><div><h3>OCR document classification and field mappings</h3><p>Maintain source categories, canonical fields, and deterministic normalization rules.</p></div></div>{mappingError&&<div className="alert alert-warning">{mappingError}</div>}<form className="admin-inline-form" onSubmit={saveDocTypeMapping}><input required placeholder="Source document category" value={docTypeForm.sourceCategory} onChange={e=>setDocTypeForm({...docTypeForm,sourceCategory:e.target.value})}/><select value={docTypeForm.canonicalDocType} onChange={e=>setDocTypeForm({...docTypeForm,canonicalDocType:e.target.value})}>{['sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney','encumbrance_certificate','rtc_pahani','mutation_record','survey_sketch_tippan','khata_e_khata','property_tax_receipt','court_order_legal_notice','other'].map(type=><option key={type} value={type}>{type.replace(/_/g,' ')}</option>)}</select><button className="primary-btn">Save category</button></form><div className="admin-list">{docTypeMappings.map(m=><div key={m.source_category}><FileCheck2/><span><strong>{m.source_category} → {m.canonical_doc_type}</strong><small>{m.active?'active':'inactive'}</small></span></div>)}</div><form className="admin-inline-form" onSubmit={saveOcrMapping}><input required placeholder="Provider/source field" value={mappingForm.sourceField} onChange={e=>setMappingForm({...mappingForm,sourceField:e.target.value})}/><input required placeholder="OJIX canonical field" value={mappingForm.canonicalField} onChange={e=>setMappingForm({...mappingForm,canonicalField:e.target.value})}/><select value={mappingForm.normalizationRule} onChange={e=>setMappingForm({...mappingForm,normalizationRule:e.target.value})}>{['trim','uppercase','lowercase','digits_only','survey_number','extent','date'].map(rule=><option key={rule} value={rule}>{rule.replace('_',' ')}</option>)}</select><button className="primary-btn">Save field mapping</button></form><div className="admin-list">{ocrMappings.map(m=><div key={m.source_field}><Database/><span><strong>{m.source_field} → {m.canonical_field}</strong><small>{m.normalization_rule} · {m.active?'active':'inactive'}</small></span></div>)}</div></section>}
       <div className="page-heading">
         <div>
           <div className="eyebrow">GOVERNMENT DATA SOURCES <span>•</span> CONNECTION STATUS</div>

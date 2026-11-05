@@ -1,4 +1,4 @@
-# Multi-Stage Production Dockerfile for @ojix/property-web
+# Local Dockerfile for @ojix/property-web
 # Stage 1: Build React/Vite Single Page Application
 FROM node:20-alpine AS builder
 
@@ -10,12 +10,9 @@ COPY tsconfig.json vite.config.ts index.html ./
 COPY src/ ./src/
 COPY public/ ./public/
 
-ARG VITE_API_URL=""
-ENV VITE_API_URL=${VITE_API_URL}
-
 RUN npm run build
 
-# Stage 2: Hardened Nginx 1.27 Alpine Runtime
+# Stage 2: Nginx 1.27 Alpine Runtime
 FROM nginx:1.27-alpine AS runner
 
 # Remove default nginx welcome page

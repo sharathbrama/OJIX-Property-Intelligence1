@@ -99,8 +99,60 @@ test('F2 Tier 1: Extracts execution and registration dates', () => {
   const text = 'Executed on 2018-05-12 at Bommanahalli Sub-Registrar Office. Document No: 1234/2018-19';
   const extracted = extractDocumentMetadata(text, 'sale_deed');
   assert.equal(extracted.executionDate, '2018-05-12');
-  assert.equal(extracted.registrationDate, '2018-05-12');
+  assert.equal(extracted.registrationDate, undefined, 'registration date must not be inferred from execution date');
   assert.equal(extracted.documentNumber, '1234/2018-19');
+});
+
+test('F2 regression: Parses Kannada deed schedule, separate dates, and rejects challan validity as land extent', () => {
+  const text = `ದಿನಾಂಕ: 17-01-2025
+ಉಪ ನೋಂದಣಿ ಕಚೇರಿಯಲ್ಲಿ ದಿನಾಂಕ 20/01/2025 ರಂದು
+ಸುಮಾರು 52 ವರ್ಷದ ದೇವರಾಜು.ಎಸ್.ಆರ್ S/o ಲೇಟ್:ರಾಮೇಗೌಡ
+1). ಎಸ್.ಎಲ್.ರಾಮಕೃಷ್ಣ ಬಿನ್ ಲೇಟ್.ಎಸ್.ಲಿಂಗಪ್ಪಯ್ಯ (ಖಾತೆದಾರರು) ಸುಮಾರು 69 ವರ್ಷ
+2). ಪವನಸುತ.ಆರ್ ಬಿನ್ ಎಸ್.ಎಲ್.ರಾಮಕೃಷ್ಣ (ಖಾತೆದಾರರ ಮಗ) ಸುಮಾರು 39 ವರ್ಷ
+ಮತ್ತು ಷೆಡ್ಯೂಲ್ ಸ್ವತ್ತಿನ ವಿವರ:-
+ಮಂಡ್ಯ ಜಿಲ್ಲೆ, ಪಾಂಡವಪುರ ತಾಲ್ಲೂಕು, ಕಸಬಾ ಹೋಬಳಿ, ಬಳೆಅತ್ತಿಗುಪ್ಪೆ ಗ್ರಾಮದ ಜಮೀನು:
+MR.NO. 10/2006-2007 ಖಾತ ನಂ:7
+ಪೂರ್ವಕ್ಕೆ:- ಕೀರೆ ಮಡವು
+ಪಶ್ಚಿಮಕ್ಕೆ:- ಹರಿಜನ ಕಾಲೋನಿ
+ಉತ್ತರಕ್ಕೆ :- ಪಟೇಲ್ ಚಂದ್ರು ರವರ ಜಮೀನು
+ದಕ್ಷಿಣಕ್ಕೆ:- ಮಹದೇವಮ್ಮರ ಜಮೀನು
+ಸರ್ವೆ ನಂಬರ್ 6 (ಆರು) ವಿಸ್ತಿರ್ಣ 3-09 (ಮೂರು ಎಕರೆ ಒಂಭತ್ತು ಗುಂಟೆ)
+ಚಲನ್ ಚಾಲ್ತಿ ಅವಧಿ Challan Validity 7 Days 24-25
+ಮೊಬಲಗು 10,00,000/-
+ನಿಗದಿತ ಮುದ್ರಾಂಕ ಶುಲ್ಕವಾಗಿ ₹56,500.00
+ನೋಂದಣಿ ಶುಲ್ಕ 10,000.00
+ಸೇವಾ ಶುಲ್ಕ 350.00
+ಪರಿವರ್ತನಾ ಶುಲ್ಕ 35.00
+ಪ್ರಮಾಣ ಪತ್ರ ಮುದ್ರಾಂಕ ಶುಲ್ಕ 100.00
+Online Challan Reference Number RG0125000014826200
+Grand Total 66,985.00
+RTGS (UTR NO - BARBR52025011700803229)`;
+  const extracted = extractDocumentMetadata(text, 'sale_deed');
+  assert.equal(extracted.executionDate, '2025-01-17');
+  assert.equal(extracted.registrationDate, '2025-01-20');
+  assert.equal(extracted.propertySchedule.district, 'ಮಂಡ್ಯ');
+  assert.equal(extracted.propertySchedule.taluk, 'ಪಾಂಡವಪುರ Taluk');
+  assert.equal(extracted.propertySchedule.hobli, 'ಕಸಬಾ Hobli');
+  assert.equal(extracted.propertySchedule.village, 'ಬಳೆಅತ್ತಿಗುಪ್ಪೆ');
+  assert.equal(extracted.propertySchedule.surveyNumber, '6');
+  assert.equal(extracted.propertySchedule.extent.rawText, '3-09 (ಮೂರು ಎಕರೆ ಒಂಭತ್ತು ಗುಂಟೆ)');
+  assert.equal(extracted.propertySchedule.extent.acres, 3);
+  assert.equal(extracted.propertySchedule.extent.guntas, 9);
+  assert.equal(extracted.propertySchedule.boundaries.east, 'ಕೀರೆ ಮಡವು');
+  assert.equal(extracted.propertySchedule.boundaries.west, 'ಹರಿಜನ ಕಾಲೋನಿ');
+  assert.equal(extracted.propertySchedule.boundaries.north, 'ಪಟೇಲ್ ಚಂದ್ರು ರವರ ಜಮೀನು');
+  assert.equal(extracted.propertySchedule.boundaries.south, 'ಮಹದೇವಮ್ಮರ ಜಮೀನು');
+  assert.equal(extracted.propertySchedule.mutationReference, '10/2006-2007');
+  assert.equal(extracted.propertySchedule.khataNumber, '7');
+  assert.notEqual(extracted.propertySchedule.extent.rawText, '24-25');
+  assert.ok(extracted.parties.some(p => p.role === 'buyer' && p.name.includes('ದೇವರಾಜು')));
+  assert.ok(extracted.parties.some(p => p.role === 'seller' && p.name.includes('ರಾಮಕೃಷ್ಣ')));
+  assert.equal(extracted.consideration?.amount, 1000000);
+  assert.ok(extracted.financialItems?.some(item=>item.category==='stamp_duty'&&item.amount===56500));
+  assert.ok(extracted.financialItems?.some(item=>item.category==='registration_fee'&&item.amount===10000));
+  assert.ok(extracted.financialItems?.some(item=>item.category==='service_fee'&&item.amount===350));
+  assert.ok(extracted.financialItems?.some(item=>item.category==='challan'&&item.reference==='RG0125000014826200'));
+  assert.ok(extracted.financialItems?.some(item=>item.certificate==='Government e-payment challan'&&item.amount===66985));
 });
 
 test('F2 Tier 1: Extracts survey number and village schedule', () => {
@@ -148,11 +200,11 @@ test('F2 Tier 2: Handles compound survey numbers with multiple slashes/hissas', 
   assert.equal(extracted.propertySchedule.subdivisionHissa, '1A2B');
 });
 
-test('F2 Tier 2: Handles missing boundaries with fallback defaults', () => {
+test('F2 Tier 2: Keeps missing boundaries unidentified instead of inventing values', () => {
   const text = 'Simple deed without schedule boundary recital. Sy No 55';
   const extracted = extractDocumentMetadata(text, 'sale_deed');
-  assert.ok(extracted.propertySchedule.boundaries.north);
-  assert.ok(extracted.propertySchedule.boundaries.south);
+  assert.equal(extracted.propertySchedule.boundaries.north, '');
+  assert.equal(extracted.propertySchedule.boundaries.south, '');
 });
 
 test('F2 Tier 2: Handles date in DD/MM/YYYY format and normalizes to ISO', () => {
@@ -636,6 +688,67 @@ test('Direct Extractor Integration: extractDocument parses full text into Extrac
   assert.equal(extracted.consideration?.amount, 8500000);
   assert.ok(extracted.propertySchedule.evidenceAnchor);
   assert.equal(validateBoundingBox(extracted.propertySchedule.evidenceAnchor.boundingBox), true);
+});
+
+test('Sale deed OCR: structures Kannada identity, parties, dates, schedule and separate charges', async () => {
+  const { extractDocument } = await import('../src/document-extractor.js');
+  const text = `ಶುದ್ಧ ಕ್ರಯ ಪತ್ರ
+ದಸ್ತಾವೇಜು ಸಂಖ್ಯೆ 489
+໖: 17-01-2025
+ಸುಮಾರು 52 ವರ್ಷದ ದೇವರಾಜು.ಎಸ್.ಆರ್ ಬಿನ್ ರಾಮೇಗೌಡ
+1). ಎಸ್.ಎಲ್.ರಾಮಕೃಷ್ಣ ಬಿನ್ ಎಸ್.ಲಿಂಗಪ್ಪಯ್ಯ ಸುಮಾರು 69 ವರ್ಷ
+2). ಪವನಸುತ.ಆರ್ ಬಿನ್ ಎಸ್.ಎಲ್.ರಾಮಕೃಷ್ಣ ಸುಮಾರು 39 ವರ್ಷ
+3). ಶ್ವೇತ.ಹೆಚ್.ಎಸ್ ಕೋಂ ಪವನಸುತ.ಆರ್ ಸುಮಾರು 37 ವರ್ಷ
+4). ಜೀವನ್.ಆರ್ ಬಿನ್ ಎಸ್.ಎಲ್.ರಾಮಕೃಷ್ಣ ಸುಮಾರು 36 ವರ್ಷ
+5). ರಮ್ಯ.ಎಸ್.ಪಿ ಕೋಂ ಜೀವನ್.ಆರ್ ಸುಮಾರು 29 ವರ್ಷ
+ನಿಗದಿತ ಮುದ್ರಾಂಕ ಶುಲ್ಕವಾಗಿ ₹56,500.00 ಪಾವತಿಸಿರುವುದನ್ನು ದೃಢೀಕರಿಸಲಾಗಿದೆ.
+Online Challan Reference Number RG0125000014826200
+MR.NO. 10/2006-2007 ಖಾತ ನಂ:7
+ಶುದ್ಧ ಕ್ರಯಕ್ಕೆ ಮೊಬಲಗು 10,00,000/- ರೂಪಾಯಿಗಳು.
+ನೋಂದಣಿ ಶುಲ್ಕ 10,000.00
+ಸೇವಾ ಶುಲ್ಕ 350.00
+ಪರಿವರ್ತನಾ ಶುಲ್ಕ 35.00
+ಪ್ರಮಾಣ ಪತ್ರ ಮುದ್ರಾಂಕ ಶುಲ್ಕ 100.00
+10,485.00
+ದಸ್ತಾವೇಜು ಸಂಖ್ಯೆ :- PDP-1-05489-2024-25
+ಪಾಂಡವಪುರ ಉಪ ನೋಂದಣಿ ಕಚೇರಿಯಲ್ಲಿ ದಿನಾಂಕ 20/01/2025 ರಂದು
+ಮಂಡ್ಯ ಜಿಲ್ಲೆ, ಪಾಂಡವಪುರ ತಾಲ್ಲೂಕು, ಕಸಬಾ ಹೋಬಳಿ, ಬಳೆಅತ್ತಿಗುಪ್ಪೆ ಗ್ರಾಮದ ಸರ್ವೆ ನಂ: 6
+ಉತ್ತರಕ್ಕೆ :- ಪಟೇಲ್ ಚಂದ್ರು ರವರ ಜಮೀನು
+ಪೂರ್ವಕ್ಕೆ:- ಕೀರೆ ಮಡವು
+ಪಶ್ಚಿಮಕ್ಕೆ:- ಹರಿಜನ ಕಾಲೋನಿ
+ದಕ್ಷಿಣಕ್ಕೆ:- ಮಹದೇವಮ್ಮರ ಜಮೀನು
+ಖುಷಿ ವಿಸ್ತಿರ್ಣ 3-09 (ಮೂರು ಎಕರೆ ಒಂಭತ್ತು ಗುಂಟೆ)
+`;
+  const extracted = extractDocument(text, { documentId: 'sale-deed-ocr-test' });
+  assert.equal(extracted.documentType, 'sale_deed');
+  assert.equal(extracted.executionDate, '2025-01-17');
+  assert.equal(extracted.registrationDate, '2025-01-20');
+  assert.equal(extracted.subRegistrarOffice, 'SRO ಪಾಂಡವಪುರ');
+  assert.equal(extracted.documentNumber, '489');
+  assert.equal(extracted.registrationNumber, 'PDP-1-05489-2024-25');
+  assert.equal(extracted.propertySchedule.district, 'ಮಂಡ್ಯ');
+  assert.equal(extracted.propertySchedule.taluk, 'ಪಾಂಡವಪುರ Taluk');
+  assert.equal(extracted.propertySchedule.hobli, 'ಕಸಬಾ Hobli');
+  assert.equal(extracted.propertySchedule.village, 'ಬಳೆಅತ್ತಿಗುಪ್ಪೆ');
+  assert.equal(extracted.propertySchedule.surveyNumber, '6');
+  assert.equal(extracted.propertySchedule.subdivisionHissa, undefined);
+  assert.equal(extracted.propertySchedule.extent.acres, 3);
+  assert.equal(extracted.propertySchedule.extent.guntas, 9);
+  assert.equal(extracted.propertySchedule.khataNumber, '7');
+  assert.equal(extracted.propertySchedule.mutationReference, '10/2006-2007');
+  assert.equal(extracted.propertySchedule.boundaries.east, 'ಕೀರೆ ಮಡವು');
+  assert.equal(extracted.propertySchedule.boundaries.west, 'ಹರಿಜನ ಕಾಲೋನಿ');
+  assert.equal(extracted.propertySchedule.boundaries.north, 'ಪಟೇಲ್ ಚಂದ್ರು ರವರ ಜಮೀನು');
+  assert.equal(extracted.propertySchedule.boundaries.south, 'ಮಹದೇವಮ್ಮರ ಜಮೀನು');
+  assert.equal(extracted.parties.filter(p => p.role === 'seller').length, 5);
+  assert.equal(extracted.parties.find(p => p.role === 'buyer')?.name, 'ದೇವರಾಜು.ಎಸ್.ಆರ್');
+  assert.equal(extracted.consideration?.amount, 1_000_000);
+  assert.ok(extracted.financialItems?.some(i => i.category === 'stamp_duty' && i.amount === 56_500));
+  assert.ok(extracted.financialItems?.some(i => i.category === 'registration_fee' && i.amount === 10_000));
+  assert.ok(extracted.financialItems?.some(i => i.category === 'service_fee' && i.amount === 350));
+  assert.ok(extracted.financialItems?.some(i => i.category === 'challan' && i.reference === 'RG0125000014826200'));
+  assert.ok(extracted.ownershipEvents?.some(event => event.eventType === 'Mutation / khata entry stated'));
+  assert.ok(extracted.ownershipEvents?.some(event => event.sourceStatus === 'registered_document'));
 });
 
 test('Direct Extractor Integration: normalizeKarnatakaExtent converts compound guntas and dimensions', async () => {

@@ -3,7 +3,6 @@ import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, 
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
 import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
 import type { UserAccount, UserRole } from '../types';
-import { apiConfig } from '../apiConfig';
 
 interface LoginPageProps {
   apiUrl: string;
@@ -37,7 +36,7 @@ const formatRegistrationPhone=(countryCode:string,value:string)=>{const digits=v
 export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
   const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
     const path = window.location.pathname.replace(/\/$/, '');
-    return path === '/register' ? 'register' : 'landing';
+    return path === '/register' ? 'register' : expectedRole ? 'login' : 'landing';
   });
   const [loginCardOpen, setLoginCardOpen] = useState(() => Boolean(expectedRole) || window.location.pathname.startsWith('/login'));
   const [loginModalClosing, setLoginModalClosing] = useState(false);
@@ -161,14 +160,14 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   },[recoveryStep,recoveryExpiresAt]);
 
   const navigateAuth = (next: 'landing'|'login'|'register') => {
-    const nextMode = next === 'login' ? 'landing' : next;
+    const nextMode = next === 'login' ? (expectedRole ? 'login' : 'landing') : next;
     setMode(nextMode);
     setLoginCardOpen(next === 'login');
     setError('');
     setOtp('');
     const path = next === 'register' ? '/register' : next === 'login' ? '/login' : '/';
     if (next === 'login') {
-      if (window.location.pathname !== '/') window.history.pushState({ auth: 'landing' }, '', '/');
+      if (!expectedRole && window.location.pathname !== '/') window.history.pushState({ auth: 'landing' }, '', '/');
     } else if (window.location.pathname !== path) window.history.pushState({ auth: next }, '', path);
   };
 
@@ -177,20 +176,25 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   }, [expectedRole]);
 
   useEffect(() => {
+    const path = window.location.pathname.replace(/\/$/, '');
+    const isDashboardPath = /^\/(super-admin|owner|admin|lawyer|analyst|operations|consultant|support|data-steward|viewer)\/dashboard$/.test(path);
+    if (expectedRole && isDashboardPath && window.location.hash) {
+      window.history.replaceState(window.history.state, '', `${path}${window.location.search}`);
+    }
+  }, [expectedRole]);
+
+  useEffect(() => {
     const syncRoute = () => {
       const path = window.location.pathname.replace(/\/$/, '');
-      const next = path === '/register' ? 'register' : 'landing';
-      setLoginCardOpen(Boolean(path.startsWith('/login/')));
+      const isRoleLogin = Boolean(expectedRole) && (/^\/login\/(super-admin|owner|admin|lawyer|analyst|operations|consultant|support|data-steward|viewer)$/.test(path)
+        || /^\/(super-admin|owner|admin|lawyer|analyst|operations|consultant|support|data-steward|viewer)\/dashboard$/.test(path));
+      const next = path === '/register' ? 'register' : isRoleLogin ? 'login' : 'landing';
+      setLoginCardOpen(Boolean(path.startsWith('/login/')) || isRoleLogin);
       setMode(current => current === 'login-otp' || current === 'otp' || current === 'verified' ? current : next);
     };
     window.addEventListener('popstate', syncRoute);
     return () => window.removeEventListener('popstate', syncRoute);
-  }, []);
-
-  useEffect(() => {
-    if (!window.location.pathname.startsWith('/login')) return;
-    window.history.replaceState({ auth: 'landing' }, '', '/');
-  }, []);
+  }, [expectedRole]);
 
   useEffect(() => {
     if (mode !== 'landing' || !loginCardOpen) return;
@@ -210,6 +214,13 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   }, [mode, loginCardOpen]);
 
   const closeLandingLogin = () => {
+    if (expectedRole) {
+      setMode('login');
+      setLoginCardOpen(false);
+      setError('');
+      setRecoveryStep(null);
+      return;
+    }
     setLoginModalClosing(true);
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     window.setTimeout(() => {
@@ -242,12 +253,6 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   }, [mode]);
 
   useEffect(() => {
-    if (apiConfig.error) {
-      setServiceStatus('unavailable');
-      setServiceMessage(apiConfig.error);
-      setDummyAccounts([]);
-      return;
-    }
     fetch(`${apiUrl}/health`)
       .then(async res => {
         const data = await res.json().catch(() => ({}));
@@ -265,9 +270,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       .catch(error => {
         setServiceStatus('unavailable');
         const detail = error instanceof Error ? error.message : 'Request failed.';
-        setServiceMessage(import.meta.env.PROD
-          ? `Production API health check failed: ${detail} Verify VITE_API_URL, API reachability, and the API CORS allowlist.`
-          : `API health check failed: ${detail} Start the local API and database, then retry.`);
+        setServiceMessage(`API health check failed: ${detail} Start the local API and database, then retry.`);
       });
 
     // The API exposes this list only when it is itself running in local
@@ -328,7 +331,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   };
   const handleLogin=(e:React.FormEvent)=>requestLoginOtp('email',e);
 
-  const openPasswordRecovery=()=>{setMode('landing');setLoginCardOpen(true);if(window.location.pathname!=='/')window.history.pushState({auth:'landing'},'','/');setRecoveryStep('request');setRecoveryOtp('');setRecoveryPassword('');setRecoveryConfirmPassword('');setError('');};
+  const openPasswordRecovery=()=>{setMode('landing');setLoginCardOpen(true);if(!expectedRole&&window.location.pathname!=='/')window.history.pushState({auth:'landing'},'','/');setRecoveryStep('request');setRecoveryOtp('');setRecoveryPassword('');setRecoveryConfirmPassword('');setError('');};
   const requestPasswordRecovery=async(e?:React.FormEvent)=>{
     e?.preventDefault();setLoading(true);setError('');
     try{

@@ -362,12 +362,12 @@ function routeFromPath(pathname: string): {
   return { page: match?.[0] || "overview" };
 }
 function loginRoleFromPath(pathname: string) {
-  const match = pathname
-    .replace(/\/$/, "")
-    .match(
+  const normalizedPath = pathname.replace(/\/$/, "");
+  const match = normalizedPath.match(
       /^\/login\/(super-admin|owner|admin|lawyer|analyst|operations|consultant|support|data-steward|viewer)$/,
     );
-  return match?.[1] === "data-steward" ? "data_steward" : match?.[1];
+  const role = match?.[1] || dashboardRoleFromPath(normalizedPath);
+  return role === "data-steward" ? "data_steward" : role;
 }
 function dashboardRoleFromPath(pathname: string) {
   const match = pathname
@@ -467,14 +467,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (import.meta.env.PROD && !API_BASE_URL) {
-      localStorage.removeItem("ojix_auth_token");
-      localStorage.removeItem("ojix_user");
-      setAuthToken(null);
-      setCurrentUser(null);
-      setAuthChecking(false);
-      return;
-    }
     if (!authToken) {
       setAuthChecking(false);
       return;
@@ -1137,6 +1129,7 @@ export default function App() {
           localStorage.setItem("ojix_auth_token", token);
           localStorage.setItem("ojix_user", JSON.stringify(user));
           localStorage.setItem("ojix_portal_mode", openSuperAdmin ? "super-admin" : "workspace");
+          setAuthChecking(true);
           setAuthToken(token);
           setCurrentUser(user);
           setPortalMode(openSuperAdmin ? "super-admin" : "workspace");
@@ -2410,10 +2403,18 @@ function SupportDashboard({
   currentUser: UserAccount;
 }) {
   const [now, setNow] = useState(Date.now());
+  const [ocrJobs, setOcrJobs] = useState<any[]>([]);
+  const [ocrError, setOcrError] = useState('');
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    let cancelled=false;
+    const load=async()=>{try{const response=await authFetch(`${API}/api/support/ocr/jobs`);const data=await response.json();if(!response.ok)throw new Error(data.error||'OCR diagnostics unavailable.');if(!cancelled)setOcrJobs(data.items||[]);}catch(e){if(!cancelled)setOcrError((e as Error).message);}};
+    void load();const timer=window.setInterval(load,15000);return()=>{cancelled=true;window.clearInterval(timer);};
+  },[]);
+  const retryOcrJob=async(id:string)=>{try{const response=await authFetch(`${API}/api/support/ocr/jobs/${id}/retry`,{method:'POST'});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not retry job.');setOcrJobs(items=>items.map(item=>item.id===id?{...item,status:data.status,progress:0,error_code:null}:item));setOcrError('');}catch(e){setOcrError((e as Error).message);}};
   const expiresAt = currentUser.accessExpiresAt
     ? new Date(currentUser.accessExpiresAt).getTime()
     : now;
@@ -2550,6 +2551,7 @@ function SupportDashboard({
           </div>
         </section>
       </div>
+      <section className="panel support-ocr-jobs"><div className="panel-head"><div><h3>OCR processing diagnostics</h3><p>Status and safe error codes only · last 24 hours · document contents are hidden</p></div><Activity size={18} className="panel-head-icon"/></div>{ocrError&&<p className="alert alert-warning">{ocrError}</p>}<div className="admin-table-wrap"><table><thead><tr><th>JOB</th><th>STATUS</th><th>PROGRESS</th><th>ATTEMPTS</th><th>ERROR CODE</th><th>UPDATED</th><th>ACTION</th></tr></thead><tbody>{ocrJobs.map(j=><tr key={j.id}><td>{j.id.slice(0,8)}…</td><td>{pretty(j.status)}</td><td>{j.progress}%</td><td>{j.attempts}/{j.max_attempts}</td><td>{j.error_code||'—'}</td><td>{j.updated_at?new Date(j.updated_at).toLocaleString():'—'}</td><td>{['failed','retry_wait'].includes(j.status)&&<button className="secondary-btn" onClick={()=>void retryOcrJob(j.id)}>Retry job</button>}</td></tr>)}</tbody></table>{!ocrJobs.length&&<div className="admin-empty">No OCR jobs in the permitted diagnostic window.</div>}</div></section>
       <section className="panel support-runbook">
         <div className="panel-head">
           <div>
@@ -6394,6 +6396,7 @@ function PropertyPage({
             propertyIdentity={property}
             doc={reviewingDoc as PropertyDoc}
             readOnly
+          currentRole={currentUser.role}
             onClose={() => setReviewingDoc(null)}
             onDocumentUpdated={(updated) => {
               setReviewingDoc(updated as Doc);
@@ -7283,7 +7286,8 @@ function PropertyPage({
           propertyId={property.id}
           propertyIdentity={property}
           doc={reviewingDoc as PropertyDoc}
-          readOnly={isConsultant || isDataSteward || isViewer}
+          readOnly={!['analyst','operations'].includes(currentUser.role)}
+          currentRole={currentUser.role}
           onClose={() => setReviewingDoc(null)}
           onDocumentUpdated={(updated) => {
             setReviewingDoc(updated as Doc);

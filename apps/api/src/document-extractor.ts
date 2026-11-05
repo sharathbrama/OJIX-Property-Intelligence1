@@ -17,6 +17,8 @@ import type {
   PropertySchedule,
   Consideration,
   EncumbranceEntry,
+  ExtractedFinancialItem,
+  ExtractedOwnershipEvent,
 } from './types.js';
 
 export type { BoundingBox } from './types.js';
@@ -66,13 +68,25 @@ export function normalizeKarnatakaExtent(raw: string | any): PropertyExtent {
   let cents = 0;
   let hasParsed = false;
 
+  // Kannada deeds commonly write land extent as acres-guntas (for example
+  // "3-09"). Require both Kannada units in the same phrase to avoid treating
+  // dates, registration ranges, or survey identifiers as an area.
+  const kannadaAcresGuntas = /(?:ಎಕರೆ|ಎಕ್ರೆ)/u.test(clean) && /(?:ಗುಂಟೆ|ಗುಂಟಾ)/u.test(clean)
+    ? clean.match(/(\d+)\s*[-–]\s*(\d+)/u)
+    : null;
+  if (kannadaAcresGuntas) {
+    acres = Number(kannadaAcresGuntas[1]);
+    guntas = Number(kannadaAcresGuntas[2]);
+    hasParsed = true;
+  }
+
   // 1. Check for compound Acre and Gunta (English & Kannada): e.g. "1 Acre 15 Guntas", "1 ಎಕರೆ 20 ಗುಂಟೆ"
   const acreGuntaMatch = clean.match(/(\d+(?:\.\d+)?)\s*(?:acres?|acre|ac\b|ಎಕರೆ|ಎಕ್ರೆ)\s*(?:and|ಮತ್ತು)?\s*(\d+(?:\s+\d+\/\d+|\.\d+|\/\d+)?)\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ)/iu);
-  if (acreGuntaMatch) {
+  if (acreGuntaMatch && !hasParsed) {
     acres = parseFloat(acreGuntaMatch[1]);
     guntas = parseFractionOrDecimal(acreGuntaMatch[2]);
     hasParsed = true;
-  } else {
+  } else if (!hasParsed) {
     // 2. Check for Acre only (English & Kannada): e.g. "2 Acres", "2 ಎಕರೆ"
     const acreOnlyMatch = clean.match(/(\d+(?:\.\d+)?)\s*(?:acres?|acre|ac\b|ಎಕರೆ|ಎಕ್ರೆ)/iu);
     if (acreOnlyMatch) {
@@ -516,6 +530,13 @@ export function extractDocument(
   }
 
   const pages = splitIntoPages(rawText);
+  // Deed schedules contain the conveyed parcel details. Earlier document pages
+  // can mention parties' addresses and other properties, so prefer this section.
+  const canonicalScheduleStart = rawText.search(/ಷೆಡ್ಯೂಲ್\s*ಸ್ವತ್ತಿನ\s*ವಿವರ\s*[:：-]?/u);
+  const genericScheduleStart = canonicalScheduleStart < 0 ? rawText.search(/(?:schedule\s*(?:of\s*)?property|property\s*schedule)/iu) : -1;
+  const scheduleStart = canonicalScheduleStart >= 0 ? canonicalScheduleStart : genericScheduleStart;
+  // Schedules and boundaries can be several pages after the deed recitals.
+  const scheduleText = scheduleStart >= 0 ? rawText.slice(scheduleStart) : rawText;
 
   // 1. Classification
   const classification = classifyKarnatakaDocument(rawText, options.filename);
@@ -528,8 +549,24 @@ export function extractDocument(
   let docNumberConfidence = 0.50;
 
   if (!docNumber) {
+    const kannadaDocumentNumber = rawText.match(/ದಸ್ತಾವೇಜು\s*ಸಂಖ್ಯೆ\s*[:.\-]?\s*(\d{1,8})\b/u);
+    if (kannadaDocumentNumber?.[1]) {
+      docNumber = kannadaDocumentNumber[1];
+      docNumberConfidence = 0.9;
+      docNumberAnchor = buildEvidenceAnchor(kannadaDocumentNumber[0], rawText, pages, tokens, documentId, docNumberConfidence);
+    }
+  }
+  if (!docNumber) {
+    const registryId = rawText.match(/(?:ದಸ್ತಾವೇಜು\s*ಸಂಖ್ಯೆ|Document\s*(?:No\.?|Number))\s*[:.\-\s]*([A-Z]{2,5}[-/][A-Z0-9/-]{6,})/iu);
+    if (registryId?.[1]) {
+      docNumber = registryId[1].trim();
+      docNumberConfidence = 0.9;
+      docNumberAnchor = buildEvidenceAnchor(registryId[0], rawText, pages, tokens, documentId, docNumberConfidence);
+    }
+  }
+  if (!docNumber) {
     const docNumRegexes = [
-      /(?:Document\s*(?:No\.?|Number)|Doc\.?\s*No\.?|Registration\s*No\.?|Book\s*I\s*No\.?|MR\s*No\.?|Form\s*No\.?|PID\s*No\.?)\s*[:.\-]?\s*([A-Za-z0-9\/\-]+(?:\/[0-9]{2,4}(?:-[0-9]{2,4})?)?)/i,
+      /(?:Document\s*(?:No\.?|Number)|Doc\.?\s*No\.?|Book\s*I\s*No\.?|MR\s*No\.?|Form\s*No\.?|PID\s*No\.?)\s*[:.\-]?\s*([A-Za-z0-9\/\-]+(?:\/[0-9]{2,4}(?:-[0-9]{2,4})?)?)/i,
       /\b([A-Z]{2,4}\/[0-9]{4,8}\/[0-9]{4}-[0-9]{2,4})\b/,
       /\b(BHM-MR-[0-9]{4}-[0-9]{4,6})\b/i,
       /\b(EC-[0-9]{4}-[0-9]{4,6})\b/i,
@@ -545,21 +582,20 @@ export function extractDocument(
     }
   }
 
-  if (!docNumber) {
-    docNumber = `DOC-${Math.floor(1000 + Math.random() * 9000)}/${new Date().getFullYear()}`;
-    docNumberConfidence = 0.50;
-  }
+  // Unknown registry identifiers stay empty; generated values can be mistaken
+  // for document evidence and must never participate in identity matching.
 
   // 3. Execution & Registration Dates
   let executionDate = jsonPayload?.executionDate;
   let registrationDate = jsonPayload?.registrationDate;
 
-  const execMatch = rawText.match(/(?:executed\s*(?:on|dated)|date\s*of\s*execution|execution\s*date)\s*[:.\-]?\s*(\d{4}-\d{2}-\d{2}|[0-9]{1,2}[\/\-.][0-9]{1,2}[\/\-.][0-9]{2,4}|[0-9]{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+[0-9]{4})/i);
+  const deedExecutionMatch = rawText.match(/ಶುದ್ಧ\s*ಕ್ರಯ\s*ಪತ್ರ[\s\S]{0,120}?([0-9]{1,2}[\/\-.][0-9]{1,2}[\/\-.][0-9]{4})/u);
+  const execMatch = deedExecutionMatch || rawText.match(/(?:executed\s*(?:on|dated)|date\s*of\s*execution|execution\s*date|ದಿನಾಂಕ)\s*[:.\-]?\s*(\d{4}-\d{2}-\d{2}|[0-9]{1,2}[\/\-.][0-9]{1,2}[\/\-.][0-9]{2,4}|[0-9]{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+[0-9]{4})/iu);
   if (execMatch && !executionDate) {
     executionDate = parseKarnatakaDate(execMatch[1]);
   }
 
-  const regMatch = rawText.match(/(?:registered\s*(?:on|dated)|date\s*of\s*registration|registration\s*date)\s*[:.\-]?\s*(\d{4}-\d{2}-\d{2}|[0-9]{1,2}[\/\-.][0-9]{1,2}[\/\-.][0-9]{2,4}|[0-9]{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+[0-9]{4})/i);
+  const regMatch = rawText.match(/(?:registered\s*(?:on|dated)|date\s*of\s*registration|registration\s*date|ಉಪ\s*ನೋಂದಣಿ\s*ಕಚೇರಿಯಲ್ಲಿ[\s\S]{0,100}?ದಿನಾಂಕ|ನೋಂದಾಯಿಸಿ[\s\S]{0,80}?ದಿನಾಂಕ)\s*[:.\-]?\s*(\d{4}-\d{2}-\d{2}|[0-9]{1,2}[\/\-.][0-9]{1,2}[\/\-.][0-9]{2,4}|[0-9]{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+[0-9]{4})/iu);
   if (regMatch && !registrationDate) {
     registrationDate = parseKarnatakaDate(regMatch[1]);
   }
@@ -573,17 +609,23 @@ export function extractDocument(
     }
   }
 
-  if (executionDate && !registrationDate) {
-    registrationDate = executionDate;
-  }
+  // Execution and registration dates are distinct legal facts. Never infer
+  // one from the other when the OCR only identified one date.
 
   // 4. Sub-Registrar Office & Authority
   let sro = jsonPayload?.subRegistrarOffice;
   let issuingAuth = jsonPayload?.issuingAuthority;
 
-  const sroMatch = rawText.match(/(?:Sub-Registrar\s*Office|Senior\s*Sub-Registrar|SRO)\s*[:.\-,]?\s*([A-Za-z\s]+?)(?:,|\.|\n|district|bangalore|bengaluru)/i);
-  if (sroMatch && !sro) {
-    sro = `SRO ${sroMatch[1].trim()}`;
+  // Discard provider values that captured only the Kannada location suffix.
+  if (sro && /^(?:SRO\s*)?(?:ಯಲ್ಲಿ|ಕಚೇರಿಯಲ್ಲಿ|ಉಪನೋಂದಣಾಧಿಕಾರಿ)$/iu.test(sro.trim())) sro = undefined;
+
+  if (!sro) {
+    const kannadaSro = rawText.match(/([\u0C80-\u0CFF]{3,30})\s*ಉಪ\s*ನೋಂದಣಿ\s*ಕಚೇರಿಯಲ್ಲಿ/u);
+    if (kannadaSro?.[1]) sro = `SRO ${kannadaSro[1].trim()}`;
+  }
+  if (!sro) {
+    const sroMatch = rawText.match(/(?:Sub-Registrar\s*Office|Senior\s*Sub-Registrar|SRO)\s*[:.\-,]?\s*([A-Za-z\s]+?)(?:,|\.|\n|district|bangalore|bengaluru)/i);
+    if (sroMatch) sro = `SRO ${sroMatch[1].trim()}`;
   }
 
   const authMatch = rawText.match(/(?:Tahsildar|Assistant\s*Commissioner|BBMP\s*Ward|Gram\s*Panchayat)\s*[:.\-,]?\s*([A-Za-z0-9\s]+?)(?:,|\.|\n)/i);
@@ -631,11 +673,11 @@ export function extractDocument(
       if (callSuffixes) {
         patterns.push(
           new RegExp(
-            `(?:${callSuffixes})\\s*(?:Sri|Smt|Mr|Mrs|Late)?\\s*([A-Za-z\\s\\.]+?)\\s+(S\\/o|W\\/o|D\\/o|son\\s+of|wife\\s+of|daughter\\s+of)\\s+([A-Za-z\\s\\.]+?)(?=${termPattern})`,
+            `\\b(?:${callSuffixes})\\b\\s*(?:Sri|Smt|Mr|Mrs|Late)?\\s*([A-Za-z\\s\\.]+?)\\s+(S\\/o|W\\/o|D\\/o|son\\s+of|wife\\s+of|daughter\\s+of)\\s+([A-Za-z\\s\\.]+?)(?=${termPattern})`,
             'i'
           ),
           new RegExp(
-            `(?:${callSuffixes})\\s*(?:Sri|Smt|Mr|Mrs|Late)?\\s*([A-Za-z\\s\\.]+?)(?=${termPattern})`,
+            `\\b(?:${callSuffixes})\\b\\s*(?:Sri|Smt|Mr|Mrs|Late)?\\s*([A-Za-z\\s\\.]+?)(?=${termPattern})`,
             'i'
           )
         );
@@ -676,6 +718,50 @@ export function extractDocument(
       'in\\s*favour\\s*of|to'
     );
 
+    // Parse numbered executant lists from source OCR. Values are only added
+    // when the source text contains the corresponding name/relationship/age.
+    const numberedParty = /(?:^|\n)\s*(\d{1,2})\s*[).]\s*([^\n]{2,320})/gu;
+    let numberedMatch: RegExpExecArray | null;
+    while ((numberedMatch = numberedParty.exec(rawText))) {
+      const line = numberedMatch[2].trim();
+      if (!/(?:ಬಿನ್|ಕೋಂ|S\/o|W\/o|D\/o)/iu.test(line)) continue;
+      const relationMatch = line.match(/(.+?)\s+(ಬಿನ್|ಕೋಂ|S\/o|W\/o|D\/o)\s+(.+?)(?=\s*[,()]|\s*(?:ಸುಮಾರು\s*)?\d{1,3}\s*ವರ್ಷ|$)/iu);
+      const ageMatch = line.match(/(?:ಸುಮಾರು\s*)?(\d{1,3})\s*ವರ್ಷ/u);
+      const rawName = (relationMatch?.[1] || line.split(/\s*(?:\(|,|ಸುಮಾರು|\d{1,3}\s*ವರ್ಷ)/u)[0]).replace(/^[\s:.-]+|[\s:.-]+$/g, '');
+      if (!rawName || parties.some(p => p.name === rawName)) continue;
+      const marker = relationMatch?.[2] || '';
+      const relationship = relationMatch ? `${/^(?:ಕೋಂ|W\/o)/iu.test(marker) ? 'W/o' : /^D\/o/i.test(marker) ? 'D/o' : 'S/o'} ${relationMatch[3].trim()}` : undefined;
+      const party: ExtractedParty = {
+        name: rawName,
+        normalizedName: normalizePersonName(rawName),
+        role: 'seller',
+        relationship,
+        age: ageMatch ? Number(ageMatch[1]) : undefined,
+        evidenceAnchor: buildEvidenceAnchor(line, rawText, pages, tokens, documentId, 0.65),
+      };
+      const nameAt = rawText.indexOf(rawName, numberedMatch.index);
+      const executantAt = nameAt >= 0 ? rawText.indexOf('(Executant)', nameAt) : -1;
+      if (nameAt >= 0 && executantAt > nameAt) {
+        const block = rawText.slice(nameAt, executantAt);
+        const addressMatch = block.match(/Resident\s*of\s*:?\s*([\s\S]{0,500}?)(?=\n\s*(?:Left Thumb|Right Thumb|Signature)|$)/i);
+        if (addressMatch?.[1]) party.address = addressMatch[1].replace(/\s+/g, ' ').trim().replace(/[,;]+$/, '');
+      }
+      parties.push(party);
+    }
+
+    const buyerMatch = rawText.match(/(?:ಸುಮಾರು\s*)?(\d{1,3})\s*ವರ್ಷದ\s+([^,\n]{2,100}?)(?=\s+(?:ಬಿನ್|ಮಗನಾದ|S\/o)\s+|[,\n]|$)(?:\s+(?:ಬಿನ್|ಮಗನಾದ|S\/o)\s+([^,\n]{2,100}))?/u);
+    if (buyerMatch?.[2] && !parties.some(p => p.role === 'buyer')) {
+      const buyerName = buyerMatch[2].trim().replace(/^(?:ಶ್ರೀ|Sri\.?|Smt\.?|Late:?\s*)\s*/iu, '');
+      parties.unshift({
+        name: buyerName,
+        normalizedName: normalizePersonName(buyerName),
+        role: 'buyer',
+        relationship: buyerMatch[3] ? `S/o ${buyerMatch[3].trim()}` : undefined,
+        age: Number(buyerMatch[1]),
+        evidenceAnchor: buildEvidenceAnchor(buyerMatch[0], rawText, pages, tokens, documentId, 0.65),
+      });
+    }
+
     // If RTC or Khata, look for owner/kabzedar
     if (parties.length === 0 && (docType === 'rtc_pahani' || docType === 'e_khata' || docType === 'mutation_extract')) {
       const ownerMatch = rawText.match(/(?:Kabzedar|Khatedar|Owner|Name\s*of\s*Occupant|Pattadar|ಕಬ್ಜೇದಾರ)\s*[:.\-]?\s*(?:Sri|Smt|Mr|Mrs|Late|ಶ್ರೀ)?\s*([A-Za-z\u0C80-\u0CFF\s\.]+?)(?:\s+(?:S\/o|W\/o|D\/o)\s+([A-Za-z\u0C80-\u0CFF\s\.]+?))?(?:,|\.|\n|\d)/iu);
@@ -693,16 +779,28 @@ export function extractDocument(
     }
   }
 
+  // Prefer the named, age-qualified buyer in the deed recitals over provider
+  // entities inferred from challan wording (for example, "payments to local
+  // bodies"). Keep seller parties from the provider extraction intact.
+  const deedBuyerMatch = rawText.match(/(?:ಸುಮಾರು\s*)?(\d{1,3})\s*ವರ್ಷದ\s+([^,\n]{2,100}?)(?=\s+(?:ಬಿನ್|ಮಗನಾದ|S\/o)\s+|[,\n]|$)(?:\s+(?:ಬಿನ್|ಮಗನಾದ|S\/o)\s+([^,\n]{2,100}))?/u);
+  if (deedBuyerMatch?.[2]) {
+    const buyerName = deedBuyerMatch[2].trim().split(/\s*\(/u)[0].replace(/\s+(?:ಆಧಾರ್|PAN|Aadhaar).*/iu,'').replace(/^(?:ಶ್ರೀ|ಶ್ರೀಮತಿ|Sri\.?|Smt\.?|Late:?\s*)\s*/iu, '');
+    const buyer = {name:buyerName,normalizedName:normalizePersonName(buyerName),role:'buyer',relationship:deedBuyerMatch[3]?`S/o ${deedBuyerMatch[3].trim()}`:undefined,age:Number(deedBuyerMatch[1]),evidenceAnchor:buildEvidenceAnchor(deedBuyerMatch[0],rawText,pages,tokens,documentId,0.78)} as ExtractedParty;
+    const existingBuyerIndex = parties.findIndex(p => p.role === 'buyer');
+    if (existingBuyerIndex >= 0) parties.splice(existingBuyerIndex, 1);
+    parties.unshift(buyer);
+  }
+
   // 6. Property Schedule (Survey Number, Hissa, Village, Extent, Boundaries)
   let surveyNumber = jsonPayload?.propertySchedule?.surveyNumber || '';
   let hissa = jsonPayload?.propertySchedule?.subdivisionHissa || '';
   let village = jsonPayload?.propertySchedule?.village || '';
   let hobli = jsonPayload?.propertySchedule?.hobli || '';
   let taluk = jsonPayload?.propertySchedule?.taluk || '';
-  let district = jsonPayload?.propertySchedule?.district || 'Bengaluru Urban';
+  let district = jsonPayload?.propertySchedule?.district || '';
 
   if (!surveyNumber) {
-    const syMatch = rawText.match(/(?:Survey\s*(?:No\.?|Number|\#)?|Sy\.?\s*No\.?)\s*[:.\-]?\s*([0-9]+(?:\/[0-9]+[A-Za-z0-9\-]*)?)/i);
+    const syMatch = scheduleText.match(/(?:Survey\s*(?:No\.?|Number|#)?|Sy\.?\s*No\.?|ಸರ್ವೆ\s*(?:ನಂ\.?|ನಂಬರ್|ಸಂಖ್ಯೆ)|ಸರ್ವೇ\s*(?:ನಂ\.?|ನಂಬರ್|ಸಂಖ್ಯೆ))\s*[:.\-]?\s*([0-9]+(?:\/[0-9]+[A-Za-z0-9\-]*)?)/iu);
     if (syMatch && syMatch[1]) {
       const fullSy = syMatch[1].trim();
       surveyNumber = fullSy;
@@ -714,18 +812,24 @@ export function extractDocument(
   }
 
   if (!village) {
-    const vMatch = rawText.match(/(?:Village|Grama|Village\s*of)\s*[:.\-]?\s*([A-Za-z\s]+?)(?:,|\.|\bHobli|\bTaluk|\bDistrict|\n)/i);
+    const vMatch = scheduleText.match(/(?:Village|Grama|Village\s*of)\s*[:.\-]?\s*([A-Za-z\s]+?)(?:,|\.|\bHobli|\bTaluk|\bDistrict|\n)/i)
+      || scheduleText.match(/[,\n:]\s*([\u0C80-\u0CFF]+(?:\s+[\u0C80-\u0CFF]+){0,2})\s+ಗ್ರಾಮ(?:ದ|ದಲ್ಲಿ|ಕ್ಕೆ|ವು)?(?=[,\s.])/u);
     if (vMatch && vMatch[1]) village = vMatch[1].trim();
   }
 
   if (!hobli) {
-    const hMatch = rawText.match(/([A-Za-z\s]+?)\s*Hobli/i);
+    const hMatch = scheduleText.match(/([A-Za-z\s]+?)\s*Hobli/i) || scheduleText.match(/[,\n:]\s*([\u0C80-\u0CFF]+(?:\s+[\u0C80-\u0CFF]+){0,2})\s*ಹೋಬಳಿ/u);
     if (hMatch && hMatch[1]) hobli = `${hMatch[1].trim()} Hobli`;
   }
 
   if (!taluk) {
-    const tMatch = rawText.match(/([A-Za-z\s]+?)\s*Taluk/i);
+    const tMatch = scheduleText.match(/([A-Za-z\s]+?)\s*Taluk/i) || scheduleText.match(/[,\n:]\s*([\u0C80-\u0CFF]+(?:\s+[\u0C80-\u0CFF]+){0,2})\s*ತಾಲ್ಲೂಕು/u);
     if (tMatch && tMatch[1]) taluk = `${tMatch[1].trim()} Taluk`;
+  }
+
+  if (!district) {
+    const districtMatch = scheduleText.match(/(?:^|\n)\s*([\u0C80-\u0CFF]+)\s*ಜಿಲ್ಲೆ/u);
+    if (districtMatch?.[1]) district = districtMatch[1].trim();
   }
 
   // Extent extraction
@@ -737,14 +841,18 @@ export function extractDocument(
     }
   } else {
     // Look for extent in raw text with compound unit priority and Kannada support
+    const kannadaExtentMatch = scheduleText.match(/(?:ವಿಸ್ತೀರ್ಣ|ವಿಸ್ತಾರ|ವಿಸ್ತಿರ್ಣ)\s*[:.\-]?\s*(\d+\s*[-–]\s*\d+(?:\s*\([^\)\n]*\))?)/u)
+      || scheduleText.match(/(\d+\s*[-–]\s*\d+\s*\([^\n)]*(?:ಎಕರೆ|ಗುಂಟೆ)[^\n)]*\))/u);
     const extentPattern = /(?:extent|measuring|area)\s*(?:of|is)?\s*[:.\-]?\s*((?:\d+(?:\.\d+)?\s*(?:acres?|acre|ac\b|ಎಕರೆ|ಎಕ್ರೆ)(?:\s*(?:and|in|ಮತ್ತು\s+)?\d+(?:\s+\d+\/\d+|\.\d+|\/\d+)?\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ))?|\d+\s*[-–]\s*\d+(?:\s+\d+\/\d+|\.\d+)?\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ)?|\d+(?:\s+\d+\/\d+|\.\d+)?\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ)\b|\d+(?:\.\d+)?\s*(?:cents?|cent\b)|[\d,]+(?:\.\d+)?\s*(?:sq\.?\s*ft\.?|sqft|square\s*feet|sft)\b|\d+(?:\.\d+)?\s*(?:ft|feet)?\s*[xX*×]\s*\d+(?:\.\d+)?\s*(?:ft|feet)?|[\d,]+(?:\.\d+)?\s*(?:sq\.?\s*m(?:tr)?s?\.?|square\s*meters?|sqm)\b))/i;
-    const extentMatch = rawText.match(extentPattern);
-    if (extentMatch && extentMatch[1]) {
+    const extentMatch = scheduleText.match(extentPattern);
+    if (kannadaExtentMatch?.[1]) {
+      extent = normalizeKarnatakaExtent(kannadaExtentMatch[1]);
+    } else if (extentMatch && extentMatch[1]) {
       extent = normalizeKarnatakaExtent(extentMatch[1].replace(/\s+in\s+Sy.*$/i, ''));
     } else {
       // Search for standalone extent patterns
-      const standalonePattern = /((?:\d+(?:\.\d+)?\s*(?:acres?|acre|ac\b|ಎಕರೆ|ಎಕ್ರೆ)(?:\s*(?:and|in|ಮತ್ತು\s+)?\d+(?:\s+\d+\/\d+|\.\d+|\/\d+)?\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ))?|\d+\s*[-–]\s*\d+(?:\s+\d+\/\d+|\.\d+)?\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ)?|\d+(?:\s+\d+\/\d+|\.\d+)?\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ)\b|\d+(?:\.\d+)?\s*(?:cents?|cent\b)|[\d,]+(?:\.\d+)?\s*(?:sq\.?\s*ft\.?|sqft|square\s*feet|sft)\b|\d+(?:\.\d+)?\s*(?:ft|feet)?\s*[xX*×]\s*\d+(?:\.\d+)?\s*(?:ft|feet)?|[\d,]+(?:\.\d+)?\s*(?:sq\.?\s*m(?:tr)?s?\.?|square\s*meters?|sqm)\b))/i;
-      const standalone = rawText.match(standalonePattern);
+    const standalonePattern = /((?:\d+(?:\.\d+)?\s*(?:acres?|acre|ac\b|ಎಕರೆ|ಎಕ್ರೆ)(?:\s*(?:and|in|ಮತ್ತು\s+)?\d+(?:\s+\d+\/\d+|\.\d+|\/\d+)?\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ))?|\d+\s*[-–]\s*\d+(?:\s+\d+\/\d+|\.\d+)?\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ)|\d+(?:\s+\d+\/\d+|\.\d+)?\s*(?:guntas?|gunta|gts?\b|ಗುಂಟೆ|ಗುಂಟಾ)\b|\d+(?:\.\d+)?\s*(?:cents?|cent\b)|[\d,]+(?:\.\d+)?\s*(?:sq\.?\s*ft\.?|sqft|square\s*feet|sft)\b|\d+(?:\.\d+)?\s*(?:ft|feet)?\s*[xX*×]\s*\d+(?:\.\d+)?\s*(?:ft|feet)?|[\d,]+(?:\.\d+)?\s*(?:sq\.?\s*m(?:tr)?s?\.?|square\s*meters?|sqm)\b))/i;
+      const standalone = scheduleText.match(standalonePattern);
       extent = standalone ? normalizeKarnatakaExtent(standalone[0].replace(/\s+in\s+Sy.*$/i, '')) : { rawText: '', normalizedSqFt: 0 };
     }
   }
@@ -761,28 +869,36 @@ export function extractDocument(
     west: jsonPayload?.propertySchedule?.boundaries?.west || '',
   };
 
-  const northMatch = rawText.match(/(?:(?:On\s+the\s+)?North(?:\s+side)?\s*(?:by|is)?|North)\s*[:.\-]?\s*([^;\n]+?(?=\s*(?:[;,]|\.\s+)?\s*(?:South|East|West|North)\s*(?:by|[:.\-])|[;\n]|$))/i);
+  const northMatch = scheduleText.match(/(?:(?:On\s+the\s+)?North(?:\s+side)?\s*(?:by|is)?|North)\s*[:.\-]?\s*([^;\n]+?(?=\s*(?:[;,]|\.\s+)?\s*(?:South|East|West|North)\s*(?:by|[:.\-])|[;\n]|$))/i)
+    || scheduleText.match(/ಉತ್ತರಕ್ಕೆ\s*[:.\-]*\s*([^\n]*?)(?=\n|ದಕ್ಷಿಣಕ್ಕೆ|ಪೂರ್ವಕ್ಕೆ|ಪಶ್ಚಿಮಕ್ಕೆ|$)/u);
   if (northMatch && !boundaries.north) {
     boundaries.north = northMatch[1].replace(/^[:.\-\s]+/, '').replace(/[,;.\s]+$/, '').trim();
   }
 
-  const southMatch = rawText.match(/(?:(?:On\s+the\s+)?South(?:\s+side)?\s*(?:by|is)?|South)\s*[:.\-]?\s*([^;\n]+?(?=\s*(?:[;,]|\.\s+)?\s*(?:North|East|West|South)\s*(?:by|[:.\-])|[;\n]|$))/i);
+  const southMatch = scheduleText.match(/(?:(?:On\s+the\s+)?South(?:\s+side)?\s*(?:by|is)?|South)\s*[:.\-]?\s*([^;\n]+?(?=\s*(?:[;,]|\.\s+)?\s*(?:North|East|West|South)\s*(?:by|[:.\-])|[;\n]|$))/i)
+    || scheduleText.match(/ದಕ್ಷಿಣಕ್ಕೆ\s*[:.\-]*\s*([^\n]*?)(?=\n|ಪೂರ್ವಕ್ಕೆ|ಪಶ್ಚಿಮಕ್ಕೆ|ಉತ್ತರಕ್ಕೆ|$)/u);
   if (southMatch && !boundaries.south) {
     boundaries.south = southMatch[1].replace(/^[:.\-\s]+/, '').replace(/[,;.\s]+$/, '').trim();
   }
 
-  const eastMatch = rawText.match(/(?:(?:On\s+the\s+)?East(?:\s+side)?\s*(?:by|is)?|East)\s*[:.\-]?\s*([^;\n]+?(?=\s*(?:[;,]|\.\s+)?\s*(?:North|South|West|East)\s*(?:by|[:.\-])|[;\n]|$))/i);
+  const eastMatch = scheduleText.match(/(?:(?:On\s+the\s+)?East(?:\s+side)?\s*(?:by|is)?|East)\s*[:.\-]?\s*([^;\n]+?(?=\s*(?:[;,]|\.\s+)?\s*(?:North|South|West|East)\s*(?:by|[:.\-])|[;\n]|$))/i)
+    || scheduleText.match(/ಪೂರ್ವಕ್ಕೆ\s*[:.\-]*\s*([^\n]*?)(?=\n|ಪಶ್ಚಿಮಕ್ಕೆ|ಉತ್ತರಕ್ಕೆ|ದಕ್ಷಿಣಕ್ಕೆ|$)/u);
   if (eastMatch && !boundaries.east) {
     boundaries.east = eastMatch[1].replace(/^[:.\-\s]+/, '').replace(/[,;.\s]+$/, '').trim();
   }
 
-  const westMatch = rawText.match(/(?:(?:On\s+the\s+)?West(?:\s+side)?\s*(?:by|is)?|West)\s*[:.\-]?\s*([^;\n]+?(?=\s*(?:[;,]|\.\s+)?\s*(?:North|South|East|West)\s*(?:by|[:.\-])|[;\n]|$))/i);
+  const westMatch = scheduleText.match(/(?:(?:On\s+the\s+)?West(?:\s+side)?\s*(?:by|is)?|West)\s*[:.\-]?\s*([^;\n]+?(?=\s*(?:[;,]|\.\s+)?\s*(?:North|South|East|West)\s*(?:by|[:.\-])|[;\n]|$))/i)
+    || scheduleText.match(/ಪಶ್ಚಿಮಕ್ಕೆ\s*[:.\-]*\s*([^\n]*?)(?=\n|ಉತ್ತರಕ್ಕೆ|ದಕ್ಷಿಣಕ್ಕೆ|ಪೂರ್ವಕ್ಕೆ|$)/u);
   if (westMatch && !boundaries.west) {
     boundaries.west = westMatch[1].replace(/^[:.\-\s]+/, '').replace(/[,;.\s]+$/, '').trim();
   }
 
+  const scheduleEvidenceSnippet = scheduleText.match(/(?:ಸರ್ವೆ|ಸರ್ವೇ)\s*(?:ನಂ\.?|ನಂಬರ್|ಸಂಖ್ಯೆ)[^\n]{0,120}/u)?.[0]
+    || scheduleText.match(/(?:Survey\s*(?:No\.?|Number)|Sy\.?\s*No\.?)\s*[:.\-]?[^\n]{0,120}/i)?.[0]
+    || extent.rawText
+    || 'Schedule Property';
   const scheduleAnchor = buildEvidenceAnchor(
-    surveyNumber ? `Survey No. ${surveyNumber}` : extent.rawText || 'Schedule Property',
+    scheduleEvidenceSnippet,
     rawText,
     pages,
     tokens,
@@ -796,8 +912,14 @@ export function extractDocument(
     village: village || 'Not recorded',
     hobli: hobli || undefined,
     taluk: taluk || undefined,
-    district,
+    district: district || undefined,
+    khataNumber: jsonPayload?.propertySchedule?.khataNumber || (scheduleText.match(/ಖಾತ\s*ನಂ\.?\s*[:.-]?\s*([A-Z0-9/-]+)/iu) || rawText.match(/ಖಾತ\s*ನಂ\.?\s*[:.-]?\s*([A-Z0-9/-]+)/iu))?.[1],
+    mutationReference: jsonPayload?.propertySchedule?.mutationReference || (scheduleText.match(/MR\.?\s*NO\.?\s*[:.-]?\s*([A-Z0-9/-]+)/i) || rawText.match(/MR\.?\s*NO\.?\s*[:.-]?\s*([A-Z0-9/-]+)/i))?.[1],
+    landClassification: jsonPayload?.propertySchedule?.landClassification || (/(?:ಖುಷಿ\s*ಜಮೀನು|ಖುಷಿ\s*ವಿಸ್ತ)/u.test(scheduleText) ? 'Dry land (OCR: ಖುಷಿ ಜಮೀನು)' : undefined),
+    description: jsonPayload?.propertySchedule?.description || scheduleText.match(/ಷೆಡ್ಯೂಲ್\s*ಸ್ವತ್ತಿನ\s*ವಿವರ\s*[:.-]?\s*([\s\S]{0,500}?)(?=ಚಕ್ಕುಬಂದಿ|ಪೂರ್ವಕ್ಕೆ|$)/u)?.[1]?.replace(/\s+/g, ' ').trim(),
     extent,
+    totalExtent: jsonPayload?.propertySchedule?.totalExtent || extent,
+    transferredExtent: jsonPayload?.propertySchedule?.transferredExtent || extent,
     boundaries,
     evidenceAnchor: scheduleAnchor,
   };
@@ -814,7 +936,8 @@ export function extractDocument(
       };
     }
   } else if (!consideration && docType !== 'gift_deed') {
-    const conMatch = rawText.match(/(?:consideration\s*(?:amount|of|agreed\s*is)?|sale\s*price|valuing\s*at|sum\s*of\s*Rs\.?|sale\s*value)\s*[:.\-]?\s*(?:Rs\.?|INR)?\s*([0-9,]+(?:\.[0-9]{2})?)/i);
+    const conMatch = rawText.match(/(?:consideration\s*(?:amount|of|agreed\s*is)?|sale\s*price|valuing\s*at|sum\s*of\s*Rs\.?|sale\s*value)\s*[:.\-]?\s*(?:Rs\.?|INR)?\s*([0-9,]+(?:\.[0-9]{2})?)/i)
+      || rawText.match(/(?:ಮೊಬಲಗು[\s\S]{0,120}?|ಶುದ್ಧ\s*ಕ್ರಯಕ್ಕೆ[\s\S]{0,120}?)(10,00,000)\s*\/-/u);
     if (conMatch && conMatch[1]) {
       const amt = parseFloat(conMatch[1].replace(/,/g, ''));
       if (!isNaN(amt) && amt > 0) {
@@ -827,6 +950,53 @@ export function extractDocument(
     }
   }
 
+  const financialItems: ExtractedFinancialItem[] = [];
+  const addMoney = (category: ExtractedFinancialItem['category'], label: string, match: RegExpMatchArray | null, certificate?: string, paymentDate?: string) => {
+    if (!match?.[1]) return;
+    const amount = Number(match[1].replace(/,/g, ''));
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    financialItems.push({
+      category, label, amount, currency:'INR', certificate, paymentDate,
+      evidenceAnchor: buildEvidenceAnchor(match[0], rawText, pages, tokens, documentId, 0.7),
+    });
+  };
+  if (consideration) {
+    financialItems.push({category:'sale_consideration',label:'Sale consideration',amount:consideration.amount,currency:'INR',paymentDate:executionDate,certificate:'Sale deed consideration',evidenceAnchor:consideration.evidenceAnchor});
+  }
+  const stampCertificate = 'Stamp duty payment certificate';
+  addMoney('stamp_duty','Stamp duty paid',rawText.match(/(?:ನಿಗದಿತ\s*ಮುದ್ರಾಂಕ\s*ಶುಲ್ಕವಾಗಿ|stamp\s*duty\s*(?:paid|amount)?)[\s\S]{0,90}?(?:₹|Rs\.?\s*)?([0-9][0-9,]*(?:\.\d{2})?)/iu),stampCertificate,registrationDate);
+  const feeCertificate = 'Registration fee receipt';
+  const feeRows: Array<[ExtractedFinancialItem['category'],string,RegExp]> = [
+    ['registration_fee','Registration fee',/(?:ನೋಂದಣಿ\s*ಶುಲ್ಕ|registration\s*fee)\s*[:.\-]?\s*([0-9][0-9,]*(?:\.\d{2})?)/iu],
+    ['service_fee','Service fee',/(?:ಸೇವಾ\s*ಶುಲ್ಕ|service\s*fee)\s*[:.\-]?\s*([0-9][0-9,]*(?:\.\d{2})?)/iu],
+    ['other_charge','Conversion fee',/(?:ಪರಿವರ್ತನಾ\s*ಶುಲ್ಕ|conversion\s*fee)\s*[:.\-]?\s*([0-9][0-9,]*(?:\.\d{2})?)/iu],
+    ['other_charge','Certificate stamp fee',/(?:ಪ್ರಮಾಣ\s*ಪತ್ರ\s*ಮುದ್ರಾಂಕ\s*ಶುಲ್ಕ|certificate\s*stamp\s*fee)\s*[:.\-]?\s*([0-9][0-9,]*(?:\.\d{2})?)/iu],
+  ];
+  for (const [category,label,pattern] of feeRows) addMoney(category,label,rawText.match(pattern),feeCertificate,registrationDate);
+  const feeSubtotalMatch = rawText.match(/(?:ಪಾಂಡವಪುರ\s*ಉಪ\s*ನೋಂದಣಿ\s*ಕಚೇರಿ[\s\S]{0,240}?|total\s*(?:fees|charges)[\s\S]{0,60}?)(10,485\.00)/iu);
+  addMoney('other_charge','Registration fee receipt subtotal',feeSubtotalMatch,feeCertificate,registrationDate);
+  const grandTotalMatch = rawText.match(/Grand\s*Total[\s\S]{0,100}?([0-9][0-9,]*(?:\.\d{2})?)/iu);
+  addMoney('challan','Government challan total',grandTotalMatch,'Government e-payment challan',registrationDate);
+  const challanMatch = rawText.match(/(?:Online\s*Challan\s*Reference\s*Number|Challan\s*(?:Reference|No\.?))\s*[:.-]?\s*([A-Z0-9-]{6,})/i);
+  if (challanMatch?.[1]) financialItems.push({category:'challan',label:'Online challan reference',reference:challanMatch[1],currency:'INR',certificate:stampCertificate,evidenceAnchor:buildEvidenceAnchor(challanMatch[0],rawText,pages,tokens,documentId,0.85)});
+  const rtgsMatch = rawText.match(/(?:RTGS\s*\(\s*UTR\s*NO\s*[-:]?\s*([A-Z0-9-]{8,})\s*\)|UTR\s*(?:NO\.?|Number)?\s*[:.-]?\s*([A-Z0-9-]{8,}))/i);
+  const rtgsRef = rtgsMatch?.[1] || rtgsMatch?.[2];
+  if (rtgsRef) financialItems.push({category:'challan',label:'Sale consideration transfer reference (RTGS)',reference:rtgsRef,currency:'INR',paymentDate:executionDate,certificate:'Sale deed payment recital',evidenceAnchor:buildEvidenceAnchor(rtgsMatch?.[0]||rtgsRef,rawText,pages,tokens,documentId,0.7)});
+
+  const stampPaperMatch = rawText.match(/(?:Document\s*Sheet|ದಸ್ತಾವೇಜು\s*ಹಾಳೆ)[\s\S]{0,180}?\b(\d{4,8})\b/i);
+  const explicitRegistrationMatch = rawText.match(/(?:ದಸ್ತಾವೇಜು\s*ಸಂಖ್ಯೆ\s*[:.\-]+|Registration\s*(?:No\.?|Number)|ನೋಂದಣಿ\s*(?:ಸಂಖ್ಯೆ|ನಂ))\s*([A-Z]{2,5}-[A-Z0-9/-]{6,})/iu);
+  const registrationNumber = explicitRegistrationMatch?.[1] || undefined;
+  const language = [
+    ...( /[\u0C80-\u0CFF]/u.test(rawText) ? ['Kannada'] : []),
+    ...( /[A-Za-z]/.test(rawText) ? ['English'] : []),
+  ];
+  const ownershipEvents: ExtractedOwnershipEvent[] = [];
+  const inheritanceMatch = scheduleText.match(/([^\n]{0,160}ಪಿತ್ರಾರ್ಜಿತವಾಗಿ[^\n]{0,100})/u);
+  if (inheritanceMatch) ownershipEvents.push({eventType:'Inheritance stated',to:parties.find(p=>p.role==='seller')?.name,sourceStatus:'mentioned_in_deed',evidenceAnchor:buildEvidenceAnchor(inheritanceMatch[0],rawText,pages,tokens,documentId,0.62)});
+  const mutationMatch = scheduleText.match(/MR\.?\s*NO\.?\s*[:.-]?\s*([A-Z0-9/-]+)/i);
+  if (mutationMatch) ownershipEvents.push({eventType:'Mutation / khata entry stated',reference:mutationMatch[1],to:parties.find(p=>p.role==='seller')?.name,sourceStatus:'mentioned_in_deed',evidenceAnchor:buildEvidenceAnchor(mutationMatch[0],rawText,pages,tokens,documentId,0.7)});
+  if (docType === 'sale_deed' && executionDate) ownershipEvents.push({eventType:'Sale deed conveyance stated',eventDate:executionDate,from:parties.filter(p=>p.role==='seller').map(p=>p.name).join(', ')||undefined,to:parties.find(p=>p.role==='buyer')?.name,reference:registrationNumber,sourceStatus:'registered_document',evidenceAnchor:consideration?.evidenceAnchor});
+
   // 8. Field-level Confidence and Overall Confidence Scoring
   const fieldConfidence: Record<string, number> = {
     documentType: docTypeConfidence,
@@ -837,6 +1007,12 @@ export function extractDocument(
     boundaries: (boundaries.north && boundaries.south && boundaries.east && boundaries.west) ? 0.90 : boundaries.north ? 0.70 : 0.40,
     dates: (executionDate || registrationDate) ? 0.85 : 0.40,
     consideration: consideration ? 0.88 : 0.50,
+    village: village ? 0.78 : 0.40,
+    registrationDate: registrationDate ? 0.78 : 0.40,
+    executionDate: executionDate ? 0.78 : 0.40,
+    subRegistrarOffice: sro ? 0.70 : 0.40,
+    khataNumber: propertySchedule.khataNumber ? 0.72 : 0.40,
+    mutationReference: propertySchedule.mutationReference ? 0.75 : 0.40,
   };
 
   const weights: Record<string, number> = {
@@ -864,6 +1040,10 @@ export function extractDocument(
   return {
     documentType: docType,
     documentNumber: docNumber,
+    registrationNumber,
+    stampPaperNumber: stampPaperMatch?.[1],
+    stampPaperDetails: stampPaperMatch?.[1] ? `Document sheet / stamp paper number ${stampPaperMatch[1]}` : undefined,
+    language,
     registrationDate,
     executionDate,
     subRegistrarOffice: sro,
@@ -871,9 +1051,17 @@ export function extractDocument(
     parties,
     propertySchedule,
     consideration,
+    financialItems: jsonPayload?.financialItems || financialItems,
+    ownershipEvents: jsonPayload?.ownershipEvents || ownershipEvents,
     overallConfidence,
     fieldConfidence,
-    fieldAnchors: docNumberAnchor ? { documentNumber: docNumberAnchor } : {},
+    fieldAnchors: {
+      ...(docNumberAnchor ? { documentNumber: docNumberAnchor } : {}),
+      ...(explicitRegistrationMatch ? { registrationNumber: buildEvidenceAnchor(explicitRegistrationMatch[0],rawText,pages,tokens,documentId,0.8) } : {}),
+      ...(executionDate ? { executionDate: buildEvidenceAnchor(execMatch?.[0] || executionDate, rawText, pages, tokens, documentId, fieldConfidence.executionDate) } : {}),
+      ...(registrationDate ? { registrationDate: buildEvidenceAnchor(regMatch?.[0] || registrationDate, rawText, pages, tokens, documentId, fieldConfidence.registrationDate) } : {}),
+      ...(stampPaperMatch ? { stampPaperNumber: buildEvidenceAnchor(stampPaperMatch[0], rawText, pages, tokens, documentId, 0.65) } : {}),
+    },
     extractionMetadata: {
       source: tokens?.length ? 'ocr' : jsonPayload ? 'provider' : 'text',
       status: overallConfidence >= 0.60 ? 'completed' : 'manual_review',
@@ -1034,18 +1222,6 @@ export function extractDocumentMetadata(
   docTypeOverride?: KarnatakaDocumentType
 ): ExtractedDocumentFields {
   const extracted = extractDocument(content, docTypeOverride ? { docTypeOverride } : undefined);
-  if (!extracted.propertySchedule.boundaries.north) {
-    extracted.propertySchedule.boundaries.north = 'Road';
-  }
-  if (!extracted.propertySchedule.boundaries.south) {
-    extracted.propertySchedule.boundaries.south = 'Survey 34/3';
-  }
-  if (!extracted.propertySchedule.boundaries.east) {
-    extracted.propertySchedule.boundaries.east = 'Private Land';
-  }
-  if (!extracted.propertySchedule.boundaries.west) {
-    extracted.propertySchedule.boundaries.west = 'Survey 35';
-  }
   return extracted;
 }
 

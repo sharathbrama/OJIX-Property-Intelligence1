@@ -32,10 +32,13 @@ services:
       NODE_ENV: ${NODE_ENV:-development}
       PORT: 4000
       DATABASE_URL: mysql://ojix:ojix_local_only@db:3306/ojix_property_mysql
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:8080,http://web:8080}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:8080,http://web:8080}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-}
       SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-}
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      OCR_WORKER_TOKEN: ${OCR_WORKER_TOKEN:-}
+      DOCUMENT_AI_ESTIMATED_COST_PER_PAGE_USD: ${DOCUMENT_AI_ESTIMATED_COST_PER_PAGE_USD:-0}
       DATABASE_SSL: ${DATABASE_SSL:-false}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -69,12 +72,41 @@ services:
     networks:
       - ojix_net
 
+  ocr-worker:
+    profiles: ["document-ai"]
+    build:
+      context: ./apps/api/worker
+      dockerfile: Dockerfile
+    container_name: ojix-document-ai-worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: mysql://ojix:ojix_local_only@db:3306/ojix_property_mysql
+      OCR_API_INTERNAL_URL: http://api:4000
+      OCR_WORKER_TOKEN: ${OCR_WORKER_TOKEN:-}
+      DOCUMENT_AI_PROJECT_ID: ${DOCUMENT_AI_PROJECT_ID:-}
+      DOCUMENT_AI_LOCATION: ${DOCUMENT_AI_LOCATION:-us}
+      DOCUMENT_AI_PROCESSOR_ID: ${DOCUMENT_AI_PROCESSOR_ID:-}
+      DOCUMENT_AI_PROCESSOR_VERSION: ${DOCUMENT_AI_PROCESSOR_VERSION:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET:-private-documents}
+      OCR_WORKER_POLL_SECONDS: 3
+    volumes:
+      - ojix_uploads:/app/uploads:ro
+      - ${GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH:-/dev/null}:/run/secrets/google-cloud.json:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - ojix_net
+
   web:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
-      args:
-        VITE_API_URL: ""
     container_name: ojix-web
     restart: unless-stopped
     depends_on:

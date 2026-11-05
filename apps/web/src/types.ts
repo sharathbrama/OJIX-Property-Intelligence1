@@ -32,6 +32,8 @@ export interface ExtractedParty {
   role: string;
   relationship?: string;
   address?: string;
+  age?: number;
+  ownershipShare?: string;
   panOrId?: string;
   evidenceAnchor?: EvidenceAnchor;
 }
@@ -60,6 +62,12 @@ export interface PropertySchedule {
   hobli?: string;
   taluk?: string;
   district?: string;
+  khataNumber?: string;
+  mutationReference?: string;
+  landClassification?: string;
+  description?: string;
+  totalExtent?: PropertyExtent;
+  transferredExtent?: PropertyExtent;
   extent: PropertyExtent;
   boundaries: FourSideBoundaries;
   evidenceAnchor?: EvidenceAnchor;
@@ -69,6 +77,27 @@ export interface Consideration {
   amount: number;
   currency: 'INR';
   marketValue?: number;
+  evidenceAnchor?: EvidenceAnchor;
+}
+
+export interface ExtractedFinancialItem {
+  category: string;
+  label: string;
+  amount?: number;
+  currency: 'INR';
+  paymentDate?: string;
+  reference?: string;
+  certificate?: string;
+  evidenceAnchor?: EvidenceAnchor;
+}
+
+export interface ExtractedOwnershipEvent {
+  eventType: string;
+  eventDate?: string;
+  from?: string;
+  to?: string;
+  reference?: string;
+  sourceStatus: 'mentioned_in_deed' | 'registered_document';
   evidenceAnchor?: EvidenceAnchor;
 }
 
@@ -90,6 +119,10 @@ export interface ReviewState {
 export interface ExtractedDocumentFields {
   documentType: KarnatakaDocumentType;
   documentNumber: string;
+  registrationNumber?: string;
+  stampPaperNumber?: string;
+  stampPaperDetails?: string;
+  language?: string[];
   registrationDate?: string;
   executionDate?: string;
   subRegistrarOffice?: string;
@@ -97,6 +130,8 @@ export interface ExtractedDocumentFields {
   parties: ExtractedParty[];
   propertySchedule: PropertySchedule;
   consideration?: Consideration;
+  financialItems?: ExtractedFinancialItem[];
+  ownershipEvents?: ExtractedOwnershipEvent[];
   overallConfidence: number;
   fieldConfidence: Record<string, number>;
   fieldAnchors?: Record<string, EvidenceAnchor>;
@@ -118,6 +153,8 @@ export interface PropertyDoc {
   sha256?: string;
   doc_type?: KarnatakaDocumentType | string;
   processing_status: string;
+  review_status?: string;
+  extracted_text?: string;
   extracted_fields?: ExtractedDocumentFields | null;
   created_at: string;
 }

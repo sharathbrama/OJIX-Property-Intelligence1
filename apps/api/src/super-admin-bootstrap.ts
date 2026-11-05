@@ -27,7 +27,7 @@ export function isConfiguredSuperAdminEmail(email: string | undefined, env: Node
   return Boolean(email && configuredSuperAdminEmails(env).has(email.trim().toLowerCase()));
 }
 
-export function validateSuperAdminBootstrapEnvironment(env: NodeJS.ProcessEnv = process.env, production = env.NODE_ENV === 'production') {
+export function validateSuperAdminBootstrapEnvironment(env: NodeJS.ProcessEnv = process.env) {
   const emailValue = env.SUPER_ADMIN_EMAIL?.trim() || '';
   const password = env.SUPER_ADMIN_PASSWORD || '';
   const hasEmail = Boolean(emailValue);
@@ -35,9 +35,6 @@ export function validateSuperAdminBootstrapEnvironment(env: NodeJS.ProcessEnv = 
 
   if (hasEmail !== hasPassword) {
     throw new Error('SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD must be configured together.');
-  }
-  if (production && !hasEmail) {
-    throw new Error('SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD are required in production.');
   }
   if (!hasEmail) return null;
 
@@ -54,7 +51,7 @@ export function validateSuperAdminBootstrapEnvironment(env: NodeJS.ProcessEnv = 
 
 /**
  * Idempotently provisions the configured platform identity. Existing passwords
- * are never replaced during a redeploy. Only the explicitly configured email
+ * are never replaced during a restart. Only the explicitly configured email
  * receives the platform role; authGuard maps that role to Owner's workspace
  * permissions while keeping Super Admin authorization as a separate claim.
  */
@@ -63,7 +60,7 @@ export async function bootstrapSuperAdmin(
   env: NodeJS.ProcessEnv = process.env,
   dependencies: { hash?: (password: string) => string; newId?: () => string } = {},
 ) {
-  const credentials = validateSuperAdminBootstrapEnvironment(env, false);
+  const credentials = validateSuperAdminBootstrapEnvironment(env);
   if (!credentials) return { configured: false, created: false };
 
   const connection = await pool.getConnection();

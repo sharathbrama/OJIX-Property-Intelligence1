@@ -54,11 +54,11 @@ class BootstrapStore implements BootstrapConnection {
 
 const makePool = (connection: BootstrapStore) => ({ getConnection: async () => connection });
 
-test('production bootstrap requires a strong email/password pair', () => {
-  assert.throws(() => validateSuperAdminBootstrapEnvironment({ NODE_ENV: 'production' }), /required in production/);
+test('optional Super Admin bootstrap credentials are validated when provided', () => {
+  assert.equal(validateSuperAdminBootstrapEnvironment({ NODE_ENV: 'production' }), null);
   assert.throws(() => validateSuperAdminBootstrapEnvironment({ ...credentials, SUPER_ADMIN_PASSWORD: '' }), /configured together/);
   assert.throws(() => validateSuperAdminBootstrapEnvironment({ ...credentials, SUPER_ADMIN_PASSWORD: 'weak' }), /12 to 128/);
-  assert.equal(validateSuperAdminBootstrapEnvironment(credentials, true)?.email, 'owner@example.test');
+  assert.equal(validateSuperAdminBootstrapEnvironment(credentials)?.email, 'owner@example.test');
 });
 
 test('Super Admin email matching is normalized and supports the legacy allowlist', () => {

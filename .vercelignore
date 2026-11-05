@@ -1,7 +1,0 @@
-.env
-.env.*
-!.env.example
-playwright-report/
-test-results/
-qa_*.csv
-qa_*.xlsx
