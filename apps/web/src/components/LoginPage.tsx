@@ -11,6 +11,19 @@ interface LoginPageProps {
   expectedRole?: string;
 }
 
+const roleDefaultPasswords: Record<string, string> = {
+  'super-admin': 'SuperAdmin@3126',
+  owner: 'Owner@3126',
+  admin: 'Admin@3126',
+  lawyer: 'Lawyer@3126',
+  analyst: 'Analyst@3126',
+  operations: 'Operations@3126',
+  consultant: 'Consultant@3126',
+  support: 'Support@3126',
+  data_steward: 'DataSteward@3126',
+  viewer: 'Viewer@3126',
+};
+
 const roleLoginCopy:Record<string,{label:string;description:string}>={
   'super-admin':{label:'Super Admin',description:'Authorized platform administrators only.'},owner:{label:'Workspace Owner',description:'Manage workspace operations and property matters.'},admin:{label:'Organization Admin',description:'Manage organization members, workflows and records.'},lawyer:{label:'Legal Reviewer',description:'Review title evidence and due-diligence findings.'},analyst:{label:'Evidence Analyst',description:'Analyze property records and prepare assigned matters.'},operations:{label:'Document Operations',description:'Manage document intake and processing queues.'},consultant:{label:'Consultant',description:'Review assigned client dossiers and evidence.'},support:{label:'Support',description:'Access authorized workspace diagnostics.'},data_steward:{label:'Data Steward',description:'Maintain source data and reference records.'},viewer:{label:'Viewer',description:'Access approved read-only workspace records.'}
 };
@@ -297,6 +310,12 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       .then(data => {
         if (data.accounts) {
           setDummyAccounts(data.accounts);
+          const initial = data.accounts.find((a: any) => (selectedRole === 'super-admin' ? a.isSuperAdmin : a.role === selectedRole)) || data.accounts[0];
+          if (initial) {
+            setEmail(initial.email);
+            setSelectedUid(initial.uid);
+            setPassword(roleDefaultPasswords[selectedRole] || 'Owner@3126');
+          }
         }
       })
       .catch(() => setDummyAccounts([]));
@@ -607,7 +626,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
               <label><span>Work email</span><div className="executive-input"><UserCheck/><input autoFocus type="email" autoComplete="username" value={email} onChange={event=>{setEmail(event.target.value);setError('');}} required placeholder="name@organisation.com"/></div></label>
               <label><span>Password</span><div className="executive-input"><Lock/><input type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={event=>{setPassword(event.target.value);setError('');}} required/><button type="button" aria-label={showPassword?'Hide password':'Show password'} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff/>:<Eye/>}</button></div></label>
               <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/>Code expires in 10 minutes</span><button type="button" onClick={openPasswordRecovery}>Forgot password?</button></div>
-              <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'||!selectedRole}>{loading?<><span className="executive-spinner"/>Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
+              <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'||!selectedRole}>{loading?<><span className="executive-spinner"/>Authenticating...</>:<>Continue to Workspace <ArrowRight/></>}</button>
             </form>}
             {recoveryStep==='request'&&<form className="executive-login-form landing-modal-form recovery-form" onSubmit={requestPasswordRecovery}>
               <div className="login-selected-role"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Recovering access for</small><strong>{roleLoginCopy[selectedRole]?.label}</strong></span></div>

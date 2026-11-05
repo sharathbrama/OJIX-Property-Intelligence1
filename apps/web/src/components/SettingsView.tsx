@@ -273,8 +273,8 @@ export function SettingsView({ apiUrl, currentUser }: { apiUrl: string; currentU
             <div className="panel" style={{ padding: '20px' }}>
               <div className="panel-head" style={{ padding: 0, marginBottom: '16px' }}>
                 <div>
-                  <h3>Firm Security & Multi-Factor Authentication (FRD §20)</h3>
-                  <p>Enforce mandatory two-factor authentication (OTP) for privileged personnel</p>
+                  <h3>Firm Security & Multi-Factor Authentication (FRD §6.1 AUTH-01 / §20)</h3>
+                  <p>Enforce mandatory two-factor authentication (OTP) for workspace members and reviewers</p>
                 </div>
                 <ShieldCheck size={18} style={{ color: '#64748b' }} />
               </div>
@@ -290,10 +290,10 @@ export function SettingsView({ apiUrl, currentUser }: { apiUrl: string; currentU
                   />
                   <div>
                     <span style={{ fontWeight: 600, fontSize: '13px', color: '#1e293b', display: 'block' }}>
-                      Enforce Mandatory MFA for Privileged Accounts (Advocates & Admins)
+                      Enforce Mandatory MFA for Workspace Accounts & Reviewers
                     </span>
                     <span style={{ fontSize: '12px', color: '#64748b', lineHeight: 1.5, display: 'block', marginTop: '2px' }}>
-                      Requires 6-digit email OTP verification on every login for Managing Partners (Owner), Organization Admins, and Lead Advocates (Lawyers). Safeguards title dossiers, unreleased findings, and legal opinions from unauthorized access.
+                      Requires 6-digit email OTP verification on every login for Managing Partners (Owner), Organization Admins, Lead Advocates (Lawyers), Evidence Analysts, Operations, and Consultants per FRD AUTH-01. When turned off, workspace members can sign in directly with their password.
                     </span>
                   </div>
                 </label>

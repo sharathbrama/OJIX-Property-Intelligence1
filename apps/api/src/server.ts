@@ -975,7 +975,8 @@ app.post('/api/auth/login/request-otp', loginOtpRequestRateLimit, asyncRoute(asy
   const orgId = membership.rows[0].organization_id;
   const settingsRes = await pool.query('SELECT enforce_mfa_privileged FROM workspace_settings WHERE tenant_id=? LIMIT 1', [orgId]);
   const isMfaEnforced = settingsRes.rowCount ? Boolean(settingsRes.rows[0].enforce_mfa_privileged) : true;
-  const isPrivilegedRole = ['owner', 'admin', 'lawyer', 'super-admin'].includes(authenticatedLoginRole);
+  // FRD Section 6.1 AUTH-01: User can authenticate and MFA can be enforced for admins/reviewers
+  const isPrivilegedRole = ['owner', 'admin', 'lawyer', 'analyst', 'operations', 'consultant', 'data_steward', 'super-admin'].includes(authenticatedLoginRole);
   const requiresMfa = isMfaEnforced && isPrivilegedRole;
 
   if (!requiresMfa) {
@@ -1117,7 +1118,8 @@ app.post('/api/auth/login', asyncRoute(async (req, res) => {
   const orgId = membership.rows[0].organization_id;
   const settingsRes = await pool.query('SELECT enforce_mfa_privileged FROM workspace_settings WHERE tenant_id=? LIMIT 1', [orgId]);
   const isMfaEnforced = settingsRes.rowCount ? Boolean(settingsRes.rows[0].enforce_mfa_privileged) : true;
-  const isPrivilegedRole = ['owner', 'admin', 'lawyer', 'super-admin'].includes(authenticatedLoginRole);
+  // FRD Section 6.1 AUTH-01: User can authenticate and MFA can be enforced for admins/reviewers
+  const isPrivilegedRole = ['owner', 'admin', 'lawyer', 'analyst', 'operations', 'consultant', 'data_steward', 'super-admin'].includes(authenticatedLoginRole);
   const requiresMfa = isMfaEnforced && isPrivilegedRole;
 
   if (requiresMfa) {

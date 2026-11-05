@@ -1,0 +1,2363 @@
+=== OBJ 13 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+2
+0. Contents
+1. Executive summary
+2. Product vision, problem and objectives
+3. Users, roles and operating model
+4. Scope and product boundaries
+5. End-to-end user journeys
+6. Functional requirements
+7. Core data model and provenance model
+8. Property intelligence and GIS rules engine
+9. Document intelligence and evidence processing
+10. Legal research and knowledge layer
+11. Government notification and change monitoring
+12. Risk engine and explainable scoring
+13. Reports, exports and collaboration
+14. Administration, configuration and source registry
+15. Non-functional requirements
+16. Technical architecture
+17. Recommended technology stack
+18. AI architecture and guardrails
+19. Integrations and source acquisition strategy
+20. Security, privacy and compliance controls
+21. API design
+22. Database schema blueprint
+23. Async jobs, queues and event contracts
+24. Deployment, CI/CD and environments
+25. Observability, reliability and disaster recovery
+26. Testing and quality engineering
+27. MVP, phases and delivery plan
+28. Team structure and engineering workflow
+29. Acceptance criteria and launch gate
+30. Risks and mitigations
+31. Reference architecture summary
+32. Sources and evidence base
+1. Executive summary
+OJIX Property Intelligence is proposed as a single, reusable intelligence platform for lawyers, property
+consultants, developers, due-diligence teams and serious buyers who need to answer one question quickly:
+“What do we know about this property, what evidence supports it, what is inconsistent, what could affect the
+transaction, and what requires professional review?”
+The concept consolidates the requirements discussed around legal office automation, property due diligence,
+survey and parcel maps, Rajakaluve / storm-water-drain risk, lakes and water bodies, land-use and
+development-plan checks, title-chain reconstruction, OCR, government notifications, case-law research,
+structured legal reporting and subscription-based delivery.
+
+=== OBJ 45 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+3
+The product is intentionally modular. Property Intelligence is the first commercial wedge; the same underlying
+platform can later expose Document Intelligence, Legal Research, Workflow Automation, Notification
+Monitoring and enterprise APIs without duplicating identity, documents, search, AI, audit and evidence
+services.
+Product thesis
+Build one trusted evidence layer, then package it into focused legal/property workflows.
+The differentiator is not “an AI chat box”; it is traceable evidence, geospatial context, deterministic rules,
+source freshness and professional reviewability.
+Capability
+Business outcome
+MVP stance
+Property dossier
+Single matter workspace for a property
+IN
+Document intelligence
+Turn deeds, RTCs, ECs, khata and other
+files into structured evidence
+IN
+Title chain
+Timeline and relationship graph of
+ownership / instruments
+IN
+GIS risk screening
+Survey parcel, Rajakaluve, waterbody,
+planning and proximity checks
+IN
+Discrepancy engine
+Cross-document mismatch detection with
+evidence anchors
+IN
+Legal research
+Search, summarize and cite legal
+sources / uploaded authorities
+IN-LITE
+Notification monitoring
+Track relevant government / planning
+changes
+PHASE 2
+Enterprise API
+Expose normalized property intelligence
+to other systems
+PHASE 2
+2. Product vision, problem and objectives
+2.1 Problem statement
+
+Property due diligence is fragmented across documents, portals, maps, local knowledge, manual searches
+and professional judgment.
+
+Critical signals are often spatial: survey boundaries, drains, lakes, canals, roads, planning designations and
+proposed infrastructure.
+
+The same fact may appear under different names, spellings, survey subdivisions, owner names or
+document formats.
+
+Traditional workflows do not provide a durable evidence trail showing which source supported each
+finding and when it was checked.
+
+AI can speed extraction and research, but ungrounded output is unacceptable for high-impact property
+decisions.
+2.2 Product objectives
+Code
+Objective
+O1
+Create a matter-centric workspace that combines
+documents, property identifiers, map layers, research and
+review tasks.
+O2
+Convert unstructured property documents into structured
+fields with confidence scores and page-level evidence
+anchors.
+
+=== OBJ 50 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+4
+Code
+Objective
+O3
+Detect inconsistencies across title, property, survey, owner,
+extent, dates and encumbrance evidence.
+O4
+Screen location-based risk using configurable geospatial
+rules and official/publicly documented datasets where
+permitted.
+O5
+Generate review-ready reports where each material
+conclusion links to evidence and source freshness.
+O6
+Provide an architecture that can scale from a pilot law firm
+to multi-tenant SaaS without premature microservices.
+2.3 Success metrics - product targets
+Metric
+Target
+Measurement
+Time to first dossier
+< 10 minutes
+From property intake to saved property
+record
+Document extraction review load
+> 80% of common fields auto-populated
+Sampled human review
+Traceability
+100% of report material findings have
+evidence references
+Automated report QA
+Search response
+P95 < 2 seconds for internal indexed
+corpus
+APM
+Map screening
+P95 < 3 seconds for standard single-
+property screen
+APM
+Async document job completion
+> 98% successful after retries
+Job telemetry
+Critical finding override
+Human can override / accept every rule
+result
+UX + audit tests
+Auditability
+100% of source refreshes and reviewer
+changes logged
+Audit log checks
+Design target
+These are engineering/product targets, not guarantees of legal accuracy or government-
+service availability.
+3. Users, roles and operating model
+Role
+Primary tasks
+Permissions
+Organisation Admin
+Users, plans, source settings, retention,
+billing
+Full tenant administration
+Lead Advocate / Reviewer
+Owns final due-diligence review and
+sign-off
+Create/edit/review/export dossiers
+Associate / Analyst
+Research, uploads, extraction review,
+evidence tagging
+Create/edit, no tenant admin
+Paralegal / Operations
+Document intake, metadata cleanup, task
+execution
+Intake + workflow tasks
+Property Consultant
+Prepare client-ready dossier and issue list
+Matter access, exports
+Client / Read-only Reviewer
+View approved findings and reports
+Read-only selected matters
+OJIX Support
+Troubleshooting with time-bound
+support access
+Scoped support, audited
+
+=== OBJ 55 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+5
+Role
+Primary tasks
+Permissions
+OJIX Data Steward
+Source mappings, rule configuration,
+ingestion QA
+Platform data admin
+3.1 Operating model
+
+Tenant -> Workspace -> Matter -> Property -> Sources -> Evidence -> Findings -> Tasks -> Report
+
+Every derived fact has provenance. Every high-impact rule has a reason, inputs, rule version and reviewer
+state.
+
+AI is an assistant inside a deterministic evidence pipeline, not the system of record.
+4. Scope and product boundaries
+4.1 In scope for MVP
+
+Karnataka / Bengaluru-first property dossier and matter management.
+
+Property identity fields: district, taluk, hobli, village, survey number, subdivision, site / property ID where
+applicable, extent, address and coordinates.
+
+Document upload and classification for common property/legal documents.
+
+OCR + structured extraction + evidence anchors.
+
+Title-chain workspace and owner/instrument timeline.
+
+Cross-document mismatch detection.
+
+GIS risk screening for configured layers such as survey parcel geometry, storm-water drain / Rajakaluve,
+lakes/waterbodies, planning and road/infrastructure overlays where licensed/available.
+
+Legal research workspace with citations and source links.
+
+Risk register and explainable findings.
+
+Reviewable PDF/HTML report generation.
+
+RBAC, audit logs, tenant isolation, retention controls and operational monitoring.
+4.2 Explicitly out of scope / requires later authority or commercial integrations
+
+Issuing any government certificate.
+
+Automatically declaring legal ownership, legality, encroachment or title validity.
+
+Unapproved scraping or bypassing of government portals, CAPTCHAs or authentication controls.
+
+Automated legal representation before a court or authority.
+
+Native mobile apps as a first requirement; PWA is the baseline.
+
+Country-wide cadastral completeness on day one.
+
+Large-scale litigation management before the property intelligence foundation is stable.
+5. End-to-end user journeys
+Journey
+Name
+Flow
+J1
+New property intake
+Create matter -> enter address or survey
+identifiers -> geocode -> upload
+documents -> run extraction -> run GIS
+screen -> review findings -> generate
+initial report.
+J2
+Lawyer due diligence
+Open dossier -> view executive risk panel
+-> inspect title chain -> inspect
+contradictions -> verify map layers ->
+create queries/tasks -> finalize report.
+J3
+Document-first intake
+Bulk upload -> classify -> OCR -> field
+extraction -> evidence verification ->
+attach documents to property/matter.
+
+=== OBJ 60 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+6
+Journey
+Name
+Flow
+J4
+Map-first investigation
+Search village/survey -> select
+parcel/layer -> show intersecting / nearby
+features -> create evidence snapshot ->
+attach to finding.
+J5
+Notification watch
+Define property and relevant authority
+scopes -> scheduled source checks ->
+detect changes -> create alert -> review
+source -> update finding.
+J6
+Client report
+Reviewer approves findings -> select
+report template -> render evidence links
+and map snapshots -> export PDF -> share
+read-only copy.
+5.1 Field observation from supplied maps
+The supplied images show the kind of evidence the system must be able to ingest, reference and contextualize.
+One image shows parcel/survey numbering over satellite imagery and a tank/water-body context around
+Arakere Village; another shows a dense administrative/cadastral map across Bengaluru North, East and South.
+The photographs do not establish the exact map producer, legal status, coordinate reference system or
+currentness, so the product must store source metadata and treat these as evidence artifacts until verified.
+Observed data patterns to support
+Parcel numbers, village names, tank/waterbody labels,
+administrative areas, boundary lines, satellite imagery, annotations and map publication date / provenance.
+6. Functional requirements
+6.1 Authentication, organisations and workspaces
+ID
+Requirement
+Priority
+Acceptance / Done Definition
+AUTH-01
+Email / password and federated
+sign-in; MFA available for
+privileged roles.
+Must
+User can authenticate and MFA
+can be enforced for
+admins/reviewers.
+AUTH-02
+Every resource is tenant-scoped.
+Must
+Cross-tenant read/write attempts
+are denied and logged.
+AUTH-03
+RBAC with organisation admin,
+reviewer, analyst, ops and read-
+only roles.
+Must
+Permission matrix is enforced
+server-side, not only in UI.
+AUTH-04
+Session revocation and forced
+sign-out for compromised
+accounts.
+Should
+Admin can revoke
+sessions/tokens.
+AUTH-05
+Audit log for login, role change,
+export, deletion, report approval
+and source access.
+Must
+Immutable audit entry exists for
+each event.
+6.2 Matter and property dossier
+ID
+Requirement
+Priority
+Acceptance / Done Definition
+MAT-01
+Create a matter with client,
+purpose, status, owner and due
+date.
+Must
+Matter is searchable and has
+activity timeline.
+PROP-01
+Create property record with
+address and land identifiers.
+Must
+System stores
+district/taluk/hobli/village/surve
+y/subdivision/extent where
+known.
+
+=== OBJ 65 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+7
+ID
+Requirement
+Priority
+Acceptance / Done Definition
+PROP-02
+Support multiple identifier
+variants and aliases.
+Must
+Search can match common
+formatting/spelling differences.
+PROP-03
+Store coordinates as point
+geometry with source and
+confidence.
+Must
+Coordinate has provenance and
+timestamp.
+PROP-04
+Property can have multiple
+parcels / survey references.
+Must
+Dossier supports many-to-one
+and one-to-many relationships.
+PROP-05
+Dossier has “Known / Verified /
+Disputed / Unknown” states.
+Must
+State visible on material facts.
+PROP-06
+Create tasks/questions linked to
+a specific evidence item.
+Should
+Reviewer can assign and resolve
+question with audit trail.
+6.3 Document intelligence
+ID
+Requirement
+Priority
+Acceptance / Done Definition
+DOC-01
+Upload PDF, image and
+supported office document
+formats.
+Must
+File is virus-scanned and stored
+with checksum.
+DOC-02
+Classify document type (sale
+deed, gift deed, EC, RTC,
+mutation, khata, tax receipt,
+layout approval, plan, etc.).
+Must
+Classifier emits type +
+confidence + review option.
+DOC-03
+OCR text and layout extraction.
+Must
+Text is searchable and page-
+linked.
+DOC-04
+Extract names, survey numbers,
+dates, extents, document
+numbers, parties, boundaries
+and key terms.
+Must
+Fields map to normalized
+schema and retain source
+anchors.
+DOC-05
+Detect handwriting / low-
+confidence text and route to
+manual review.
+Should
+Reviewer queue shows
+confidence and page location.
+DOC-06
+Document versioning and
+immutable original.
+Must
+Original never overwritten;
+derivative versions are linked.
+DOC-07
+Duplicate document detection
+by hash + similarity.
+Should
+Likely duplicates flagged before
+creating redundant evidence.
+6.4 Title chain and ownership timeline
+ID
+Requirement
+Priority
+Acceptance / Done Definition
+TITLE-01
+Represent instruments as events
+on a property timeline.
+Must
+Events sort chronologically and
+link to documents.
+TITLE-02
+Represent parties as normalized
+person/entity nodes.
+Must
+Aliases and normalized names
+are stored separately.
+TITLE-03
+Detect chain gaps: missing
+preceding instrument, date
+discontinuity, extent changes.
+Must
+Finding includes evidence and
+severity.
+TITLE-04
+Track claimed owner vs
+document party vs record
+owner as separate attributes.
+Must
+System does not collapse them
+into one “truth” field.
+TITLE-05
+Allow reviewer to mark an
+event as verified/disputed and
+record rationale.
+Must
+Decision is audited.
+
+=== OBJ 70 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+8
+6.5 GIS, parcel and location intelligence
+ID
+Requirement
+Priority
+Acceptance / Done Definition
+GIS-01
+Map property point / polygon
+and all source layers.
+Must
+Layer visibility and legend work
+on desktop/mobile.
+GIS-02
+Support parcel/survey overlays
+where legally/licensed data is
+available.
+Must
+Source and date shown in layer
+metadata.
+GIS-03
+Screen for storm-water drain /
+Rajakaluve intersection or
+proximity.
+Must
+Rule shows distance/intersection
+and source layer.
+GIS-04
+Screen for waterbody/lake/canal
+proximity and configured policy
+bands.
+Must
+Policy version is stored with
+each result.
+GIS-05
+Screen planning / land-use / road
+/ infrastructure overlays.
+Should
+Result links to the originating
+planning source or map artifact.
+GIS-06
+Allow manual polygon/line
+annotation for professional
+review.
+Should
+Annotation is stored as user-
+generated evidence, distinct
+from official data.
+GIS-07
+Allow export of map snapshot
+with north arrow, scale, legend
+and timestamp.
+Must
+Snapshot embeds data-source
+metadata.
+6.6 Discrepancy engine
+ID
+Requirement
+Priority
+Acceptance / Done Definition
+DISC-01
+Compare normalized fields
+across documents.
+Must
+Mismatches generate findings
+with source-by-source
+comparison.
+DISC-02
+Normalize person names, dates,
+survey formats and unit
+expressions before comparison.
+Must
+Original raw values remain
+visible.
+DISC-03
+Detect likely unit/extent
+conversion issues.
+Should
+Engine flags inconsistent area
+representations.
+DISC-04
+Detect boundary description
+conflicts (east/west/north/south).
+Should
+Rule outputs specific conflicting
+text snippets.
+DISC-05
+Confidence + reviewer state on
+each discrepancy.
+Must
+Reviewer can accept, reject or
+defer.
+6.7 Legal research
+ID
+Requirement
+Priority
+Acceptance / Done Definition
+LAW-01
+Search internal documents and
+approved legal corpus.
+Must
+Search supports keyword +
+semantic retrieval.
+LAW-02
+Generate source-linked
+summaries.
+Must
+Every material proposition has a
+source reference.
+LAW-03
+Capture citation metadata: case,
+court, date, paragraph/page
+where available.
+Must
+Citation is exportable.
+LAW-04
+Support jurisdiction, date and
+topic filters.
+Should
+User can narrow results.
+LAW-05
+Store research notes separately
+from AI-generated text.
+Must
+Human notes are clearly
+identified.
+
+=== OBJ 75 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+9
+6.8 Risk register and report generation
+ID
+Requirement
+Priority
+Acceptance / Done Definition
+RISK-01
+Create findings from rules,
+documents, GIS, notifications
+and research.
+Must
+Every finding has category,
+severity, evidence, status,
+owner.
+RISK-02
+Severity must be configurable
+and not hardcoded into the AI
+model.
+Must
+Ruleset owns severity mapping.
+RISK-03
+Generate executive summary +
+detailed evidence appendix.
+Must
+PDF has both.
+RISK-04
+Export Word-editable review
+notes and PDF client report.
+Should
+Templates available to tenant.
+RISK-05
+Report includes “data checked
+on”, source freshness and
+limitation statement.
+Must
+Metadata visible on final report.
+7. Core data model and provenance model
+The data model must distinguish source truth from normalized facts and human/AI interpretations. A source
+record is never silently transformed into a new “truth”; instead, the system maintains a chain: source artifact ->
+extracted datum -> normalized datum -> rule/research observation -> reviewer decision -> report statement.
+Entity
+Key attributes
+Relationships
+Organisation
+id, name, plan, settings, retention_policy
+users, matters, sources, reports
+User
+id, email, role, status, tenant_id
+organisation, audit
+Matter
+id, client, purpose, owner, status, deadlines
+properties, documents, tasks, reports
+Property
+id, address, survey refs, geometry,
+confidence
+matter(s), parcels, findings, sources
+ParcelReference
+village, survey_no, subdivision, extent,
+source
+property, documents, GIS results
+Document
+id, type, hash, storage_uri, pages,
+source_date
+matter, evidence, extraction_run
+Evidence
+id, source_id, page, bbox/text_anchor, value
+facts, findings, report blocks
+Fact
+normalized_key, normalized_value,
+confidence, state
+evidence, rule results
+TitleEvent
+event_type, date, parties, extent, document
+property, parties, evidence
+GeoLayer
+name, provider, licence, vintage, CRS
+geo_results, property
+GeoResult
+layer, relation, distance, geometry,
+rule_version
+property, finding
+Rule
+id, version, expression, threshold, severity
+mapping
+geo/discrepancy findings
+Finding
+category, severity, state, explanation
+evidence, rule, task, report
+Report
+template, version, generated_at,
+approved_by
+matter, findings, snapshots
+SourceSnapshot
+source URL/id, retrieved_at, checksum,
+freshness
+documents, facts, reports
+AuditEvent
+actor, action, target, timestamp, diff
+organisation, resources
+
+=== OBJ 80 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+10
+7.1 Provenance record requirements
+
+Original artifact checksum (e.g., SHA-256).
+
+Extraction engine and model/provider version.
+
+Exact page number and bounding box / text anchor whenever available.
+
+Retrieval timestamp and source publication/update date when known.
+
+Rule identifier + version for deterministic findings.
+
+Human reviewer identity and decision timestamp.
+
+AI prompt/template version for material generated text.
+
+Report version and report approval state.
+8. Property intelligence and GIS rules engine
+8.1 Layer strategy
+Layer family
+Examples
+MVP treatment
+Cadastral / survey
+Survey boundaries, parcel numbers, village
+maps
+Import where source/licence permits;
+preserve source vintage
+Drainage
+Rajakaluve / SWD, canals, drains
+Distance + intersection checks; source/date
+mandatory
+Water bodies
+Lakes, tanks, canals, wetlands
+Distance/intersection; rule bands
+configurable by policy version
+Planning
+Master plan, zoning, land-use, layout
+approvals
+Overlay and source reference
+Infrastructure
+Road widening, highways, metro/rail
+alignments, planned corridors
+Notification-driven monitoring; source
+snapshot
+Administrative
+District, taluk, hobli, village, ward
+Base geographic hierarchy
+Satellite / basemap
+Aerial imagery for contextual review
+Basemap only; never treated as legal
+boundary evidence
+8.2 Geospatial rule model
+Rules are data-driven. A rule must define: layer_id, geometry relation, distance function, threshold,
+policy_version, severity mapping, explanation template, effective_from/effective_to and evidence requirements.
+Rule type
+Example logic
+Output
+INTERSECTS
+Property polygon intersects configured
+SWD geometry
+Intersection=true, geometry, source
+WITHIN_DISTANCE
+Distance(property, layer) <= threshold
+Distance in metres + threshold version
+CONTAINS
+Feature contains subject polygon
+Boolean + feature ID
+OVERLAP_RATIO
+Overlap area / property area >= threshold
+Percentage + geometry
+ATTRIBUTE_MATCH
+Survey/village code matches across
+source layers
+Matched identifiers + confidence
+TEMPORAL_CHANGE
+New plan/notification intersects affected
+area
+Before/after evidence + dates
+8.3 Geospatial evidence UX
+
+Click a finding -> highlight affected geometry on map.
+
+Show exact relation and measurement, not only a coloured label.
+
+Show source, publication/retrieval date and ruleset version.
+
+Offer “Mark as reviewed”, “Dispute”, and “Create task”.
+
+=== OBJ 85 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+11
+
+Allow report snapshot with legend, scale, north arrow and timestamp.
+9. Document intelligence and evidence processing
+9.1 Pipeline
+Upload -> virus scan -> checksum -> classify -> OCR/layout -> document parser -> schema extraction ->
+normalization -> confidence scoring -> evidence indexing -> cross-document comparison -> reviewer queue.
+Stage
+Technology / logic
+Failure handling
+Upload
+Cloud Storage resumable upload
+Retry; quarantine invalid objects
+Virus/malware scan
+Containerized scanner / service
+integration
+Block processing; alert operator
+OCR
+Google Cloud Document AI OCR
+Retry or route to manual OCR
+Extraction
+Schema-constrained LLM + deterministic
+regex / parsers
+Low confidence -> review
+Normalization
+TypeScript/Python canonicalizers
+Preserve raw value; never overwrite
+Evidence index
+PostgreSQL full-text + pgvector
+Rebuildable index
+Comparison
+Rule engine
+Explain mismatch
+Review
+Reviewer UI
+Human decision recorded
+9.2 Document types to model first
+Family
+Examples
+Priority
+Title / transaction
+Sale deed, gift deed, partition, release, POA
+P0
+Land / revenue
+RTC/Pahani, mutation extract/status, survey
+sketches / Tippan where available
+P0
+Registration / encumbrance
+EC, certified copies, registration references
+P0
+Municipal / urban property
+Khata / e-Khata, tax receipts, property IDs
+P0
+Planning / development
+Layout approval, conversion order, master
+plan extracts, zoning documents
+P1
+Identity / party support
+PAN, Aadhaar copies or other KYC provided
+by client
+P1 - careful handling
+Court / legal
+Orders, judgments, notices, caveats,
+pleadings
+P1
+10. Legal research and knowledge layer
+10.1 Research modes
+
+Matter corpus search: only documents and notes belonging to the matter.
+
+Organisation corpus search: approved internal precedents/templates.
+
+External legal research: approved public/licensed sources, always cited.
+
+Hybrid answer: retrieved evidence + constrained synthesis + citations.
+10.2 Citation contract
+Requirement
+Rule
+Citation required
+Every legal proposition in a generated report must cite
+supporting evidence.
+
+=== OBJ 90 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+12
+Requirement
+Rule
+Source quality
+Official / primary sources preferred; secondary sources clearly
+labelled.
+Quote limits
+UI should quote only the necessary passage with
+page/paragraph anchor where possible.
+Conflicting sources
+System shows conflict rather than choosing a “winner”
+automatically.
+Staleness
+Research source date and retrieval date visible.
+Human review
+No client-facing legal research report without reviewer
+approval.
+11. Government notification and change monitoring
+The platform should maintain a source registry rather than hardwire one portal. Source connectors may be
+API-based, approved web retrieval, user-uploaded publications, or manually curated snapshots. Every
+connector records terms, credentials (if any), permitted frequency and failure state.
+Source family
+Potential content
+Monitoring action
+Urban planning authorities
+Master plans, zoning, development plans,
+layout notices
+Detect new/changed files and affected
+geography
+Municipal authority
+Drainage, road, property and local notices
+Index notices + create impacted-property
+candidates
+Revenue / land records
+RTC, mutation, survey map publications
+Refresh source snapshots where permitted
+Registration department
+EC/certified copy/registration-related
+information
+User initiated retrieval or authorized
+connector
+Courts / legal publishers
+Orders, judgments and case metadata
+Monitor relevant citations / keywords
+Infrastructure agencies
+Road/rail/metro/highway notifications
+Map affected corridors + alert relevant
+matters
+Source rule
+No connector is considered authoritative merely because it is online. The system records
+authority classification, retrieval method, terms/licence and freshness.
+12. Risk engine and explainable scoring
+12.1 Risk taxonomy
+Category
+Typical triggers
+Evidence required
+TITLE
+Chain gap, unresolved claimant, conflicting
+instrument dates
+Relevant deed/record pages + reviewer note
+IDENTITY
+Name mismatch, party mismatch, missing
+identity linkage
+Source snippets + normalization logic
+EXTENT
+Area mismatch, boundary contradiction
+Documents + normalized units
+ENCUMBRANCE
+Relevant entry / charge evidence in source
+records
+EC / source snapshot / instrument
+GEO
+Rajakaluve/SWD, lake/waterbody, planning
+overlay
+Map layer + measurement + rule version
+PLANNING
+Use/zoning mismatch, road/infrastructure
+proposal
+Planning source + geography
+
+=== OBJ 95 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+13
+Category
+Typical triggers
+Evidence required
+DOCUMENT
+Unreadable, missing pages, suspected
+duplication
+File hash, page review, extraction
+confidence
+RESEARCH
+Potentially relevant law/order not reviewed
+Citation + research notes
+12.2 Recommended severity model
+Use neutral operational severity rather than predictive labels such as “safe” or “unsafe”. Example states:
+Critical Review Required, High Review Required, Moderate Review, Informational, Cleared by Reviewer.
+Severity is a workflow priority, not a legal conclusion.
+Result state
+Meaning
+System behaviour
+Critical Review Required
+Material unresolved issue or high-impact
+source conflict
+Blocks client-facing final approval until
+reviewer acknowledges
+High Review Required
+Important discrepancy / spatial result
+needing professional assessment
+Creates task by default
+Moderate Review
+Issue may affect transaction or next-step
+diligence
+Adds to review queue
+Informational
+Useful context with no automatic action
+Included in evidence appendix
+Cleared by Reviewer
+Reviewer examined evidence and
+recorded disposition
+Retains original finding + decision
+13. Reports, exports and collaboration
+13.1 Report types
+Report
+Purpose
+Contents
+Preliminary screening
+Fast first-look
+Property profile, map screen, document
+completeness, preliminary findings
+Detailed due diligence
+Primary legal/property review
+Executive summary, title timeline,
+discrepancies, GIS evidence, source
+appendix
+Client decision pack
+Client-facing summary
+Approved findings, questions, next
+actions, limitations
+Evidence appendix
+Audit / professional review
+Document index, citations, map
+snapshots, provenance metadata
+Change alert
+Monitoring update
+What changed, source, affected property,
+review action
+13.2 Report generation rules
+
+Report is generated from a versioned snapshot, not live data that can change mid-render.
+
+Each report stores a manifest of evidence IDs and data-source timestamps.
+
+Map images show scale, north arrow, legend, layer names and retrieval date.
+
+AI-generated narrative is marked as generated content in internal logs and remains subject to reviewer
+approval.
+
+Final PDF is immutable; corrections generate a new report version.
+
+=== OBJ 100 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+14
+14. Administration, configuration and source registry
+Admin area
+Required controls
+Organisation
+Name, users, roles, branding, data retention, default report
+templates
+Rules
+Versioned GIS/discrepancy rules, thresholds, effective dates,
+severity mappings
+Sources
+Source authority, URL/API, licence, refresh interval, parser
+version, health status
+Models
+Provider, model name, prompt version, schema version, safety
+settings
+Templates
+Report templates, clause snippets, disclaimer versions
+Integrations
+Maps, document AI, email/notification, payment, external legal
+corpus
+Audit
+Searchable audit events, access logs, export history, reviewer
+decisions
+15. Non-functional requirements
+Area
+Target / requirement
+Verification
+Availability
+Production application target 99.9%
+monthly for application layer
+Synthetic monitoring + incident log
+Latency
+P95 API < 2s for common reads; map
+screening < 3s; report async
+APM load test
+Scalability
+Stateless API; autoscale horizontally; DB
+connection pooling
+Load test
+Security
+TLS, tenant isolation, least privilege, audit
+Pen test + automated checks
+Durability
+Original documents immutable/versioned;
+backups enabled
+Restore drill
+RPO
+Target <= 15 minutes for transactional data
+Backup configuration review
+RTO
+Target <= 1 hour for production restoration
+Recovery exercise
+Accessibility
+Keyboard navigation, contrast, labels,
+responsive design
+WCAG-oriented audit
+Internationalization
+English first; architecture supports Kannada
+labels/OCR later
+i18n test
+Observability
+Logs, metrics, traces, job status, source
+health
+Operational dashboard
+Auditability
+All high-impact changes recorded
+Automated audit tests
+16. Technical architecture
+16.1 Recommended architecture pattern
+Use a modular monolith for core business logic plus managed cloud services and background workers. Do not
+start with many independent microservices. Split only when a workload, ownership boundary or scaling
+profile genuinely requires it.
+
+=== OBJ 105 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+15
+Layer
+Technology
+Responsibility
+Browser / PWA
+Next.js + TypeScript
+Responsive UI, offline-friendly drafts, map
+experience
+Edge / web
+Firebase App Hosting OR Firebase Hosting +
+CDN
+TLS, CDN, web delivery
+Auth
+Firebase Authentication / Identity Platform
+Tenant/user identity, MFA, SSO when
+required
+API
+NestJS on Cloud Run
+Business logic, RBAC, REST/OpenAPI,
+orchestration
+Async workers
+Cloud Run worker container
+OCR post-processing, extraction, reports,
+source jobs
+Queue
+Cloud Tasks
+Reliable per-job HTTP execution
+Event bus
+Pub/Sub
+Fan-out domain events
+Scheduler
+Cloud Scheduler
+Source refreshes, housekeeping
+Primary DB
+Cloud SQL PostgreSQL
+Relational + geospatial + vector data
+Object store
+Cloud Storage
+Original/derived documents, exports,
+snapshots
+OCR
+Document AI
+OCR/layout/document understanding
+GenAI
+Vertex AI Gemini
+Grounded extraction/synthesis, research
+assistance
+Search
+Postgres FTS + pgvector + pg_trgm
+Hybrid semantic + lexical retrieval
+Maps
+MapLibre GL JS + provider abstraction
+Basemap and interactive layers
+Secrets
+Secret Manager
+Credentials/API keys
+Observability
+Cloud Logging / Monitoring / Trace / Error
+Reporting
+Operational visibility
+IaC
+Terraform
+Repeatable environment creation
+CI/CD
+GitHub Actions + Artifact Registry + Cloud
+Run deploy
+Automated delivery
+16.2 Architecture flow
+Request flow
+PWA -> Firebase Auth token -> Cloud Run API -> Postgres/Storage. Long-running work ->
+Cloud Tasks/Pub/Sub -> Worker -> Postgres/Storage -> UI status update. AI requests -> model gateway ->
+Vertex AI -> evidence-aware result -> rule/reviewer layer.
+17. Recommended technology stack
+Layer
+Recommended choice
+Why this choice
+Alternative
+Frontend
+Next.js + TypeScript + Tailwind CSS
++ component library
+Fast PWA delivery, type safety,
+reusable UI
+React + Vite
+PWA
+Web App Manifest + service
+worker + Workbox
+Installable mobile-first workflow
+Pure responsive web
+Maps UI
+MapLibre GL JS
+Vendor-neutral rendering and
+custom layers
+Google Maps JS API
+Backend
+NestJS + TypeScript
+Structured modules, validation,
+OpenAPI, enterprise ergonomics
+Fastify + custom modules
+
+=== OBJ 110 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+16
+Layer
+Recommended choice
+Why this choice
+Alternative
+AI worker
+Python for OCR post-processing /
+evaluation where useful
+Strong document/ML ecosystem
+TypeScript-only
+Database
+Cloud SQL PostgreSQL + PostGIS +
+pgvector + pg_trgm
+Relational, geospatial and vector
+search in one managed DB
+AlloyDB / separate vector DB later
+Object storage
+Google Cloud Storage
+Durable object storage, signed
+URLs, retention controls
+S3 compatible provider
+Auth
+Firebase Auth / Identity Platform
+Fast user auth + MFA/multi-
+tenancy options
+Auth0
+Runtime
+Cloud Run
+Serverless containers with
+autoscaling
+GKE for later platform scale
+Async
+Cloud Tasks + Pub/Sub
+Reliable queued work + event fan-
+out
+Kafka for much larger ecosystems
+OCR
+Google Cloud Document AI
+Managed OCR/layout/document
+processing
+Azure Document Intelligence
+LLM
+Vertex AI Gemini via model
+gateway
+Grounding, managed enterprise AI
+platform
+OpenAI / Anthropic through
+gateway
+Search
+Postgres FTS + pgvector
+Low operational overhead at MVP
+scale
+OpenSearch / Vertex AI Search
+PDF
+HTML/CSS templates + Playwright
+Chromium rendering
+Pixel-consistent maps/tables and
+print output
+ReportLab
+Testing
+Vitest/Jest + Playwright + pytest +
+k6
+Unit, E2E, API and load testing
+Cypress + pytest
+CI/CD
+GitHub Actions
+Fits common developer workflow
+Cloud Build only
+IaC
+Terraform
+Versioned environments and
+repeatability
+Pulumi
+Observability
+Google Cloud Operations suite +
+OpenTelemetry
+Centralized logs/metrics/traces
+Datadog
+Secrets
+Secret Manager
+Managed secrets + rotation
+workflow
+Vault
+Key database decision
+Cloud SQL for PostgreSQL is the anchor. Google documents Cloud SQL support for
+both PostGIS and pgvector, allowing property geospatial analysis and semantic retrieval without introducing
+a second database at MVP stage.
+18. AI architecture and guardrails
+18.1 Model gateway
+All AI calls must pass through an OJIX model gateway. The gateway stores model/provider metadata, prompt-
+template version, input classification, output schema, token/cost telemetry, grounding context IDs and policy
+decisions. Business modules never call vendor SDKs directly.
+Control
+Requirement
+Provider abstraction
+Swap model provider without rewriting business modules.
+Structured output
+JSON/schema validation before persistence.
+Evidence grounding
+Prompt includes only authorized evidence snippets; output
+stores evidence IDs.
+No unsupported certainty
+Model must be able to return UNKNOWN /
+INSUFFICIENT_EVIDENCE.
+
+=== OBJ 115 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+17
+Control
+Requirement
+Prompt injection defence
+Treat uploaded documents as untrusted content; never execute
+instructions found inside documents.
+Data minimization
+Send only relevant matter data to model calls.
+Human approval
+High-impact reports require reviewer approval.
+Evaluation set
+Maintain a golden dataset of representative Karnataka property
+documents and expected extraction outputs.
+Cost controls
+Per-tenant quotas, max pages per job, cache and batching
+where appropriate.
+18.2 AI-assisted features
+
+Document classification.
+
+Field extraction with evidence anchors.
+
+Name/entity normalization suggestions.
+
+Title-chain event suggestions.
+
+Discrepancy explanation drafts.
+
+Legal research synthesis from retrieved sources.
+
+Draft report narrative from approved findings.
+
+Conversational “ask this property dossier” over authorized evidence only.
+Grounding requirement
+For current web research, use a controlled retrieval layer and preserve source
+metadata. Google documents grounding options for Vertex AI; OJIX should keep the retrieval layer provider-
+agnostic and store the resulting source URIs/snippets as evidence.
+19. Integrations and source acquisition strategy
+The core product should not depend on fragile browser automation for production. Government and planning
+portals can change frequently; where no documented API exists, support user-assisted retrieval, uploaded
+certificates/records, or a separately managed connector subject to terms, access controls and rate limits.
+Integration
+Mode
+MVP
+Bhoomi / land records
+Official portal / user-supplied records /
+authorized connector when available
+User-assisted + document import
+Kaveri 2.0
+Official portal / user-supplied EC/copies /
+authorized connector when available
+Document-first
+BBMP e-Aasthi
+Official portal / user-supplied property
+record / authorized connector
+Document-first
+BBMP SWD / Rajakaluve maps
+Published maps / GIS files / official data
+where available
+GIS layer ingestion
+BDA planning maps
+Published planning/master-plan resources
+GIS + source index
+Courts / legal sources
+Public or licensed search corpus
+Search + citations
+Maps/basemap
+Map provider abstraction
+MapLibre + selected provider
+19.1 Source registry health
+
+UP: source reachable and current snapshot available.
+
+STALE: source has not refreshed within configured interval.
+
+DEGRADED: source reachable but parser changed / data incomplete.
+
+BLOCKED: access denied, authentication failure or policy restriction.
+
+=== OBJ 120 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+18
+
+RETIRED: connector intentionally disabled; historical snapshots remain usable.
+20. Security, privacy and compliance controls
+Control
+Implementation
+Tenant isolation
+tenant_id on all business tables; server-side authorization; optional
+PostgreSQL RLS defense-in-depth
+Document access
+Private Cloud Storage buckets; short-lived signed URLs; no public
+object access
+Encryption
+TLS in transit; cloud-managed encryption at rest; CMEK for higher
+assurance deployments where required
+Secrets
+Secret Manager; no credentials in source control
+Audit
+Write-once audit events for privileged actions and report lifecycle
+Data retention
+Tenant-configurable policy with legal hold support
+Deletion
+Soft delete -> retention window -> irreversible purge job
+Backups
+Automated backups + PITR + restore drills
+Application security
+OWASP-oriented headers, CSRF protection where relevant, rate
+limits, abuse detection
+AI privacy
+No customer document used for model training by OJIX; vendor
+terms/configuration reviewed before production
+Access review
+Quarterly privileged-access review; support access time-limited
+Export control
+Reports and bulk exports logged; optional watermarking and
+download expiry
+21. API design
+21.1 REST resource groups
+Group
+Example endpoints
+Auth / me
+GET /v1/me; GET /v1/me/permissions
+Organisations
+GET /v1/org; GET /v1/org/users; PATCH /v1/org/settings
+Matters
+POST /v1/matters; GET /v1/matters/{id}; PATCH /v1/matters/{id}
+Properties
+POST /v1/properties; GET /v1/properties/{id}; POST
+/v1/properties/{id}/screen
+Documents
+POST /v1/documents/upload-url; GET /v1/documents/{id}; POST
+/v1/documents/{id}/process
+Evidence
+GET /v1/evidence/{id}; GET /v1/matters/{id}/evidence
+Title
+GET /v1/properties/{id}/title-events; POST /v1/title-events
+GIS
+GET /v1/properties/{id}/geo-results; GET /v1/layers; POST
+/v1/map/snapshot
+Findings
+GET /v1/matters/{id}/findings; PATCH /v1/findings/{id}
+Research
+POST /v1/research/query; GET /v1/research/{id}
+Reports
+POST /v1/reports; GET /v1/reports/{id}; GET
+/v1/reports/{id}/download
+Jobs
+GET /v1/jobs/{id}; POST /v1/jobs/{id}/retry
+
+=== OBJ 125 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+19
+Group
+Example endpoints
+Admin
+GET /v1/admin/rules; GET /v1/admin/sources; GET /v1/admin/model-
+config
+21.2 API design rules
+
+OpenAPI is the contract of record.
+
+All write operations require idempotency keys where retries could duplicate work.
+
+Long-running operations return 202 + job_id.
+
+Pagination uses cursor-based pagination for large collections.
+
+Errors use stable error codes and human-readable messages.
+
+Every response that surfaces derived findings includes provenance IDs where appropriate.
+22. Database schema blueprint
+Table
+Key columns
+Indexes / notes
+organisations
+id, name, plan, created_at
+PK id
+users
+id, org_id, role, status
+org_id, email unique per auth namespace
+matters
+id, org_id, reference_no, status, due_at
+org_id,status,due_at
+properties
+id, org_id, primary_address, geom
+GiST geom; trigram address; org_id
+parcel_refs
+id, property_id, village, survey_no, subdivision
+Composite search index; normalized survey
+key
+documents
+id, matter_id, storage_uri, sha256, type, version
+matter_id, sha256, type
+document_pages
+id, document_id, page_no, image_uri
+document_id,page_no
+evidence
+id, document_id, page_no, bbox, text_anchor,
+value_json
+document_id; JSONB; GIN where needed
+facts
+id, property_id, key, value_json, confidence,
+state
+property_id,key
+title_events
+id, property_id, event_date, event_type,
+payload_json
+property_id,event_date
+geo_layers
+id, name, source, vintage, srid, licence
+source + vintage unique policy
+geo_features
+id, layer_id, geom, source_key, attrs_json
+GiST geom; layer_id
+geo_results
+id, property_id, layer_id, relation, distance_m,
+rule_version
+property_id, layer_id
+rules
+id, version, category, expression_json,
+active_from
+category, active_from
+findings
+id, matter_id, category, severity, state, rule_id
+matter_id,state,severity
+tasks
+id, matter_id, finding_id, assignee_id, due_at,
+status
+assignee,status,due_at
+research_sources
+id, uri, source_type, title, retrieved_at
+uri hash; retrieved_at
+research_chunks
+id, source_id, content, embedding
+pgvector HNSW + FTS
+reports
+id, matter_id, template_version, snapshot_id,
+approval_state
+matter_id, created_at
+source_snapshots
+id, source_key, retrieved_at, sha256, uri
+source_key,retrieved_at
+audit_events
+id, org_id, actor_id, action, target_type,
+target_id, occurred_at
+org_id,occurred_at
+
+=== OBJ 130 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+20
+23. Async jobs, queues and event contracts
+Job type
+Trigger
+Idempotency key
+Retry / DLQ
+document_processing
+Upload event
+document_id + version
+Exponential backoff; DLQ after
+threshold
+completeness_recalculation
+Document processed
+matter_id + rule_version
+Safe to replay
+ai_extraction
+Document page/batch
+document_id + schema_version
+Replayable
+title_chain_recompute
+Fact changed
+property_id + fact_version
+Replayable
+geo_screening
+Property or layer update
+property_id + layer_vintage +
+ruleset
+Replayable
+notification_delivery
+Alert created
+notification_id
+Retry + dead letter
+report_generation
+Approved report request
+report_id + version
+Retryable, output versioned
+source_refresh
+Scheduler
+source_key + scheduled_window
+Retry + alert operator
+embedding_refresh
+Chunk changed
+chunk_id + model_version
+Replayable
+23.1 Event envelope
+Envelope fields
+event_id, event_type, event_version, occurred_at, correlation_id, tenant_id, actor_type,
+actor_id, entity_type, entity_id, idempotency_key, payload.
+24. Deployment, CI/CD and environments
+Environment
+Purpose
+Data
+Deployment policy
+Local
+Developer build/test
+Synthetic / fixtures
+Manual
+Dev
+Integration development
+Synthetic / sanitized sample docs
+On merge to develop
+Staging
+Release candidate + QA
+Synthetic + controlled test
+corpus
+On release branch
+Production
+Customer workloads
+Real customer data
+Approval + automated checks +
+rollback
+Disaster Recovery
+Restore/validation environment
+Backups / test snapshots
+Scheduled drills
+24.1 CI/CD pipeline
+
+Pull request -> type-check -> lint -> unit tests -> security scans -> schema migration validation -> build
+container.
+
+Main branch -> staging deploy -> smoke tests -> Playwright E2E -> load/synthetic check.
+
+Production -> manual approval -> canary or gradual rollout -> monitor -> rollback if SLO breach.
+
+Terraform plan is reviewed separately from application deployment.
+
+Database migrations use backward-compatible expand/contract pattern.
+25. Observability, reliability and disaster recovery
+Signal
+What to capture
+Alert examples
+Latency
+API latency by route, DB time, external
+service time
+P95/P99 breach
+Errors
+HTTP 5xx, parser failures, model errors
+Spike or new error signature
+Jobs
+Queue depth, age, retry count, DLQ size
+Backlog > threshold
+
+=== OBJ 135 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+21
+Signal
+What to capture
+Alert examples
+DB
+CPU, memory, connections, slow queries,
+storage
+Connection saturation
+Storage
+Upload failures, signed URL errors, object
+size
+Failure rate
+AI
+Latency, cost, token usage, schema
+validation failures
+Budget or quality threshold
+Sources
+Freshness, HTTP status, parser version
+Source stale/degraded
+Security
+Auth anomalies, admin access, export
+volume
+Suspicious spike
+25.1 Reliability runbooks
+
+Database saturation -> inspect connections -> throttle workers -> enable read scaling if later configured.
+
+Queue storm -> pause non-critical jobs -> drain critical queue -> re-enable by priority.
+
+Source parser break -> mark source DEGRADED -> preserve last good snapshot -> patch parser -> replay
+affected jobs.
+
+AI provider outage -> fall back to deterministic extraction/manual queue or secondary provider through
+model gateway.
+
+Document corruption -> keep original, quarantine derivative, reprocess from source artifact.
+26. Testing and quality engineering
+Test layer
+Coverage focus
+Minimum launch bar
+Unit
+Normalizers, parsers, rules, severity
+mappings
+> 85% critical domain logic
+Contract
+API OpenAPI schema, auth claims
+No breaking contract changes
+Integration
+Postgres, Storage, Document AI/AI stubs,
+queues
+Happy path + failure paths
+E2E
+Create matter -> upload -> extract -> GIS ->
+report
+All core journeys pass
+Golden dataset
+Representative documents and expected
+field outputs
+No critical extraction regressions
+Geo tests
+Known parcel/layer cases + edge distances
+Deterministic within tolerance
+Security
+Authz, tenant isolation, injection, file upload
+No critical/high findings
+Load
+API, upload, job queue, report generation
+Meet NFR targets
+Restore drill
+Database/object recovery
+RPO/RTO targets demonstrated
+26.1 Golden property corpus
+Build a versioned test corpus representing Bengaluru/Karnataka patterns: multilingual names, survey
+subdivisions, title chains, scanned deeds, low-quality scans, tables, handwritten annotations, map screenshots,
+lake/tank references and contradictory documents. The corpus becomes the regression baseline for both
+deterministic logic and AI extraction.
+27. MVP, phases and delivery plan
+Phase
+Duration (estimate)
+Outcome
+0. Discovery + source audit
+1-2 weeks
+Confirm workflows, source availability,
+licences, sample corpus
+
+=== OBJ 140 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+22
+Phase
+Duration (estimate)
+Outcome
+1. Foundation
+2-3 weeks
+Auth, organisations, matter/property,
+storage, audit, base UI
+2. Document intelligence
+3-4 weeks
+Upload, OCR, classification, extraction,
+evidence anchors
+3. Property/GIS intelligence
+3-4 weeks
+Map, parcel refs, Rajakaluve/SWD layer,
+waterbody/planning layer abstraction
+4. Discrepancy + title engine
+3-4 weeks
+Normalization, title timeline, mismatch
+rules
+5. Reporting + review
+2-3 weeks
+Findings, tasks, report generator, approvals
+6. Pilot hardening
+2-4 weeks
+Security, load, golden dataset, UX
+refinements, operational runbooks
+7. Phase 2
+8-12+ weeks
+Notifications, deeper legal research,
+enterprise API, billing
+27.1 MVP release definition
+
+A law firm can open a matter and add a property.
+
+At least 5 core document types can be uploaded and processed.
+
+The user can see extracted fields and page evidence.
+
+The title timeline can be reviewed and edited.
+
+A configured GIS layer set can return explainable property findings.
+
+Discrepancies can be reviewed/accepted/deferred.
+
+A report can be generated with evidence appendix and map snapshot.
+
+Audit events and source freshness are visible to admins.
+
+The system passes tenant isolation, security and load tests.
+28. Team structure and engineering workflow
+Role
+Responsibility
+Product lead
+FRD ownership, priorities, customer validation, acceptance
+criteria
+Tech lead / CTO
+Architecture, engineering standards, security and release
+approval
+Frontend engineer
+PWA, maps UX, document review, accessibility
+Backend engineer
+Domain modules, API, authz, database, jobs
+AI / data engineer
+OCR pipeline, extraction schemas, evaluation, search
+GIS engineer (part-time initially)
+Layer ingestion, coordinate systems, geospatial rules
+QA engineer
+Golden dataset, E2E, regression, load/security coordination
+Legal SME / reviewer
+Rule validation, document taxonomy, research workflow,
+report review
+DevOps / cloud
+Terraform, CI/CD, observability, backups, cost controls
+28.1 Developer workflow
+
+Feature branch -> PR -> automated checks -> reviewer -> staging -> product acceptance -> release.
+
+Every feature that changes evidence logic requires a test case in the golden corpus.
+
+Every ruleset change increments rule version; historical findings remain linked to old rule versions.
+
+Database changes require migration scripts and rollback/forward strategy.
+
+=== OBJ 145 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+23
+
+No direct production database edits; operational fixes go through scripts or controlled consoles and are
+audited.
+29. Acceptance criteria and launch gate
+Gate
+Acceptance criteria
+Functional
+All P0 requirements complete; core journeys pass
+Data
+Evidence provenance exists for material extracted facts
+Geo
+Layer metadata, CRS and rule version visible; known test cases pass
+AI
+Golden-set extraction meets agreed threshold; UNKNOWN path
+works
+Security
+No critical/high unresolved issues from security review
+Reliability
+Backup restore and queue recovery demonstrated
+Performance
+NFR targets achieved under agreed load
+Operational
+Dashboards, alerts and runbooks ready
+Legal workflow
+Qualified reviewer has approved report templates/disclaimers
+Pilot
+At least one real workflow completed end-to-end with controlled
+data
+30. Risks and mitigations
+Risk
+Impact
+Mitigation
+Government portal changes
+High
+Source abstraction, snapshots, health
+monitoring, manual fallback
+No public API / access restrictions
+High
+User-assisted retrieval, official downloads,
+authorized connectors only
+Poor OCR quality
+High
+Document quality checks, alternate OCR,
+manual review
+AI hallucination
+Critical
+Evidence-grounded generation, structured
+outputs, citations, human approval
+Wrong map layer / stale map
+Critical
+Source metadata, vintage, freshness status, rule
+version, disclaimer
+Geospatial CRS mismatch
+High
+Normalize to known CRS, validation tests, layer
+metadata
+Overly complex architecture too early
+Medium
+Modular monolith + managed services; split
+only on need
+Data leakage across tenants
+Critical
+Server-side authz, RLS defense-in-depth,
+automated isolation tests
+High AI cost
+Medium
+Batching, smaller models for extraction,
+caching, quotas, per-tenant budgets
+Customer mistrust
+High
+Show evidence, not magic scores; reviewer
+controls and provenance
+Regulatory / policy changes
+High
+Version rulesets and effective dates; legal SME
+review
+Scope creep into full legal ERP
+High
+Keep property intelligence as product wedge;
+reuse shared platform later
+
+=== OBJ 150 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+24
+31. Reference architecture summary
+Component
+Choice
+Primary reason
+Client
+Next.js PWA
+Fast mobile-first delivery
+Identity
+Firebase Auth / Identity Platform
+Managed identity + MFA / tenant options
+API
+NestJS on Cloud Run
+Modular backend + autoscaling
+DB
+Cloud SQL PostgreSQL + PostGIS +
+pgvector
+One system for core relational + GIS +
+retrieval
+Files
+Cloud Storage
+Durable original/derived artifacts
+Queues
+Cloud Tasks + Pub/Sub
+Async execution and event distribution
+OCR
+Document AI
+Managed OCR/layout pipeline
+AI
+Vertex AI Gemini through gateway
+Grounded synthesis / structured
+extraction
+Search
+FTS + pgvector + pg_trgm
+Hybrid retrieval
+Maps
+MapLibre GL JS
+Flexible GIS presentation
+PDF
+Playwright
+Consistent report rendering
+Infra
+Terraform + GitHub Actions
+Repeatable delivery
+Ops
+Cloud Monitoring + Logging + Trace
+Production observability
+Architecture principle
+Do not deploy Kubernetes, a standalone vector database, Kafka, or a fleet of
+microservices in the MVP unless measured workload or organisational requirements prove the need. The
+default architecture is intentionally simpler.
+32. Sources and evidence base
+The following sources were checked while preparing this FRD. Government portal interfaces and technical
+documentation can change; the product must store source version/freshness metadata rather than hardcode
+assumptions.
+Government of Karnataka / Bhoomi land records:
+Bhoomi is described by Karnataka government sources as the state land-
+records management system; RTC, mutation extract/status and Tippan are among the listed outputs.
+https://landrecords.karnataka.gov.in/
+Department of Stamps & Registration / Kaveri 2.0:
+Kaveri 2.0 is described by India Stack Local as the Karnataka registration
+platform supporting property registration, EC, certified copies and property valuation-related services.
+https://kaveri.karnataka.gov.in/
+BBMP e-Aasthi:
+BBMP e-Aasthi property record management portal; current interface observed with version/date metadata in
+2026.
+https://bbmpeaasthi.karnataka.gov.in/office/frmLoginNew.aspx
+BBMP Rajakaluve / SWD information:
+BBMP publishes Rajakaluve / storm-water-drain encroachment information and points to
+SSLR revenue maps / rajkalve resources for maps and records.
+https://site.bbmp.gov.in/encroachment.html
+BDA Master Plan resources:
+BDA publishes master-plan, approved-plan and town-planning resources including RMP-related
+material and development planning information.
+https://eng.bdabangalore.org/masterplan.html
+BDA town planning / EODB:
+BDA identifies land details, survey number, extent, land-use, conversion order, topography and
+related planning fields in its layout approval workflow.
+https://eng.bdabangalore.org/ease-of-doing-business.html
+Google Cloud Document AI:
+Managed document OCR and document understanding platform for converting unstructured
+documents into structured information.
+https://docs.cloud.google.com/document-ai/docs
+
+=== OBJ 155 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+25
+Firebase Authentication:
+Managed identity service with support for authentication methods; Identity Platform adds features
+including MFA and multi-tenancy.
+https://firebase.google.com/docs/auth
+Firebase App Check:
+Helps ensure only the app can access Firebase resources; web reCAPTCHA Enterprise is supported.
+https://firebase.google.com/docs/app-check/web/recaptcha-enterprise-provider
+Cloud Run:
+Managed container runtime with autoscaling and configurable concurrency / min-max instance settings.
+https://docs.cloud.google.com/run/docs/about-instance-autoscaling
+Cloud Tasks:
+Managed asynchronous task execution with queues, retries and HTTP targets.
+https://docs.cloud.google.com/tasks/docs
+Cloud SQL PostgreSQL:
+Managed PostgreSQL with high availability, backups, PITR and Google Cloud integration.
+https://docs.cloud.google.com/sql/docs/postgres
+Cloud SQL extensions:
+Google documents support for PostGIS and pgvector in Cloud SQL for PostgreSQL.
+https://docs.cloud.google.com/sql/docs/postgres/extensions
+Vertex AI grounding:
+Vertex AI supports grounding with Google Search and external search APIs for more current or enterprise-
+specific context.
+https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/ground-with-google-search
+Google Cloud Storage retention/versioning:
+Cloud Storage supports retention configurations and object versioning for
+durability/compliance-oriented workflows.
+https://docs.cloud.google.com/storage/docs/object-lock
+32.1 Evidence notes for supplied photographs
+
+Image 1: supplied by user; visually depicts a satellite / parcel map with survey numbering and a
+tank/waterbody context around Arakere Village. Exact source and legal status not verified from
+photograph.
+
+Image 2: supplied by user; visually depicts a dense Bengaluru administrative/cadastral-style map with
+village and Bengaluru zone labels. Exact publisher, vintage and coordinate system not verified from
+photograph.
+
+Product requirement derived from these images: support map artifacts as evidence items with
+publisher/source, vintage, CRS (when known), checksum, retrieval date and review status.
+32.2 Final product principle
+Build for trust
+The winning engineering property of this system is traceability: every material fact can be
+followed back to the source artifact, every rule result to a versioned rule, every AI statement to retrieved
+evidence, and every final conclusion to a named reviewer.
+
+=== OBJ 160 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+26
+33. Visual architecture and implementation appendix
+33.1 System architecture
+The architecture below deliberately keeps business logic in a modular monolith while delegating
+asynchronous, document and AI workloads to managed components. This is the preferred MVP shape for OJIX.
+Figure 1. Reference production architecture for OJIX Property Intelligence.
+
+=== OBJ 165 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+27
+33.2 Evidence lifecycle
+The evidence lifecycle is the core trust mechanism: raw sources are retained, extracted data is traceable, rules
+are versioned, and human review is explicit.
+Figure 2. Source-to-report evidence lifecycle.
+Implementation checkpoint
+Do not allow the UI to show “AI says property is safe.” The UI must show a source-
+backed finding, the measured/observed condition, the rule version, and the reviewer state.
+
+=== OBJ 170 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+28
+34. MVP engineering backlog
+The backlog is organized so a developer can create issues directly from the FRD. P0 items are release blockers;
+P1 items should be delivered when the core path is stable.
+Epic
+Area
+Developer deliverables
+Priority
+E01
+Project foundation
+Repo, branch protections,
+lint/typecheck, env config,
+secret strategy, Terraform
+skeleton
+P0
+E02
+Identity & tenancy
+Firebase Auth, role claims,
+organisation context, auth
+guards, audit hooks
+P0
+E03
+Matter/property
+Matter CRUD, property
+identifiers, aliases,
+address/coordinate capture
+P0
+E04
+Document ingestion
+Signed upload URLs, checksum,
+metadata, virus scan, versions
+P0
+E05
+OCR & extraction
+Document AI, classifier,
+extraction schema, evidence
+anchors, confidence
+P0
+E06
+Normalization
+Names, survey strings, dates,
+extents, units, aliases
+P0
+E07
+Title chain
+Events, parties, chain gaps,
+reviewer state, timeline UI
+P0
+E08
+GIS foundation
+MapLibre, PostGIS, layer
+registry, GeoJSON API, snapshot
+renderer
+P0
+E09
+GIS rules
+Intersection/distance/overlap
+rules, thresholds, rule
+versioning
+P0
+E10
+Discrepancy engine
+Cross-document comparison,
+conflict explanation, review
+workflow
+P0
+E11
+Findings & tasks
+Severity/state model,
+assignment, due dates, audit
+P0
+E12
+Report engine
+Versioned snapshot, HTML
+template, Playwright PDF,
+evidence appendix
+P0
+E13
+Research layer
+Hybrid search, citations, source
+metadata, AI synthesis
+P1
+E14
+Monitoring
+Source registry, scheduled
+refresh, change detection, alerts
+P1
+E15
+Admin
+Rules/source/model/template
+administration
+P1
+E16
+Billing
+Plans, usage counters, invoices,
+payment gateway
+P1
+E17
+Pilot hardening
+Load tests, pen test, DR drill,
+dashboards, runbooks
+P0
+34.1 Developer task decomposition - E08 GIS example
+
+Create geo_layers, geo_features and geo_results migrations.
+
+Implement PostGIS geometry validation and SRID checks.
+
+Build layer registry CRUD for source, vintage, licence and visibility.
+
+Create GET /v1/properties/{id}/geo-results endpoint.
+
+Add distance/intersection SQL functions and deterministic tests.
+
+Build MapLibre layer control and feature inspection drawer.
+
+Implement map snapshot endpoint and report embedding.
+
+Load a controlled sample Rajakaluve/SWD layer and verify known test properties.
+
+Add source freshness and degraded-state banner.
+
+Log every map-screen run with property, layer vintage and ruleset version.
+34.2 Definition of Done for domain features
+
+Unit tests for deterministic business logic.
+
+=== OBJ 175 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+29
+
+Integration test against a test database.
+
+API contract documented in OpenAPI.
+
+Permission tests for every role interacting with the feature.
+
+At least one negative/edge-case test in the golden corpus.
+
+Audit event emitted for all state-changing actions.
+
+Observability dashboard or log fields added for operationally important jobs.
+
+Feature accepted against a written user story and acceptance criteria.
+
+=== OBJ 180 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+30
+35. UX / screen specification
+Screen
+Primary widgets
+Critical behaviours
+01 Login
+Sign-in, MFA, reset
+Tenant-safe redirect; session expiry
+handling
+02 Home dashboard
+Open matters, overdue tasks, recent
+findings, source health
+Role-aware metrics; no cross-tenant data
+03 Matter workspace
+Matter details, property, tabs, activity
+Persistent context across
+documents/map/research
+04 Property profile
+Identifiers, address, coordinates, evidence
+state
+Raw vs normalized values visible
+05 Documents
+Upload zone, filters, processing status,
+version history
+Bulk upload; retry; duplicate warning
+06 Document review
+Document viewer + extracted fields +
+evidence anchors
+Click field -> page/bbox highlight; edit with
+audit
+07 Title chain
+Timeline/graph, events, parties, gaps
+Reviewer can accept/dispute event
+08 Map intelligence
+Map, layer switcher, findings drawer
+Select finding -> highlight geometry +
+measurement
+09 Discrepancies
+Side-by-side source values
+Accept/reject/defer + rationale
+10 Findings
+Filter by severity/state/category
+Assign, due date, evidence, resolution
+11 Research
+Search, filters, source cards, citation panel
+Grounded results; cite source before adding
+to report
+12 Report builder
+Template, sections, findings selection,
+preview
+Generate immutable snapshot; versioned
+output
+13 Admin
+Users, roles, rules, sources, templates,
+models
+Privileged access + audit trail
+14 Source health
+Connector status, last refresh, parser
+version
+STALE/DEGRADED/BLOCKED states
+35.1 Mobile-first requirements
+
+Primary actions reachable with one hand on a phone-sized viewport.
+
+Map and document review use bottom sheets/drawers instead of desktop-only sidebars.
+
+Uploads support camera capture where browser permissions allow.
+
+Long operations show persistent job status rather than blocking the whole screen.
+
+Tables collapse to cards on narrow widths while preserving all evidence fields.
+
+=== OBJ 185 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+31
+36. Supplied map evidence appendix
+The following photographs were supplied as product-context evidence. They are included to preserve the field
+context behind the requirements. They are not treated as authoritative legal or cadastral records by this FRD.
+Figure 3. Supplied photograph: parcel/survey-style map over satellite imagery with tank/water-body context.
+
+=== OBJ 190 ===
+OJIX Property Intelligence | Functional Requirements & Technical Architecture |
+32
+Figure 4. Supplied photograph: Bengaluru administrative/cadastral-style map with village and Bengaluru zone labels.
+Product requirement derived from the photographs
+Support map artifacts as evidence objects with
+publisher/source, map vintage, coordinate system when known, checksum, retrieval date, layer identity, and
+reviewer status.

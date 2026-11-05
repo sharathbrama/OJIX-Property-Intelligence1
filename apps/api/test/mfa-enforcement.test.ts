@@ -203,3 +203,59 @@ test('Enforce MFA = OFF: Privileged role can sign in directly without OTP challe
   );
   assert.equal(auditRes.rowCount, 1, 'Audit log must record auth.login_password_direct');
 });
+
+test('Enforce MFA = ON: Evidence Analyst is challenged for OTP per FRD AUTH-01', async () => {
+  await pool!.query(
+    'UPDATE workspace_settings SET enforce_mfa_privileged=1 WHERE tenant_id=?',
+    [DEFAULT_ORGANIZATION_ID]
+  );
+
+  const directRes = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'keerthana1234p@gmail.com',
+      password: 'Analyst@3126',
+      expectedRole: 'analyst',
+    }),
+  });
+  assert.equal(directRes.status, 403, 'Analyst direct login must be blocked when MFA enforced');
+  const directBody = await directRes.json();
+  assert.equal(directBody.mfaRequired, true);
+
+  const otpRes = await fetch(`${baseUrl}/api/auth/login/request-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'keerthana1234p@gmail.com',
+      password: 'Analyst@3126',
+      expectedRole: 'analyst',
+    }),
+  });
+  assert.equal(otpRes.status, 201, 'Analyst must receive OTP challenge 201 when MFA is enforced');
+  const otpBody = await otpRes.json();
+  assert.ok(otpBody.challengeId);
+  assert.ok(!otpBody.token);
+});
+
+test('Enforce MFA = OFF: Evidence Analyst signs in directly without OTP per FRD AUTH-01', async () => {
+  await pool!.query(
+    'UPDATE workspace_settings SET enforce_mfa_privileged=0 WHERE tenant_id=?',
+    [DEFAULT_ORGANIZATION_ID]
+  );
+
+  const otpRes = await fetch(`${baseUrl}/api/auth/login/request-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'keerthana1234p@gmail.com',
+      password: 'Analyst@3126',
+      expectedRole: 'analyst',
+    }),
+  });
+  assert.equal(otpRes.status, 200, 'Analyst must receive 200 OK directly without OTP when MFA toggle is OFF');
+  const otpBody = await otpRes.json();
+  assert.ok(otpBody.token);
+  assert.equal(otpBody.mfaRequired, false);
+  assert.equal(otpBody.user.role, 'analyst');
+});

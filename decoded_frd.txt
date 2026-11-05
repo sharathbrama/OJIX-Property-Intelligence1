@@ -1,0 +1,464 @@
+=== PAGE 1 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+1
+PROPERTY INTELLIGENCE
+Functional Requirements Document + Technical Architecture
+AI-assisted land, property and legal due-diligence platform
+SCOPE
+Karnataka-first, Bengaluru-first property intelligence with a design that can expand to additional districts, authorities
+and states without rebuilding the core platform.
+Prepared for:
+OJIX Engineering & Technology LLP
+Document version:
+1.0  |  Date: 29 September 2026
+Status:
+Product definition / engineering baseline
+Confidentiality:
+Internal product and implementation document
+IMPORTANT OPERATING PRINCIPLE
+The platform is an evidence and workflow system. It must not represent AI output as a legal opinion, ownership
+determination, or government certification. High-impact conclusions remain reviewable by a qualified professional.
+
+=== PAGE 2 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+2
+
+=== PAGE 3 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+3
+
+=== PAGE 4 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+4
+
+=== PAGE 5 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+5
+
+=== PAGE 6 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+6
+
+=== PAGE 7 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+7
+
+=== PAGE 8 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+8
+
+=== PAGE 9 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+9
+
+=== PAGE 10 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+10
+
+=== PAGE 11 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+11
+
+=== PAGE 12 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+12
+
+=== PAGE 13 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+13
+
+=== PAGE 14 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+14
+
+=== PAGE 15 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+15
+
+=== PAGE 16 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+16
+
+=== PAGE 17 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+17
+
+=== PAGE 18 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+18
+
+=== PAGE 19 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+19
+
+=== PAGE 20 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+20
+
+=== PAGE 21 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+21
+
+=== PAGE 22 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+22
+
+=== PAGE 23 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+23
+
+=== PAGE 24 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+24
+
+=== PAGE 25 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+25
+
+=== PAGE 26 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+26
+
+=== PAGE 27 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+27
+
+=== PAGE 28 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+28
+
+=== PAGE 29 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+29
+
+=== PAGE 30 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+30
+
+=== PAGE 31 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+31
+
+=== PAGE 32 ===
+
+OJI
+X
+T E C H N O L O G Y .  I N T E L L I G E N C E .  E N G I N E E R I N G .
+OJIX Engineering & Technology LLP
+Bengaluru, Karnataka, India
+info@ojix.in
+OJI
+X
+OJIX Engineering & Technology LLP  ·  LLPIN ADA-1604
+Ranga Rao Rd, Shankarapura, Bengaluru 560004  ·  info@ojix.in
+32
