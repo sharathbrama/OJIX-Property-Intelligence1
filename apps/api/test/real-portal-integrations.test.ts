@@ -80,7 +80,7 @@ test('SOURCE CATALOG: Direct query never fabricates registry records', async () 
 
 test('PORTAL INTEGRATION API: Live HTTP Status Endpoint with Gateway Probing', async () => {
   const res = await fetch(`${API_BASE}/api/source-registry/status?probe=true`, {
-    headers: { 'Authorization': 'Bearer dummy-token-user-analyst' }
+    headers: { 'x-user-uid': 'user-analyst' }
   });
   assert.equal(res.status, 200, 'Health endpoint must return HTTP 200 OK');
   const data = await res.json() as any;
@@ -93,7 +93,7 @@ test('PORTAL INTEGRATION API: Live In-App Query Endpoint POST /api/source-regist
   const res = await fetch(`${API_BASE}/api/source-registry/query`, {
     method: 'POST',
     headers: {
-      'Authorization': 'Bearer dummy-token-user-lawyer',
+      'x-user-uid': 'user-lawyer',
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({

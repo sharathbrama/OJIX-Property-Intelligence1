@@ -68,6 +68,12 @@ export interface SpatialScreeningLayerInput {
   distanceM?: number;
 }
 
+export interface SpatialRuleConfig {
+  buffers?: Partial<Record<SpatialLayerType, number>>;
+  severityByLayer?: Partial<Record<SpatialLayerType, SpatialScreeningFinding['severity']>>;
+  proximityMeters?: Partial<Record<SpatialLayerType, number>>;
+}
+
 /**
  * Calculates geodesic distance between two points on the WGS84 ellipsoid
  * using the Haversine spherical approximation (R = 6,371,000 m).
@@ -222,7 +228,8 @@ function validateMultiPolygonCoordinates(coordinates: any): boolean {
 export function screenSpatialBuffers(
   propertyPoint: { latitude: number; longitude: number },
   layers: SpatialScreeningLayerInput[],
-  customParcelGeoJSON?: any
+  customParcelGeoJSON?: any,
+  rules: SpatialRuleConfig = {},
 ): SpatialScreeningResult {
   const findings: SpatialScreeningFinding[] = [];
   let minDrainDist = Infinity;
@@ -260,7 +267,7 @@ export function screenSpatialBuffers(
     let hasFinding = false;
 
     if (layer.layerType === 'swd_primary') {
-      bufferM = 50;
+      bufferM = rules.buffers?.swd_primary ?? 50;
       minDrainDist = Math.min(minDrainDist, rawDist);
       if (rawDist === 0) {
         drainStatus = 'encroached';
@@ -272,13 +279,13 @@ export function screenSpatialBuffers(
         severity = 'critical';
         points = 35;
         hasFinding = true;
-      } else if (rawDist <= 100) {
+      } else if (rawDist <= (rules.proximityMeters?.swd_primary ?? 100)) {
         severity = 'medium';
         points = 15;
         hasFinding = true;
       }
     } else if (layer.layerType === 'swd_secondary') {
-      bufferM = 25;
+      bufferM = rules.buffers?.swd_secondary ?? 25;
       minDrainDist = Math.min(minDrainDist, rawDist);
       if (rawDist === 0) {
         drainStatus = 'encroached';
@@ -290,13 +297,13 @@ export function screenSpatialBuffers(
         severity = 'high';
         points = 25;
         hasFinding = true;
-      } else if (rawDist <= 75) {
+      } else if (rawDist <= (rules.proximityMeters?.swd_secondary ?? 75)) {
         severity = 'medium';
         points = 15;
         hasFinding = true;
       }
     } else if (layer.layerType === 'swd_tertiary') {
-      bufferM = 15;
+      bufferM = rules.buffers?.swd_tertiary ?? 15;
       minDrainDist = Math.min(minDrainDist, rawDist);
       if (rawDist === 0) {
         drainStatus = 'encroached';
@@ -308,13 +315,13 @@ export function screenSpatialBuffers(
         severity = 'high';
         points = 25;
         hasFinding = true;
-      } else if (rawDist <= 75) {
+      } else if (rawDist <= (rules.proximityMeters?.swd_tertiary ?? 75)) {
         severity = 'medium';
         points = 15;
         hasFinding = true;
       }
     } else if (layer.layerType === 'waterbody') {
-      bufferM = 30;
+      bufferM = rules.buffers?.waterbody ?? 30;
       minLakeDist = Math.min(minLakeDist, rawDist);
       if (rawDist === 0) {
         lakeStatus = 'encroached';
@@ -326,7 +333,7 @@ export function screenSpatialBuffers(
         severity = 'critical';
         points = 35;
         hasFinding = true;
-      } else if (rawDist <= 100) {
+      } else if (rawDist <= (rules.proximityMeters?.waterbody ?? 100)) {
         severity = 'medium';
         points = 15;
         hasFinding = true;
@@ -337,6 +344,7 @@ export function screenSpatialBuffers(
     const isInsideBuffer = rawDist <= bufferM;
 
     if (hasFinding) {
+      severity = rules.severityByLayer?.[layer.layerType] ?? severity;
       findings.push({
         code: `SPATIAL_${layer.layerType.toUpperCase()}_${
           isEncroached ? 'ENCROACHMENT' : isInsideBuffer ? 'BUFFER' : 'PROXIMITY'

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+const fetchAsOwner = (input: RequestInfo | URL, init: RequestInit = {}) => fetch(input, { ...init, headers: { ...(init.headers as Record<string,string> || {}), 'x-user-uid': 'local-developer' } });
 import {
   screenSpatialBuffers,
   calculateGeodesicDistance,
@@ -478,7 +479,7 @@ test('ADVERSARIAL-5.2: Does not infer cadastral geometry; preserves only supplie
 
 test('ADVERSARIAL-5.3: POST /api/spatial/screen-point preserves valid 0.0 latitude or longitude', async () => {
   const serverBaseUrl = process.env.TEST_API_URL || 'http://localhost:4000';
-  const response = await fetch(`${serverBaseUrl}/api/spatial/screen-point`, {
+  const response = await fetchAsOwner(`${serverBaseUrl}/api/spatial/screen-point`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ latitude: 0, longitude: 0 }),
@@ -495,7 +496,7 @@ test('ADVERSARIAL-5.3: POST /api/spatial/screen-point preserves valid 0.0 latitu
 test('ADVERSARIAL-5.4: POST /api/properties/:id/parcel-geometry accepts standard MultiPolygon with 200 OK', async () => {
   const serverBaseUrl = process.env.TEST_API_URL || 'http://localhost:4000';
   const testPropertyId = '22222222-2222-4222-8222-222222222222';
-  const response = await fetch(`${serverBaseUrl}/api/properties/${testPropertyId}/parcel-geometry`, {
+  const response = await fetchAsOwner(`${serverBaseUrl}/api/properties/${testPropertyId}/parcel-geometry`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -517,7 +518,7 @@ test('ADVERSARIAL-5.4: POST /api/properties/:id/parcel-geometry accepts standard
 test('ADVERSARIAL-5.5: POST /api/properties/:id/parcel-geometry returns 400 Bad Request on degenerate non-numeric coords', async () => {
   const serverBaseUrl = process.env.TEST_API_URL || 'http://localhost:4000';
   const testPropertyId = '22222222-2222-4222-8222-222222222222';
-  const response = await fetch(`${serverBaseUrl}/api/properties/${testPropertyId}/parcel-geometry`, {
+  const response = await fetchAsOwner(`${serverBaseUrl}/api/properties/${testPropertyId}/parcel-geometry`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

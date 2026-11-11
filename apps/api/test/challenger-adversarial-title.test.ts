@@ -5,6 +5,7 @@ import { pool } from './mariadb-test-pool.js';
 import crypto from 'node:crypto';
 
 const serverBaseUrl = process.env.TEST_API_URL || 'http://localhost:4000';
+const fetchAsOwner = (input: RequestInfo | URL, init: RequestInit = {}) => fetch(input, { ...init, headers: { ...(init.headers as Record<string,string> || {}), 'x-user-uid': 'local-developer' } });
 
 const PROPERTY_ID = '22222222-2222-4222-8222-222222222222';
 const TENANT_ID = '11111111-1111-4111-8111-111111111111';
@@ -74,7 +75,7 @@ async function cleanupDoc(id: string) {
 test('ADVERSARIAL REVIEW-1: Dispute with empty string "" rationale returns 400 Bad Request', async () => {
   const eventId = await createTestEvent();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'disputed', rationale: '' }),
@@ -90,7 +91,7 @@ test('ADVERSARIAL REVIEW-1: Dispute with empty string "" rationale returns 400 B
 test('ADVERSARIAL REVIEW-2: Dispute with whitespace-only "   " rationale returns 400 Bad Request', async () => {
   const eventId = await createTestEvent();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'disputed', rationale: '   ' }),
@@ -106,7 +107,7 @@ test('ADVERSARIAL REVIEW-2: Dispute with whitespace-only "   " rationale returns
 test('ADVERSARIAL REVIEW-3: Dispute with null rationale returns 400 Bad Request', async () => {
   const eventId = await createTestEvent();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'disputed', rationale: null }),
@@ -120,7 +121,7 @@ test('ADVERSARIAL REVIEW-3: Dispute with null rationale returns 400 Bad Request'
 test('ADVERSARIAL REVIEW-4: Dispute with undefined/omitted rationale returns 400 Bad Request', async () => {
   const eventId = await createTestEvent();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'disputed' }),
@@ -136,7 +137,7 @@ test('ADVERSARIAL REVIEW-4: Dispute with undefined/omitted rationale returns 400
 test('ADVERSARIAL REVIEW-5: Valid dispute rationale succeeds with 200 OK and logs audit entry', async () => {
   const eventId = await createTestEvent();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -160,14 +161,14 @@ test('ADVERSARIAL REVIEW-5: Valid dispute rationale succeeds with 200 OK and log
 test('ADVERSARIAL REVIEW-6: Verification and clearing back to unverified do not require rationale', async () => {
   const eventId = await createTestEvent({ status: 'disputed' });
   try {
-    const resVerify = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
+    const resVerify = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'verified' }),
     });
     assert.equal(resVerify.status, 200);
 
-    const resClear = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
+    const resClear = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events/${eventId}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'unverified' }),
@@ -185,7 +186,7 @@ test('ADVERSARIAL REVIEW-6: Verification and clearing back to unverified do not 
 test('ADVERSARIAL TRAVERSAL-1: POST /extract with ../package.json returns 403 Forbidden', async () => {
   const docId = await createTestDoc('../package.json');
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/extract`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: 'Some text' }),
@@ -201,7 +202,7 @@ test('ADVERSARIAL TRAVERSAL-1: POST /extract with ../package.json returns 403 Fo
 test('ADVERSARIAL TRAVERSAL-2: POST /extract with /etc/passwd returns 403 Forbidden', async () => {
   const docId = await createTestDoc('/etc/passwd');
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/extract`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: 'Some text' }),
@@ -217,7 +218,7 @@ test('ADVERSARIAL TRAVERSAL-2: POST /extract with /etc/passwd returns 403 Forbid
 test('ADVERSARIAL TRAVERSAL-3: POST /extract with ..\\package.json (backslashes) returns 403 Forbidden', async () => {
   const docId = await createTestDoc('..\\package.json');
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/extract`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: 'Some text' }),
@@ -233,7 +234,7 @@ test('ADVERSARIAL TRAVERSAL-3: POST /extract with ..\\package.json (backslashes)
 test('ADVERSARIAL TRAVERSAL-4: POST /extract with nested dir/../../package.json returns 403 Forbidden', async () => {
   const docId = await createTestDoc('uploads/../../package.json');
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/extract`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: 'Some text' }),
@@ -258,7 +259,7 @@ test('ADVERSARIAL TRAVERSAL-5: Null-byte injection is blocked by resolveSafeUplo
 // ============================================================================
 
 test('ADVERSARIAL PAYLOAD-1: Empty body {} returns 400 Bad Request with field errors', async () => {
-  const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
+  const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
@@ -274,7 +275,7 @@ test('ADVERSARIAL PAYLOAD-1: Empty body {} returns 400 Bad Request with field er
 });
 
 test('ADVERSARIAL PAYLOAD-2: Malformed eventDate (invalid format) returns 400 Bad Request', async () => {
-  const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
+  const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -291,7 +292,7 @@ test('ADVERSARIAL PAYLOAD-2: Malformed eventDate (invalid format) returns 400 Ba
 });
 
 test('ADVERSARIAL PAYLOAD-3: Negative extentSqFt returns 400 Bad Request', async () => {
-  const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
+  const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -308,7 +309,7 @@ test('ADVERSARIAL PAYLOAD-3: Negative extentSqFt returns 400 Bad Request', async
 });
 
 test('ADVERSARIAL PAYLOAD-4: Negative consideration returns 400 Bad Request', async () => {
-  const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
+  const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -326,7 +327,7 @@ test('ADVERSARIAL PAYLOAD-4: Negative consideration returns 400 Bad Request', as
 });
 
 test('ADVERSARIAL PAYLOAD-5: SequenceOrder < 1 (0 or negative) returns 400 Bad Request', async () => {
-  const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
+  const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -344,7 +345,7 @@ test('ADVERSARIAL PAYLOAD-5: SequenceOrder < 1 (0 or negative) returns 400 Bad R
 });
 
 test('ADVERSARIAL PAYLOAD-6: Whitespace-only or empty deedType returns 400 Bad Request', async () => {
-  const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
+  const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -361,7 +362,7 @@ test('ADVERSARIAL PAYLOAD-6: Whitespace-only or empty deedType returns 400 Bad R
 });
 
 test('ADVERSARIAL PAYLOAD-7: Whitespace-only party names return 400 Bad Request', async () => {
-  const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
+  const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -376,7 +377,7 @@ test('ADVERSARIAL PAYLOAD-7: Whitespace-only party names return 400 Bad Request'
 });
 
 test('ADVERSARIAL PAYLOAD-8: Invalid enum values return 400 Bad Request', async () => {
-  const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
+  const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -392,7 +393,7 @@ test('ADVERSARIAL PAYLOAD-8: Invalid enum values return 400 Bad Request', async 
 });
 
 test('ADVERSARIAL PAYLOAD-9: Valid title-event insertion succeeds with 201 Created and normalized parties', async () => {
-  const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
+  const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/title-events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

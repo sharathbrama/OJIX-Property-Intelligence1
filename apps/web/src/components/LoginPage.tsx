@@ -10,6 +10,20 @@ interface LoginPageProps {
   expectedRole?: string;
 }
 
+async function readApiJson(response: Response): Promise<Record<string, any>> {
+  const body = await response.text();
+  if (!body.trim()) {
+    throw new Error(`The API returned an empty response (HTTP ${response.status}).`);
+  }
+  try {
+    const data: unknown = JSON.parse(body);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid response shape');
+    return data as Record<string, any>;
+  } catch {
+    throw new Error(`The API returned an invalid JSON response (HTTP ${response.status}).`);
+  }
+}
+
 const roleLoginCopy:Record<string,{label:string;description:string}>={
   'super-admin':{label:'Super Admin',description:'Authorized platform administrators only.'},owner:{label:'Workspace Owner',description:'Manage workspace operations and property matters.'},admin:{label:'Organization Admin',description:'Manage organization members, workflows and records.'},lawyer:{label:'Legal Reviewer',description:'Review title evidence and due-diligence findings.'},analyst:{label:'Evidence Analyst',description:'Analyze property records and prepare assigned matters.'},operations:{label:'Document Operations',description:'Manage document intake and processing queues.'},consultant:{label:'Consultant',description:'Review assigned client dossiers and evidence.'},support:{label:'Support',description:'Access authorized workspace diagnostics.'},data_steward:{label:'Data Steward',description:'Maintain source data and reference records.'},viewer:{label:'Viewer',description:'Access approved read-only workspace records.'}
 };
@@ -261,7 +275,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
             ? 'The API has no DATABASE_URL configured.'
             : data.database === 'disconnected'
               ? 'The API is running but cannot connect to its database.'
-              : data.error || `Health check failed (HTTP ${res.status}).`;
+              : `${data.error || `Health check failed (HTTP ${res.status}).`}${data.errorCode ? ` (${data.errorCode})` : ''}`;
           throw new Error(reason);
         }
         setServiceStatus('ready');
@@ -306,10 +320,11 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, expectedRole:requestedRole, deliveryChannel })
       });
-      const data = await res.json();
+      const data = await readApiJson(res);
       if (!res.ok) {
-        const error = new Error(data.error || 'Failed to authenticate') as Error & { retryAfterSeconds?: number };
+        const error = new Error(data.error || 'Failed to authenticate') as Error & { retryAfterSeconds?: number; code?: string };
         error.retryAfterSeconds = Number(data.retryAfterSeconds) || undefined;
+        error.code = typeof data.code === 'string' ? data.code : undefined;
         throw error;
       }
 
@@ -324,7 +339,8 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       setMode('login-otp');
     } catch (err: any) {
       if (Number(err?.retryAfterSeconds) > 0) setResendAvailableAt(Date.now() + Number(err.retryAfterSeconds) * 1000);
-      setError(err.message || 'Login failed. Please check credentials.');
+      const message = err.message || 'Login failed. Please check credentials.';
+      setError(err.code ? `${message} (${err.code})` : message);
     } finally {
       setLoading(false);
     }
@@ -336,7 +352,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     e?.preventDefault();setLoading(true);setError('');
     try{
       const res=await fetch(`${apiUrl}/api/auth/forgot-password/request-otp`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,expectedRole:selectedRole})});
-      const data=await res.json();
+      const data=await readApiJson(res);
       if(!res.ok){const failure=new Error(data.error||'Unable to send a recovery code.') as Error&{retryAfterSeconds?:number};failure.retryAfterSeconds=Number(data.retryAfterSeconds)||undefined;throw failure;}
       setRecoveryChallengeId(data.challengeId);setRecoveryExpiresAt(data.expiresAt?new Date(data.expiresAt).getTime():Date.now()+600000);setRecoveryOtp('');setRecoveryStep('reset');
     }catch(err){setError(err instanceof Error?err.message:'Unable to send a recovery code.');}
@@ -349,7 +365,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     setLoading(true);
     try{
       const res=await fetch(`${apiUrl}/api/auth/forgot-password/reset`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId:recoveryChallengeId,email,expectedRole:selectedRole,otp:recoveryOtp,newPassword:recoveryPassword})});
-      const data=await res.json();if(!res.ok)throw new Error(data.error||'Unable to reset the password.');
+      const data=await readApiJson(res);if(!res.ok)throw new Error(data.error||'Unable to reset the password.');
       setPassword('');setRecoveryPasswordCopied(false);setRecoveryConfirmPassword('');setRecoveryOtp('');setRecoveryStep('success');
     }catch(err){setError(err instanceof Error?err.message:'Unable to reset the password.');}
     finally{setLoading(false);}
@@ -360,7 +376,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     try {
       const requestedRole=challengeRole||selectedRole;
       const res=await fetch(`${apiUrl}/api/auth/login/verify-otp`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({challengeId,email,otp,expectedRole:requestedRole})});
-      const data=await res.json();
+      const data=await readApiJson(res);
       if(!res.ok)throw new Error(data.error||'Unable to verify the sign-in code.');
       if(!matchesRequestedRole(data.user,requestedRole))throw new Error(`This account cannot access the ${roleLoginCopy[requestedRole]?.label||'selected'} sign-in page.`);
       onLoginSuccess(data.token,data.user,requestedRole);
@@ -401,7 +417,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
           password: registerPassword,
         })
       });
-      const data = await res.json();
+      const data = await readApiJson(res);
       if (!res.ok) {
         const failure = new Error(data.error || 'Unable to create registration.') as Error & { retryAfterSeconds?: number };
         failure.retryAfterSeconds = Number(data.retryAfterSeconds) || undefined;
@@ -429,7 +445,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ challengeId, email: registerEmail, otp })
       });
-      const data = await res.json();
+      const data = await readApiJson(res);
       if (!res.ok) throw new Error(data.error || 'OTP verification failed.');
       setEmail(registerEmail);
       setPassword(registerPassword);

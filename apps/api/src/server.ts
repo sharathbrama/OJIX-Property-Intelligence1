@@ -7,13 +7,14 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import mysql from 'mysql2/promise';
 import { z } from 'zod';
 import { generateOtp, generateOtpSalt, hashOtp, hashPassword, resolveDemoCredential, verifyOtp, verifyPassword } from './auth-security.js';
 import { bootstrapSuperAdmin, isConfiguredSuperAdminEmail } from './super-admin-bootstrap.js';
-import { sendOtpEmailWithSmtp } from './otp-email.js';
+import { classifySmtpFailure, getSmtpConfigurationIssues, readSmtpSettings, sendOtpEmailWithSmtp, smtpPublicError } from './otp-email.js';
 import { calculateRisk, buildBaselineFindings, type RiskFinding } from './risk-engine.js';
 import { extractDocument } from './document-extractor.js';
 import type { ExtractedDocumentFields, KarnatakaDocumentType } from './types.js';
@@ -53,10 +54,17 @@ import { sourceRegistryEngine, type RegistryName, type RegistryVerificationResul
 import { retrieveRtc, rtcSearchSchema } from './rtc-retrieval-service.js';
 import { buildTenantObjectKey, createDocumentStorage } from './document-storage.js';
 import { ocrAccess, type OcrRole } from './ocr-access.js';
+import { DEFAULT_ROLE_PERMISSIONS, hasPermission, permissionForRequest, RBAC_ACTIONS, RBAC_ROLES } from './rbac.js';
 
 
-dotenv.config();
-dotenv.config({ path: path.resolve(process.cwd(), '../../.env'), override: false });
+// Resolve environment files from this package so `tsx watch` and the compiled
+// `dist/src/server.js` entry point load the same files from any working dir.
+const serverDir = path.dirname(fileURLToPath(import.meta.url));
+const apiRoot = path.basename(path.dirname(serverDir)) === 'dist'
+  ? path.resolve(serverDir, '../..')
+  : path.resolve(serverDir, '..');
+dotenv.config({ path: path.join(apiRoot, '.env'), override: false });
+dotenv.config({ path: path.resolve(apiRoot, '../../.env'), override: false });
 
 const app = express();
 
@@ -95,7 +103,7 @@ function pendingDocumentFields(_documentId: string, documentType: string, classi
     extractionMetadata: {
       source: 'pending',
       status: 'manual_review',
-      message: 'Document AI extraction has not started. Extracted facts require reviewer confirmation.',
+      message: 'Local Tesseract extraction has not started. Extracted facts require reviewer confirmation.',
     },
     reviewState: { isVerified: false, overrides: {} },
   };
@@ -108,7 +116,7 @@ type DbResult = {
 
 const jsonColumns = new Set([
   'details', 'metadata', 'extracted_fields', 'from_parties', 'to_parties',
-  'query_params', 'matched_record', 'discrepancies', 'parcel_geojson',
+  'query_params', 'matched_record', 'discrepancies', 'parcel_geojson', 'checklist', 'snapshot', 'evidence_references', 'refs',
   'search_criteria', 'retrieved_data', 'source_payload',
 ]);
 
@@ -323,6 +331,7 @@ export interface AuthenticatedRequest extends Request {
     tenantId?: string;
     role?: string;
     isSuperAdmin?: boolean;
+    permissions?: string[];
   };
 }
 const supportSessions = new Map<string, number>();
@@ -337,19 +346,47 @@ const OTP_REQUEST_WINDOW_MINUTES = 15;
 const DEFAULT_ORGANIZATION_ID = '11111111-1111-4111-8111-111111111111';
 
 class OtpDeliveryError extends Error {
-  constructor(message: string) { super(message); this.name = 'OtpDeliveryError'; }
+  constructor(readonly code: string, message: string) { super(message); this.name = 'OtpDeliveryError'; }
+}
+
+function smtpSafeDiagnostic(error:unknown) {
+  const detail=error as {code?:unknown;responseCode?:unknown;command?:unknown;smtpStage?:unknown};
+  return {
+    code:typeof detail?.code==='string'?detail.code:'unknown',
+    responseCode:typeof detail?.responseCode==='number'?detail.responseCode:undefined,
+    command:typeof detail?.command==='string'?detail.command:'unknown',
+    stage:detail?.smtpStage==='verify'||detail?.smtpStage==='sendMail'?detail.smtpStage:'unknown'
+  };
 }
 
 async function deliverOtpEmail(email:string, name:string, otp:string, purpose:'login'|'registration'|'password_reset') {
-  const smtpUser=process.env.SMTP_USER?.trim();
-  const smtpPass=process.env.SMTP_PASS?.trim();
-  if (!smtpUser || !smtpPass) throw new OtpDeliveryError('Email OTP delivery is not configured. Set SMTP_USER and SMTP_PASS, then restart the API.');
-  const host=process.env.SMTP_HOST?.trim() || (smtpUser.endsWith('@gmail.com')?'smtp.gmail.com':'');
-  const port=Number(process.env.SMTP_PORT || (host==='smtp.gmail.com'?465:587));
-  if (!host || !Number.isInteger(port) || port<1 || port>65535) throw new OtpDeliveryError('SMTP configuration is invalid. Set SMTP_HOST and a valid SMTP_PORT.');
-  const secure=process.env.SMTP_SECURE ? process.env.SMTP_SECURE==='true' : port===465;
-  try { await sendOtpEmailWithSmtp({host,port,secure,user:smtpUser,pass:smtpPass},{from:process.env.SMTP_FROM?.trim()||smtpUser,to:email,name,otp,purpose}); }
-  catch { throw new OtpDeliveryError('The verification email could not be delivered. Check the SMTP provider configuration.'); }
+  let settings;
+  try { settings=readSmtpSettings(); }
+  catch(error) {
+    const issues=getSmtpConfigurationIssues();
+    const code=classifySmtpFailure(error);
+    console.error('[smtp] Configuration rejected',{code,issues});
+    throw new OtpDeliveryError(code,smtpPublicError(code));
+  }
+  const issues=getSmtpConfigurationIssues();
+  if(issues.length){
+    console.error('[smtp] Configuration rejected',{reasonCode:'SMTP_CONFIG_INVALID',issues});
+    throw new OtpDeliveryError('SMTP_CONFIG_INVALID',smtpPublicError('SMTP_CONFIG_INVALID'));
+  }
+  const from=process.env.SMTP_FROM?.trim()||settings.user;
+  try {
+    await sendOtpEmailWithSmtp(settings,{from,to:email,name,otp,purpose});
+    console.info('[smtp] OTP email accepted by SMTP server',{purpose});
+  }
+  catch (error) {
+    const code=classifySmtpFailure(error);
+    console.error('[smtp] OTP delivery failed',{
+      reasonCode:code,
+      port:settings.port,tls:settings.secure?'implicit':'required STARTTLS',
+      ...smtpSafeDiagnostic(error)
+    });
+    throw new OtpDeliveryError(code,smtpPublicError(code));
+  }
   return { delivered:true, mode:'email' as const };
 }
 
@@ -358,11 +395,11 @@ async function deliverOtpSms(phone:string, name:string, otp:string) {
   const authToken=process.env.TWILIO_AUTH_TOKEN?.trim();
   const from=process.env.TWILIO_FROM_NUMBER?.trim();
   const messagingServiceSid=process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
-  if(!accountSid||!authToken||(!from&&!messagingServiceSid))throw new OtpDeliveryError('SMS OTP delivery is not configured. Add Twilio credentials and restart the API.');
+  if(!accountSid||!authToken||(!from&&!messagingServiceSid))throw new OtpDeliveryError('SMS_NOT_CONFIGURED','SMS OTP delivery is not configured. Add Twilio credentials and restart the API.');
   const body=new URLSearchParams({To:phone,Body:`OJIX sign-in code for ${name}: ${otp}. It expires in 10 minutes. Never share this code.`});
   if(messagingServiceSid)body.set('MessagingServiceSid',messagingServiceSid);else body.set('From',from!);
   const response=await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,{method:'POST',headers:{Authorization:`Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,'Content-Type':'application/x-www-form-urlencoded'},body});
-  if(!response.ok)throw new OtpDeliveryError('The SMS verification code could not be delivered. Check the Twilio sender and account configuration.');
+  if(!response.ok)throw new OtpDeliveryError('SMS_DELIVERY_FAILED','The SMS verification code could not be delivered. Check the Twilio sender and account configuration.');
   return {delivered:true,mode:'sms' as const};
 }
 
@@ -372,12 +409,14 @@ const maskPhone=(value:string)=>`${value.slice(0,Math.max(0,value.length-4)).rep
 async function authGuard(req: Request, res: Response, next: NextFunction) {
   const authReq = req as AuthenticatedRequest;
   let identity: { uid: string; email?: string; name?: string } | null = null;
+  let requestSession: { id:string; uid:string; email:string; name:string; role:string; tenantId:string; expiresAt:number; lastActivityAt:number } | undefined;
   const authHeader = authReq.header('authorization') || '';
   const xUserUid = authReq.header('x-user-uid');
 
   if (xUserUid) {
     if (process.env.NODE_ENV === 'production') return res.status(401).json({ error: 'Development identity headers are disabled.' });
     const matched = DUMMY_ACCOUNTS.find(a => a.uid === xUserUid);
+    if (process.env.NODE_ENV !== 'production' && matched?.role === 'support') supportSessions.set(matched.uid,Date.now()+SUPPORT_SESSION_MS);
     identity = {
       uid: xUserUid,
       email: matched?.email || `${xUserUid}@ojix.local`,
@@ -398,12 +437,13 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
       if (restored.rowCount) {
         const row=restored.rows[0];
         const dummy=DUMMY_ACCOUNTS.find(account=>account.uid===row.user_uid);
-        session={id:row.id,uid:row.user_uid,email:row.email||dummy?.email||'',name:row.full_name||dummy?.name||row.email||row.user_uid,role:isConfiguredSuperAdminEmail(row.email)?'owner':row.role,tenantId:row.tenant_id,expiresAt:new Date(row.expires_at).getTime(),lastActivityAt:new Date(row.last_activity_at).getTime()};
+        session={id:row.id,uid:row.user_uid,email:row.email||dummy?.email||'',name:row.full_name||dummy?.name||row.email||row.user_uid,role:row.role,tenantId:row.tenant_id,expiresAt:new Date(row.expires_at).getTime(),lastActivityAt:new Date(row.last_activity_at).getTime()};
         authSessions.set(rawToken,session);
       }
     }
+    requestSession=session;
     if (session && session.expiresAt > Date.now()) {
-      if(session.role==='owner'&&Date.now()-session.lastActivityAt>OWNER_INACTIVITY_EXPIRY_MS){if(pool)await pool.query("UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason='Inactivity timeout' WHERE id=? AND revoked_at IS NULL",[session.uid,session.id]);authSessions.delete(rawToken);return res.status(401).json({error:'Your session has expired due to inactivity. Please log in again.',code:'SESSION_INACTIVITY_EXPIRED'});}
+      if(['owner','super_admin'].includes(session.role)&&Date.now()-session.lastActivityAt>OWNER_INACTIVITY_EXPIRY_MS){if(pool)await pool.query("UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason='Inactivity timeout' WHERE id=? AND revoked_at IS NULL",[session.uid,session.id]);authSessions.delete(rawToken);return res.status(401).json({error:'Your session has expired due to inactivity. Please log in again.',code:'SESSION_INACTIVITY_EXPIRED'});}
       if(pool){const durable=await pool.query('SELECT id FROM authentication_sessions WHERE id=? AND revoked_at IS NULL AND expires_at>NOW(6)',[session.id]);if(!durable.rowCount){authSessions.delete(rawToken);return res.status(401).json({error:'Session has been revoked or expired.'});}if(session.role!=='owner')await pool.query('UPDATE authentication_sessions SET last_activity_at=NOW(6) WHERE id=?',[session.id]);}
       identity={uid:session.uid,email:session.email,name:session.name};
     }
@@ -433,25 +473,49 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
   }
 
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const membership = await pool.query(
-    'SELECT organization_id, role, email, status FROM org_memberships WHERE user_uid=? ORDER BY created_at LIMIT 1',
-    [identity.uid]
-  );
+  const requestedWorkspace = String(authReq.header('x-ojix-workspace-id') || requestSession?.tenantId || '').trim();
+  const membership = requestedWorkspace
+    ? await pool.query('SELECT organization_id, role, email, status FROM org_memberships WHERE user_uid=? AND organization_id=? LIMIT 1',[identity.uid,requestedWorkspace])
+    : await pool.query('SELECT organization_id, role, email, status FROM org_memberships WHERE user_uid=? ORDER BY created_at LIMIT 1',[identity.uid]);
   if (!membership.rowCount) {
     return res.status(403).json({ error: `No workspace membership exists for account '${identity.uid}'.` });
   }
   if(membership.rows[0].status&&membership.rows[0].status!=='active')return res.status(403).json({error:'This workspace membership is not active.'});
 
   const authenticatedEmail = membership.rows[0].email || identity.email;
-  const isSuperAdmin = (process.env.NODE_ENV !== 'production' && dummyIdentity?.uid === 'user-super-admin') ||
-    isConfiguredSuperAdminEmail(authenticatedEmail);
+  if (pool && !dummyIdentity) {
+    const account=await pool.query('SELECT status,email_verified FROM user_accounts WHERE id=? LIMIT 1',[identity.uid]);
+    if(account.rowCount&&(account.rows[0].status!=='active'||!account.rows[0].email_verified))return res.status(403).json({error:'This user account is disabled or unverified.',code:'ACCOUNT_INACTIVE'});
+  }
+  const isSuperAdmin = membership.rows[0].role === 'super_admin';
   authReq.user = {
     ...identity,
     email: authenticatedEmail,
     tenantId: membership.rows[0].organization_id,
-    role: isSuperAdmin ? 'owner' : membership.rows[0].role,
+    role: membership.rows[0].role,
     isSuperAdmin,
   };
+  const effectivePermissions=new Set(DEFAULT_ROLE_PERMISSIONS[membership.rows[0].role as keyof typeof DEFAULT_ROLE_PERMISSIONS]||[]);
+  try{
+    const overrides=await pool.query('SELECT resource,action,allowed FROM workspace_permission_overrides WHERE tenant_id=? AND role=?',[membership.rows[0].organization_id,membership.rows[0].role]);
+    for(const row of overrides.rows){const permission=`${row.resource}.${row.action}`;if(Boolean(row.allowed))effectivePermissions.add(permission as any);else effectivePermissions.delete(permission as any);}
+  }catch(error:any){if(error?.code!=='ER_NO_SUCH_TABLE'&&error?.errno!==1146)throw error;}
+  authReq.user.permissions=[...effectivePermissions];
+  const target=permissionForRequest(req.method,req.originalUrl,req.body);
+  if(target){
+    if(target.resource==='super_admin'&&(!isSuperAdmin||membership.rows[0].role!=='super_admin'))return res.status(403).json({error:'Platform Super Admin access is required through the isolated platform role.',code:'SUPER_ADMIN_REQUIRED'});
+    if(membership.rows[0].role==='super_admin'&&target.resource!=='super_admin')return res.status(403).json({error:'Platform Super Admin identities do not inherit workspace permissions. Sign in through a workspace membership for workspace access.',code:'WORKSPACE_ROLE_REQUIRED'});
+    let override:boolean|undefined;
+    try{
+      const result=await pool.query('SELECT allowed FROM workspace_permission_overrides WHERE tenant_id=? AND role=? AND resource=? AND action=? LIMIT 1',[membership.rows[0].organization_id,membership.rows[0].role,target.resource,target.action]);
+      if(result.rowCount)override=Boolean(result.rows[0].allowed);
+    }catch(error:any){
+      if(error?.code!=='ER_NO_SUCH_TABLE'&&error?.errno!==1146)throw error;
+      // Keep the existing deployment usable until migration 033 is applied;
+      // server-side role defaults still enforce access, while configuration APIs report migration readiness.
+    }
+    if(!hasPermission(membership.rows[0].role,target.resource,target.action,override))return res.status(403).json({error:`Permission denied for ${target.resource}.${target.action}.`,code:'PERMISSION_DENIED',requiredPermission:`${target.resource}.${target.action}`,currentRole:membership.rows[0].role});
+  }
   next();
 }
 
@@ -520,10 +584,16 @@ function viewerInternalDataGuard(req: Request, res: Response, next: NextFunction
 
 async function releasedMatterGuard(req: Request, res: Response, next: NextFunction) {
   const user = (req as AuthenticatedRequest).user;
-  if (user?.role !== 'viewer') return next();
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const released = await pool.query("SELECT id FROM properties WHERE id=? AND tenant_id=? AND status IN ('approved','complete') LIMIT 1", [req.params.id, user.tenantId]);
-  if (!released.rowCount) return res.status(404).json({ error: 'Released matter not found.' });
+  if (user?.role === 'consultant') {
+    const assigned = await pool.query('SELECT id FROM properties WHERE id=? AND tenant_id=? AND assigned_consultant_uid=? LIMIT 1',[req.params.id,user.tenantId,user.uid]);
+    if (!assigned.rowCount) return res.status(404).json({ error: 'Assigned matter not found.' });
+  } else if (user?.role === 'lawyer' || user?.role === 'analyst' || user?.role === 'operations' || user?.role === 'viewer') {
+    const column=user.role==='lawyer'?'assigned_lawyer_uid':user.role==='analyst'?'assigned_analyst_uid':user.role==='operations'?'assigned_operations_uid':'assigned_viewer_uid';
+    const released=user.role==='viewer'?" AND status IN ('approved','complete')":'';
+    const assigned = await pool.query(`SELECT id FROM properties WHERE id=? AND tenant_id=? AND ${column}=?${released} LIMIT 1`,[req.params.id,user.tenantId,user.uid]);
+    if (!assigned.rowCount) return res.status(404).json({ error: user.role==='viewer'?'Released matter not assigned to this Viewer.':'Assigned matter not found.' });
+  }
   next();
 }
 
@@ -564,6 +634,202 @@ function ownerGuard(req: Request, res: Response, next: NextFunction) {
 }
 
 const asyncRoute = (fn: (req: AuthenticatedRequest, res: Response, next: NextFunction) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req as AuthenticatedRequest, res, next)).catch(next);
+
+function consultantReportScope(user: AuthenticatedRequest['user']) {
+  if (['owner','admin'].includes(user?.role || '')) return { sql:'r.tenant_id=?', params:[user?.tenantId] };
+  if (user?.role==='lawyer') return { sql:'r.tenant_id=? AND p.assigned_lawyer_uid=?', params:[user.tenantId,user.uid] };
+  return { sql:'r.tenant_id=? AND p.assigned_consultant_uid=?', params:[user?.tenantId,user?.uid] };
+}
+function clientSafeReport(row:any) {
+  const original=typeof row.snapshot==='string'?JSON.parse(row.snapshot):row.snapshot;
+  const verifiedFindings=(original.findings||[]).filter((f:any)=>f.reviewer_state==='approved');
+  const titleTimeline=(original.titleTimeline||[]).filter((event:any)=>event.status==='verified');
+  const pendingReviewCount=(original.findings||[]).filter((f:any)=>f.reviewer_state!=='approved').length+
+    (original.titleTimeline||[]).filter((event:any)=>event.status!=='verified').length;
+  const common={...original,findings:verifiedFindings,titleTimeline,pendingReviewCount,approvalStatus:'approved'};
+  const clientSnapshot={...common,documents:(original.documents||[]).filter((d:any)=>d.review_status==='approved'),gisFindings:(original.gisFindings||[]).filter((f:any)=>f.reviewer_state==='approved'),reportSections:consultantReportSections(common,row.report_type)};
+  return {reportId:row.id,version:row.version_number,reportType:row.report_type,title:row.title,approvalStatus:row.approval_status,reviewDecision:row.review_decision,reviewRationale:row.review_rationale,dataCheckedAt:row.data_checked_at,createdAt:row.created_at,snapshotSha256:row.snapshot_sha256,snapshot:clientSnapshot};
+}
+function consultantReportSections(snapshot:any,type:string) {
+  const approvedFindings=(snapshot.findings||[]).filter((f:any)=>f.reviewer_state==='approved');
+  const approvedTimeline=(snapshot.titleTimeline||[]).filter((e:any)=>e.status==='verified');
+  const pending=Number(snapshot.pendingReviewCount??((snapshot.findings||[]).length-approvedFindings.length+(snapshot.titleTimeline||[]).length-approvedTimeline.length));
+  const map={latitude:snapshot.property?.latitude??null,longitude:snapshot.property?.longitude??null,coordinateSource:snapshot.property?.coordinate_source||'not recorded',coordinateCapturedAt:snapshot.property?.coordinate_captured_at||null,limitations:'Map context is not a cadastral boundary or planning determination.'};
+  if(type==='preliminary_screening')return {propertyProfile:snapshot.sourceFacts,mapScreening:map,documentCompleteness:{total:(snapshot.documents||[]).length,reviewerApproved:(snapshot.documents||[]).filter((d:any)=>d.review_status==='approved').length},preliminaryFindings:approvedFindings,pendingReviewerItems:pending};
+  if(type==='detailed_due_diligence')return {executiveSummary:{matter:snapshot.property?.name,approvedFindingCount:approvedFindings.length,pendingReviewerItems:pending},titleTimeline:approvedTimeline,discrepancies:snapshot.discrepancies||[],gisEvidence:(snapshot.gisFindings||[]).filter((f:any)=>f.reviewer_state==='approved'),sourceAppendix:(snapshot.documents||[]).filter((d:any)=>d.review_status==='approved')};
+  if(type==='client_decision_pack')return {approvedFindings,questions:snapshot.questions||[],nextActions:approvedFindings.map((f:any)=>({findingId:f.id,action:f.next_action,evidenceReferences:f.evidence_references})),limitations:snapshot.limitations||[],pendingReviewerItems:pending};
+  return {documentIndex:(snapshot.documents||[]).filter((d:any)=>d.review_status==='approved'),citations:(snapshot.findings||[]).filter((f:any)=>f.reviewer_state==='approved').flatMap((f:any)=>(f.evidence_references||[]).map((e:any)=>({findingId:f.id,...e}))),mapSnapshot:map,sourceProvenance:snapshot.sourceFreshness};
+}
+async function loadConsultantSnapshot(tenantId:string,propertyId:string,reportType:string) {
+  const property=await pool!.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[propertyId,tenantId]);
+  if(!property.rowCount)return null;
+  const [docs,events,findings,source]=await Promise.all([
+    pool!.query("SELECT id,original_filename,doc_type,sha256,review_status,manual_review_status,processing_status,created_at FROM documents WHERE property_id=? AND tenant_id=? AND governance_status='active' ORDER BY created_at",[propertyId,tenantId]),
+    pool!.query('SELECT id,document_id,sequence_order,event_date,registration_date,deed_type,from_parties,to_parties,extent_sq_ft,extent_raw,consideration,status,dispute_rationale,reviewed_by,encumbrance_status,created_at FROM title_events WHERE property_id=? AND tenant_id=? ORDER BY event_date,sequence_order',[propertyId,tenantId]),
+    pool!.query(`SELECT f.id,f.code,f.title,f.severity,f.points,f.explanation,f.evidence_status,f.next_action,f.created_at,COALESCE(fr.review_status,'pending') AS reviewer_state,fr.rationale AS reviewer_rationale,fr.reviewer_uid,fr.reviewed_at,COALESCE(JSON_ARRAYAGG(CASE WHEN e.document_id IS NULL THEN NULL ELSE JSON_OBJECT('id',d.id,'filename',d.original_filename,'sha256',d.sha256,'createdAt',d.created_at) END),JSON_ARRAY()) AS evidence_references FROM risk_findings f LEFT JOIN consultant_finding_reviews fr ON fr.finding_id=f.id AND fr.tenant_id=f.tenant_id LEFT JOIN consultant_issue_evidence e ON e.finding_id=f.id AND e.tenant_id=f.tenant_id LEFT JOIN documents d ON d.id=e.document_id AND d.tenant_id=e.tenant_id AND d.review_status='approved' AND d.governance_status='active' WHERE f.property_id=? AND f.tenant_id=? GROUP BY f.id ORDER BY f.created_at`,[propertyId,tenantId]),
+    pool!.query('SELECT MAX(created_at) latest_document_at FROM documents WHERE property_id=? AND tenant_id=?',[propertyId,tenantId])
+  ]);
+  const approvedDocs=docs.rows.filter((d:any)=>d.review_status==='approved');
+  const titleTimeline=events.rows.map((row:any)=>({id:row.id,propertyId,documentId:row.document_id||'',sequenceOrder:Number(row.sequence_order),eventDate:row.event_date instanceof Date?row.event_date.toISOString().slice(0,10):String(row.event_date||''),registrationDate:row.registration_date?String(row.registration_date):undefined,deedType:row.deed_type||'',fromParties:typeof row.from_parties==='string'?JSON.parse(row.from_parties):(row.from_parties||[]),toParties:typeof row.to_parties==='string'?JSON.parse(row.to_parties):(row.to_parties||[]),extentSqFt:Number(row.extent_sq_ft||0),extentRaw:row.extent_raw||'',consideration:Number(row.consideration||0),status:row.status,disputeRationale:row.dispute_rationale||undefined,reviewedBy:row.reviewed_by||undefined,encumbranceStatus:row.encumbrance_status||'none'}));
+  const docItems=approvedDocs.map((r:any)=>({id:r.id,originalFilename:r.original_filename,extractedFields:{}}));
+  const derived=createDueDiligenceSnapshot({property:property.rows[0],documents:approvedDocs,titleTimeline:titleTimeline.filter((e:any)=>e.status==='verified'),titleGaps:detectTitleGaps(titleTimeline.filter((e:any)=>e.status==='verified')),discrepancies:detectCrossDocumentDiscrepancies(docItems,property.rows[0])});
+  const findingRows=findings.rows.map((f:any)=>({...f,evidence_references:(Array.isArray(f.evidence_references)?f.evidence_references:[]).filter(Boolean)}));
+  const pendingQuestions:string[]=[];
+  if(!property.rows[0].survey_number)pendingQuestions.push('Confirm the survey number against current official records.');
+  if(!property.rows[0].extent)pendingQuestions.push('Confirm the stated property extent.');
+  if(!approvedDocs.length)pendingQuestions.push('No reviewer-approved documents are available for this matter.');
+  if(findingRows.some((f:any)=>f.reviewer_state!=='approved'))pendingQuestions.push('One or more issue items are not yet approved for client reporting by a legal reviewer.');
+  return {reportType,property:property.rows[0],sourceFacts:{name:property.rows[0].name,applicationNumber:property.rows[0].application_number,surveyNumber:property.rows[0].survey_number,subdivision:property.rows[0].subdivision,village:property.rows[0].village,hobli:property.rows[0].hobli,taluk:property.rows[0].taluk,district:property.rows[0].district,extent:property.rows[0].extent,coordinates:property.rows[0].latitude==null||property.rows[0].longitude==null?null:{latitude:property.rows[0].latitude,longitude:property.rows[0].longitude,source:property.rows[0].coordinate_source,recordedAt:property.rows[0].coordinate_captured_at}},normalizedFacts:derived,documents:docs.rows.map((d:any)=>({...d,clientVisible:d.review_status==='approved'})),titleTimeline,discrepancies:derived.discrepancies||[],findings:findingRows,gisFindings:findingRows.filter((f:any)=>/gis|spatial|lake|drain/i.test(`${f.code} ${f.title}`)),sourceFreshness:{latestDocumentAt:source.rows[0]?.latest_document_at||null,checkedAt:new Date().toISOString()},questions:pendingQuestions,limitations:['This report is prepared from records available in this workspace as of the stated data-checked date.','Government source integrations are not live unless explicitly identified with source provenance.','A Consultant does not make or approve legal findings; only reviewer-approved findings appear in the client-facing issue list.','This report is not a title certificate, government verification or legal opinion.']};
+}
+function escapeReportHtml(value:unknown) { return String(value??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!)); }
+function consultantWordHtml(report:any) {
+  const snapshot=report.snapshot;const findings=snapshot.findings||[];
+  const rows=findings.map((f:any)=>`<tr><td>${escapeReportHtml(f.id||f.code)}</td><td>${escapeReportHtml(f.title)}</td><td>${escapeReportHtml(f.severity)}</td><td>${escapeReportHtml(f.reviewer_state)}</td><td>${escapeReportHtml(f.next_action)}</td><td>${(f.evidence_references||[]).map((e:any)=>escapeReportHtml(e.filename)).join(', ')}</td></tr>`).join('');
+  const sections=Object.entries(snapshot.reportSections||{}).map(([name,value])=>`<h2>${escapeReportHtml(name.replace(/_/g,' '))}</h2><pre>${escapeReportHtml(JSON.stringify(value,null,2))}</pre>`).join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeReportHtml(report.title)}</title><style>body{font:11pt Calibri,Arial;color:#182036;margin:34px;line-height:1.45}h1{font-size:22pt;color:#352267}h2{font-size:14pt;border-bottom:1px solid #d9d5e7;padding-bottom:5px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cfd3dd;padding:6px;text-align:left;vertical-align:top}th{background:#f0edf8}.notice{background:#f8f5ff;padding:12px;border-left:3px solid #6848c6}pre{font:9pt Calibri,Arial;white-space:pre-wrap;overflow-wrap:anywhere;background:#faf9fd;padding:9px;border:1px solid #eeedf4}</style></head><body><h1>${escapeReportHtml(report.title)}</h1><p>Version ${report.version} · Data checked ${escapeReportHtml(report.dataCheckedAt)} · Approval: Approved</p><h2>Property profile</h2><p>${escapeReportHtml(snapshot.property?.name)} · ${escapeReportHtml(snapshot.property?.application_number)} · ${escapeReportHtml(snapshot.property?.village)} · Survey ${escapeReportHtml(snapshot.property?.survey_number)}</p>${sections}<h2>Approved issue list</h2><table><thead><tr><th>Issue ID</th><th>Issue</th><th>Severity</th><th>Review state</th><th>Next action</th><th>Evidence references</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No reviewer-approved findings in this snapshot.</td></tr>'}</tbody></table><h2>Questions and limitations</h2><div class="notice"><p>Items awaiting reviewer confirmation: ${Number(snapshot.pendingReviewCount||0)}</p>${(snapshot.questions||[]).map((q:string)=>`<p>${escapeReportHtml(q)}</p>`).join('')}${(snapshot.limitations||[]).map((q:string)=>`<p>${escapeReportHtml(q)}</p>`).join('')}</div><p>Snapshot SHA-256: ${escapeReportHtml(report.snapshotSha256)}</p></body></html>`;
+}
+app.get('/api/shared-reports/:token',asyncRoute(async(req,res)=>{
+  if(!pool)return res.status(503).json({error:'Report storage is unavailable.'});
+  const token=String(req.params.token||'');if(!/^[a-f0-9]{64}$/.test(token))return res.status(404).json({error:'Shared report not found.'});
+  const tokenHash=crypto.createHash('sha256').update(token).digest('hex');
+  const result=await pool!.query("SELECT s.id AS share_id,s.tenant_id,r.* FROM consultant_report_shares s JOIN consultant_report_versions r ON r.id=s.report_id AND r.tenant_id=s.tenant_id WHERE s.token_hash=? AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at>NOW(6)) AND r.approval_status='approved' LIMIT 1",[tokenHash]);
+  if(!result.rowCount)return res.status(404).json({error:'Shared report not found or expired.'});
+  const report=result.rows[0],rawSnapshot=typeof report.snapshot==='string'?JSON.parse(report.snapshot):report.snapshot;const checksum=crypto.createHash('sha256').update(JSON.stringify(rawSnapshot)).digest('hex');if(checksum!==report.snapshot_sha256)return res.status(409).json({error:'Shared report integrity check failed.'});const snapshot=clientSafeReport(report);await audit('public_share',report.tenant_id,'report.share_accessed','consultant_report',report.id,{shareId:report.share_id,version:report.version_number});res.json(snapshot);
+}));
+app.get('/api/consultant/issues',authGuard,asyncRoute(async(req,res)=>{
+  if(!['consultant','owner','admin','lawyer'].includes(req.user?.role||''))return res.status(403).json({error:'Consultant issue overview is unavailable for this role.'});
+  const consultant=req.user?.role==='consultant';const base='f.tenant_id=?';const scope=consultant?' AND p.assigned_consultant_uid=?':req.user?.role==='lawyer'?' AND p.assigned_lawyer_uid=?':'';const args:any[]=[req.user?.tenantId];if(scope)args.push(req.user?.uid);
+  const result=await pool!.query(`SELECT f.id,f.code,f.title,f.severity,f.points,f.explanation,f.evidence_status,COALESCE(fr.review_status,'pending') AS reviewer_state,fr.rationale AS reviewer_rationale,fr.reviewer_uid,fr.reviewed_at,CASE WHEN fr.review_status='approved' THEN 'approved_for_report' WHEN fr.review_status='rejected' THEN 'excluded_from_report' ELSE 'open' END AS issue_status,f.next_action,f.created_at,p.id AS property_id,p.name AS property_name,p.application_number,p.village,p.survey_number,COALESCE(ev.refs,JSON_ARRAY()) AS evidence_references FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id LEFT JOIN consultant_finding_reviews fr ON fr.finding_id=f.id AND fr.tenant_id=f.tenant_id LEFT JOIN (SELECT e.finding_id,e.tenant_id,JSON_ARRAYAGG(JSON_OBJECT('id',d.id,'filename',d.original_filename,'sha256',d.sha256,'createdAt',d.created_at)) refs FROM consultant_issue_evidence e JOIN documents d ON d.id=e.document_id AND d.tenant_id=e.tenant_id AND d.review_status='approved' AND d.governance_status='active' GROUP BY e.finding_id,e.tenant_id) ev ON ev.finding_id=f.id AND ev.tenant_id=f.tenant_id WHERE ${base}${scope} ORDER BY FIELD(f.severity,'critical','high','medium','low','unverified'),f.created_at DESC LIMIT 500`,args);
+  res.json({items:result.rows,count:result.rows.length,openCount:result.rows.filter((r:any)=>r.reviewer_state==='pending').length,reviewerNotice:'Reviewer state records approval or exclusion for client reporting. It does not certify legal clearance.'});
+}));
+app.post('/api/consultant/issues/:findingId/review',authGuard,asyncRoute(async(req,res)=>{
+  if(!['lawyer','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Only a Lead Advocate or authorized Reviewer can approve an issue for client reporting.'});
+  const parsed=z.object({decision:z.enum(['approve','reject']),rationale:z.string().trim().min(5).max(2000)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Choose a review decision and provide a rationale.'});
+  const clauses=['f.id=?','f.tenant_id=?'],params:any[]=[req.params.findingId,req.user?.tenantId];if(req.user?.role==='lawyer'){clauses.push('p.assigned_lawyer_uid=?');params.push(req.user.uid);}
+  const finding=await pool!.query(`SELECT f.id,f.property_id FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id WHERE ${clauses.join(' AND ')}`,params);if(!finding.rowCount)return res.status(404).json({error:'Issue not found in an authorized matter.'});
+  const status=parsed.data.decision==='approve'?'approved':'rejected';await pool!.query('INSERT INTO consultant_finding_reviews (id,tenant_id,property_id,finding_id,review_status,rationale,reviewer_uid) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE review_status=VALUES(review_status),rationale=VALUES(rationale),reviewer_uid=VALUES(reviewer_uid),reviewed_at=NOW(6)',[crypto.randomUUID(),req.user?.tenantId,finding.rows[0].property_id,req.params.findingId,status,parsed.data.rationale,req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'legal.finding_report_review_decision','risk_finding',req.params.findingId,{decision:parsed.data.decision,rationale:parsed.data.rationale});res.json({success:true,reviewerState:status});
+}));
+app.post('/api/consultant/issues/:findingId/evidence',authGuard,asyncRoute(async(req,res)=>{
+  if(req.user?.role!=='consultant')return res.status(403).json({error:'Only the assigned Consultant can attach issue evidence.'});
+  const parsed=z.object({documentId:z.string().uuid()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Select a document.'});
+  const match=await pool!.query('SELECT f.id,f.property_id FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id WHERE f.id=? AND f.tenant_id=? AND p.assigned_consultant_uid=?',[req.params.findingId,req.user?.tenantId,req.user?.uid]);if(!match.rowCount)return res.status(404).json({error:'Issue not found in assigned matters.'});
+  const doc=await pool!.query("SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=? AND review_status='approved' AND governance_status='active'",[parsed.data.documentId,match.rows[0].property_id,req.user?.tenantId]);if(!doc.rowCount)return res.status(400).json({error:'Evidence must be an active reviewer-approved document in this matter.'});
+  await pool!.query('INSERT IGNORE INTO consultant_issue_evidence (id,tenant_id,property_id,finding_id,document_id,linked_by_uid) VALUES (?,?,?,?,?,?)',[crypto.randomUUID(),req.user?.tenantId,match.rows[0].property_id,req.params.findingId,parsed.data.documentId,req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.issue_evidence_linked','risk_finding',req.params.findingId,{documentId:parsed.data.documentId});res.status(201).json({success:true});
+}));
+app.get('/api/consultant/reports',authGuard,asyncRoute(async(req,res)=>{
+  if(!['consultant','lawyer','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Report workspace is unavailable for this role.'});
+  const scope=consultantReportScope(req.user);const propertyId=String(req.query.propertyId||''),status=String(req.query.status||'');const clauses=[scope.sql],args:any[]=[...scope.params];if(propertyId){clauses.push('r.property_id=?');args.push(propertyId);}if(['draft','submitted','approved','rejected'].includes(status)){clauses.push('r.approval_status=?');args.push(status);}
+  const rows=await pool!.query(`SELECT r.id,r.property_id,r.version_number,r.report_type,r.title,r.approval_status,r.snapshot_sha256,r.data_checked_at,r.created_by_uid,r.submitted_at,r.reviewed_by_uid,r.review_decision,r.review_rationale,r.reviewed_at,r.created_at,p.name AS property_name,p.application_number FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE ${clauses.join(' AND ')} ORDER BY r.created_at DESC LIMIT 200`,args);res.json({items:rows.rows});
+}));
+app.post('/api/consultant/reports',authGuard,asyncRoute(async(req,res)=>{
+  if(!['consultant','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Report preparation is not available for this role.'});
+  const parsed=z.object({propertyId:z.string().uuid(),reportType:z.enum(['preliminary_screening','detailed_due_diligence','client_decision_pack','evidence_appendix']),title:z.string().trim().min(3).max(255)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Choose a matter, report type and title.'});
+  const property=await pool!.query('SELECT id FROM properties WHERE id=? AND tenant_id=? AND (? <> \'consultant\' OR assigned_consultant_uid=?)',[parsed.data.propertyId,req.user?.tenantId,req.user?.role,req.user?.uid]);if(!property.rowCount)return res.status(404).json({error:'Assigned matter not found.'});
+  const snapshot=await loadConsultantSnapshot(req.user!.tenantId!,parsed.data.propertyId,parsed.data.reportType);if(!snapshot)return res.status(404).json({error:'Matter not found.'});(snapshot as any).reportSections=consultantReportSections(snapshot,parsed.data.reportType);const versions=await pool!.query('SELECT COALESCE(MAX(version_number),0) AS current_version FROM consultant_report_versions WHERE tenant_id=? AND property_id=?',[req.user?.tenantId,parsed.data.propertyId]);const version=Number(versions.rows[0]?.current_version||0)+1;
+  const id=crypto.randomUUID(),serialized=JSON.stringify(snapshot),checksum=crypto.createHash('sha256').update(serialized).digest('hex');await pool!.query("INSERT INTO consultant_report_versions (id,tenant_id,property_id,version_number,report_type,title,approval_status,snapshot,snapshot_sha256,data_checked_at,created_by_uid) VALUES (?,?,?,?,?,?,'draft',?,?,?,?)",[id,req.user?.tenantId,parsed.data.propertyId,version,parsed.data.reportType,parsed.data.title,serialized,checksum,new Date(),req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_version_created','consultant_report',id,{propertyId:parsed.data.propertyId,version,reportType:parsed.data.reportType,sha256:checksum});res.status(201).json({id,version,approvalStatus:'draft',snapshotSha256:checksum});
+}));
+app.get('/api/consultant/reports/:id',authGuard,asyncRoute(async(req,res)=>{
+  if(!['consultant','lawyer','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Report workspace is unavailable for this role.'});const scope=consultantReportScope(req.user);const rows=await pool!.query(`SELECT r.*,p.name AS property_name,p.application_number FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!rows.rowCount)return res.status(404).json({error:'Report not found.'});const row=rows.rows[0],snapshot=typeof row.snapshot==='string'?JSON.parse(row.snapshot):row.snapshot;const checksum=crypto.createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');if(checksum!==row.snapshot_sha256)return res.status(409).json({error:'Report snapshot integrity check failed.'});res.json({item:{...row,snapshot}});
+}));
+app.post('/api/consultant/reports/:id/submit',authGuard,asyncRoute(async(req,res)=>{
+  if(req.user?.role!=='consultant')return res.status(403).json({error:'Only the assigned Consultant can submit a report for review.'});const scope=consultantReportScope(req.user);const report=await pool!.query(`SELECT r.* FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!report.rowCount)return res.status(404).json({error:'Report not found.'});if(report.rows[0].approval_status!=='draft')return res.status(409).json({error:'Only a draft version can be submitted. Create a new report version for corrections.'});await pool!.query("UPDATE consultant_report_versions SET approval_status='submitted',submitted_at=NOW(6) WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_submitted','consultant_report',req.params.id,{version:report.rows[0].version_number});res.json({success:true,approvalStatus:'submitted'});
+}));
+app.post('/api/consultant/reports/:id/review',authGuard,legalReviewerGuard,asyncRoute(async(req,res)=>{
+  const parsed=z.object({decision:z.enum(['approve','reject']),rationale:z.string().trim().min(5).max(2000)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Choose a review decision and provide a rationale.'});const scope=consultantReportScope(req.user);const report=await pool!.query(`SELECT r.* FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!report.rowCount)return res.status(404).json({error:'Report not found.'});if(report.rows[0].approval_status!=='submitted')return res.status(409).json({error:'Only submitted reports can be reviewed.'});const decision=parsed.data.decision,status=decision==='approve'?'approved':'rejected';await pool!.query('UPDATE consultant_report_versions SET approval_status=?,review_decision=?,review_rationale=?,reviewed_by_uid=?,reviewed_at=NOW(6) WHERE id=? AND tenant_id=?',[status,decision,parsed.data.rationale,req.user?.uid,req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'legal.report_review_decision','consultant_report',req.params.id,{decision,rationale:parsed.data.rationale,version:report.rows[0].version_number});res.json({success:true,approvalStatus:status});
+}));
+app.get('/api/consultant/reports/:id/export',authGuard,asyncRoute(async(req,res)=>{
+  const scope=consultantReportScope(req.user);const rows=await pool!.query(`SELECT r.* FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!rows.rowCount)return res.status(404).json({error:'Report not found.'});const report=rows.rows[0];if(report.approval_status!=='approved')return res.status(409).json({error:'Only reviewer-approved report versions can be exported.'});if(req.query.format==='pdf')return res.status(501).json({error:'PDF export is not configured. Word-editable and JSON exports are available.'});const actual=crypto.createHash('sha256').update(JSON.stringify(typeof report.snapshot==='string'?JSON.parse(report.snapshot):report.snapshot)).digest('hex');if(actual!==report.snapshot_sha256)return res.status(409).json({error:'Report snapshot integrity check failed.'});const safe=clientSafeReport(report),format=req.query.format==='word'?'word':'json';await pool!.query("INSERT INTO workspace_export_events (id,tenant_id,actor_uid,resource_type,resource_id,export_format,result,details) VALUES (?,?,?,?,?,?,'success',?)",[crypto.randomUUID(),req.user?.tenantId,req.user?.uid||'unknown','consultant_report',report.id,format,JSON.stringify({version:report.version_number,sha256:report.snapshot_sha256})]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_exported','consultant_report',report.id,{version:report.version_number,format,sha256:report.snapshot_sha256});if(format==='word'){res.setHeader('Content-Type','application/msword; charset=utf-8');res.setHeader('Content-Disposition',`attachment; filename="ojix-report-v${report.version_number}.doc"`);return res.send(consultantWordHtml(safe));}res.setHeader('Content-Disposition',`attachment; filename="ojix-report-v${report.version_number}.json"`);res.json(safe);
+}));
+app.post('/api/consultant/reports/:id/share',authGuard,asyncRoute(async(req,res)=>{
+  if(!['consultant','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Read-only report sharing is not available for this role.'});const scope=consultantReportScope(req.user);const rows=await pool!.query(`SELECT r.* FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!rows.rowCount)return res.status(404).json({error:'Report not found.'});if(rows.rows[0].approval_status!=='approved')return res.status(409).json({error:'Only approved reports can be shared.'});const token=crypto.randomBytes(32).toString('hex'),tokenHash=crypto.createHash('sha256').update(token).digest('hex'),id=crypto.randomUUID();const expiry=Number(req.body?.expiresInDays||30);if(!Number.isInteger(expiry)||expiry<1||expiry>365)return res.status(400).json({error:'Share expiry must be from 1 to 365 days.'});await pool!.query('INSERT INTO consultant_report_shares (id,tenant_id,report_id,token_hash,expires_at,created_by_uid) VALUES (?,?,?,?,DATE_ADD(NOW(6),INTERVAL ? DAY),?)',[id,req.user?.tenantId,req.params.id,tokenHash,expiry,req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_shared','consultant_report',req.params.id,{shareId:id,version:rows.rows[0].version_number,expiresInDays:expiry});res.status(201).json({id,url:`/shared/reports/${token}`,expiresInDays:expiry});
+}));
+app.get('/api/consultant/shares',authGuard,asyncRoute(async(req,res)=>{
+  const scope=consultantReportScope(req.user);const rows=await pool!.query(`SELECT s.id,s.report_id,s.created_at,s.expires_at,s.revoked_at,r.title,r.version_number,r.report_type,p.name AS property_name,p.application_number FROM consultant_report_shares s JOIN consultant_report_versions r ON r.id=s.report_id AND r.tenant_id=s.tenant_id JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE ${scope.sql} ORDER BY s.created_at DESC LIMIT 200`,scope.params);res.json({items:rows.rows});
+}));
+app.delete('/api/consultant/shares/:id',authGuard,asyncRoute(async(req,res)=>{
+  if(!['consultant','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Only the assigned Consultant or workspace administrator can revoke a share.'});const scope=consultantReportScope(req.user);const share=await pool!.query(`SELECT s.id,s.report_id FROM consultant_report_shares s JOIN consultant_report_versions r ON r.id=s.report_id AND r.tenant_id=s.tenant_id JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE s.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!share.rowCount)return res.status(404).json({error:'Share not found.'});await pool!.query('UPDATE consultant_report_shares SET revoked_at=NOW(6) WHERE id=? AND tenant_id=? AND revoked_at IS NULL',[req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_share_revoked','consultant_report',share.rows[0].report_id,{shareId:req.params.id});res.json({success:true});
+}));
+
+const workbenchStatuses = ['pending','in_progress','under_review','blocked','completed'] as const;
+const workbenchCategories = ['Document Review','Sale Deed Verification','RTC / Pahani Verification','Encumbrance Certificate Review','Mutation / Khata Verification','Title Chain Verification','Ownership Verification','Survey and Boundary Verification','Property Extent Verification','GIS and Risk Review','Legal Research','Findings Review','Report Review','Client Decision Pack Review'] as const;
+const workbenchScope = (user: AuthenticatedRequest['user']) => {
+  if (['owner','admin'].includes(user?.role || '')) return { sql: 't.tenant_id=?', params: [user?.tenantId] };
+  return { sql: 't.tenant_id=? AND (t.assigned_to_uid=? OR t.reviewer_uid=?)', params: [user?.tenantId,user?.uid,user?.uid] };
+};
+async function recordWorkbenchActivity(tenantId: string, taskId: string, actorUid: string, action: string, details: unknown = {}) {
+  await pool!.query('INSERT INTO workbench_task_activity (id,tenant_id,task_id,actor_uid,action,details) VALUES (?,?,?,?,?,?)',[crypto.randomUUID(),tenantId,taskId,actorUid,action,JSON.stringify(details)]);
+  await audit(actorUid,tenantId,`workbench.${action}`,'workbench_task',taskId,details);
+}
+app.get('/api/workbench/members',authGuard,asyncRoute(async(req,res)=>{
+  const result=await pool!.query("SELECT m.user_uid,m.role,m.email,COALESCE(u.full_name,m.email,m.user_uid) AS full_name FROM org_memberships m LEFT JOIN user_accounts u ON u.id=m.user_uid WHERE m.organization_id=? AND m.status='active' AND m.role IN ('owner','admin','lawyer','analyst') ORDER BY full_name",[req.user?.tenantId]);
+  res.json({items:result.rows});
+}));
+app.get('/api/workbench/tasks',authGuard,asyncRoute(async(req,res)=>{
+  const scope=workbenchScope(req.user);const params:any[]=[...scope.params];const clauses=[scope.sql,'p.archived_at IS NULL'];
+  const status=String(req.query.status||'');if(status&&status!=='all'&&workbenchStatuses.includes(status as any)){clauses.push('t.status=?');params.push(status);}
+  const category=String(req.query.category||'');if(category){clauses.push('t.category=?');params.push(category);}
+  const priority=String(req.query.priority||'');if(priority){clauses.push('t.priority=?');params.push(priority);}
+  const assignee=String(req.query.assignee||'');if(assignee&&(['owner','admin'].includes(req.user?.role||'')||assignee===req.user?.uid)){clauses.push('t.assigned_to_uid=?');params.push(assignee);}
+  const due=String(req.query.due||'');if(due==='overdue')clauses.push("t.due_date<CURDATE() AND t.status NOT IN ('completed','cancelled')");else if(due==='today')clauses.push('t.due_date=CURDATE()');else if(due==='upcoming')clauses.push('t.due_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(),INTERVAL 7 DAY)');
+  const search=String(req.query.search||'').trim().slice(0,160);if(search){clauses.push('(t.task_code LIKE ? OR t.title LIKE ? OR t.description LIKE ? OR p.name LIKE ? OR p.application_number LIKE ? OR p.village LIKE ? OR p.survey_number LIKE ?)');const like=`%${search}%`;params.push(like,like,like,like,like,like,like);}
+  const page=Math.max(1,Number(req.query.page)||1),limit=Math.min(100,Math.max(1,Number(req.query.limit)||50));
+  const where=clauses.join(' AND ');
+  const [count,rows,summary]=await Promise.all([
+    pool!.query(`SELECT COUNT(*) AS total FROM workbench_tasks t JOIN properties p ON p.id=t.property_id AND p.tenant_id=t.tenant_id WHERE ${where}`,params),
+    pool!.query(`SELECT t.id,t.task_code,t.title,t.description,t.category,t.priority,t.status,t.due_date,t.assigned_by_uid,t.assigned_to_uid,t.reviewer_uid,t.checklist,t.linked_document_id,t.linked_finding_id,t.created_at,t.updated_at,p.id AS property_id,p.name AS property_name,p.application_number,p.village,p.survey_number,p.subdivision,COALESCE(au.full_name,am.email,t.assigned_to_uid) AS assignee_name,COALESCE(bu.full_name,bm.email,t.assigned_by_uid) AS assigner_name FROM workbench_tasks t JOIN properties p ON p.id=t.property_id AND p.tenant_id=t.tenant_id LEFT JOIN org_memberships am ON am.organization_id=t.tenant_id AND am.user_uid=t.assigned_to_uid LEFT JOIN user_accounts au ON au.id=t.assigned_to_uid LEFT JOIN org_memberships bm ON bm.organization_id=t.tenant_id AND bm.user_uid=t.assigned_by_uid LEFT JOIN user_accounts bu ON bu.id=t.assigned_by_uid WHERE ${where} ORDER BY (t.due_date IS NULL),t.due_date ASC,t.updated_at DESC LIMIT ? OFFSET ?`,[...params,limit,(page-1)*limit]),
+    pool!.query(`SELECT COUNT(*) total,SUM(t.assigned_to_uid=?) my_count,SUM(t.status='pending') pending,SUM(t.status='in_progress') in_progress,SUM(t.status='under_review') under_review,SUM(t.status NOT IN ('completed','cancelled') AND t.due_date<CURDATE()) overdue,SUM(t.status='completed') completed FROM workbench_tasks t JOIN properties p ON p.id=t.property_id AND p.tenant_id=t.tenant_id WHERE ${scope.sql} AND p.archived_at IS NULL`,[req.user?.uid,...scope.params])
+  ]);
+  res.json({items:rows.rows,total:Number(count.rows[0]?.total||0),page,limit,summary:summary.rows[0]});
+}));
+app.get('/api/workbench/tasks/:id',authGuard,asyncRoute(async(req,res)=>{
+  const scope=workbenchScope(req.user);
+  const task=await pool!.query(`SELECT t.*,p.name AS property_name,p.application_number,p.village,p.survey_number,p.subdivision,COALESCE(au.full_name,am.email,t.assigned_to_uid) AS assignee_name,COALESCE(bu.full_name,bm.email,t.assigned_by_uid) AS assigner_name FROM workbench_tasks t JOIN properties p ON p.id=t.property_id AND p.tenant_id=t.tenant_id LEFT JOIN org_memberships am ON am.organization_id=t.tenant_id AND am.user_uid=t.assigned_to_uid LEFT JOIN user_accounts au ON au.id=t.assigned_to_uid LEFT JOIN org_memberships bm ON bm.organization_id=t.tenant_id AND bm.user_uid=t.assigned_by_uid LEFT JOIN user_accounts bu ON bu.id=t.assigned_by_uid WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);
+  if(!task.rowCount)return res.status(404).json({error:'Task not found.'});
+  const [activity,comments]=await Promise.all([
+    pool!.query('SELECT a.id,a.actor_uid,a.action,a.details,a.created_at,COALESCE(u.full_name,m.email,a.actor_uid) AS actor_name FROM workbench_task_activity a LEFT JOIN user_accounts u ON u.id=a.actor_uid LEFT JOIN org_memberships m ON m.organization_id=a.tenant_id AND m.user_uid=a.actor_uid WHERE a.task_id=? AND a.tenant_id=? ORDER BY a.created_at DESC LIMIT 100',[req.params.id,req.user?.tenantId]),
+    pool!.query('SELECT c.id,c.author_uid,c.body,c.created_at,COALESCE(u.full_name,m.email,c.author_uid) AS author_name FROM workbench_task_comments c LEFT JOIN user_accounts u ON u.id=c.author_uid LEFT JOIN org_memberships m ON m.organization_id=c.tenant_id AND m.user_uid=c.author_uid WHERE c.task_id=? AND c.tenant_id=? ORDER BY c.created_at DESC LIMIT 100',[req.params.id,req.user?.tenantId])
+  ]);
+  res.json({item:task.rows[0],activity:activity.rows,comments:comments.rows});
+}));
+app.get('/api/workbench/tasks/:id/documents',authGuard,asyncRoute(async(req,res)=>{
+  const scope=workbenchScope(req.user);const task=await pool!.query(`SELECT t.property_id FROM workbench_tasks t WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!task.rowCount)return res.status(404).json({error:'Task not found.'});
+  const docs=await pool!.query("SELECT id,original_filename,doc_type,processing_status,created_at FROM documents WHERE property_id=? AND tenant_id=? AND governance_status='active' ORDER BY created_at DESC LIMIT 100",[task.rows[0].property_id,req.user?.tenantId]);res.json({items:docs.rows});
+}));
+app.post('/api/workbench/tasks/:id/evidence',authGuard,asyncRoute(async(req,res)=>{
+  const scope=workbenchScope(req.user);const task=await pool!.query(`SELECT t.id,t.property_id FROM workbench_tasks t WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!task.rowCount)return res.status(404).json({error:'Task not found.'});
+  if(!['owner','admin','lawyer','analyst'].includes(req.user?.role||''))return res.status(403).json({error:'Evidence linking is not available for this role.'});
+  const parsed=z.object({documentId:z.string().uuid()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Select a valid workspace document.'});
+  const doc=await pool!.query("SELECT id,original_filename FROM documents WHERE id=? AND property_id=? AND tenant_id=? AND governance_status='active'",[parsed.data.documentId,task.rows[0].property_id,req.user?.tenantId]);if(!doc.rowCount)return res.status(404).json({error:'Document not found for this task property.'});
+  await pool!.query('UPDATE workbench_tasks SET linked_document_id=? WHERE id=? AND tenant_id=?',[parsed.data.documentId,req.params.id,req.user?.tenantId]);await recordWorkbenchActivity(req.user!.tenantId!,req.params.id,req.user!.uid,'evidence_linked',{documentId:parsed.data.documentId,filename:doc.rows[0].original_filename});res.json({success:true});
+}));
+app.post('/api/workbench/tasks',authGuard,asyncRoute(async(req,res)=>{
+  if(!['owner','admin','lawyer'].includes(req.user?.role||''))return res.status(403).json({error:'Only a workspace administrator or legal reviewer can assign work.'});
+  const parsed=z.object({propertyId:z.string().uuid(),title:z.string().trim().min(3).max(255),description:z.string().trim().max(5000).default(''),category:z.enum(workbenchCategories),priority:z.enum(['high','medium','low']).default('medium'),dueDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),assignedToUid:z.string().trim().min(1).max(191),reviewerUid:z.string().trim().max(191).optional(),linkedDocumentId:z.string().uuid().optional(),linkedFindingId:z.string().uuid().optional(),checklist:z.array(z.string().trim().min(1).max(255)).max(30).default([])}).safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({error:parsed.error.issues[0]?.message||'Invalid task details.'});
+  const c=parsed.data;const [property,member]=await Promise.all([pool!.query('SELECT id FROM properties WHERE id=? AND tenant_id=?',[c.propertyId,req.user?.tenantId]),pool!.query("SELECT user_uid FROM org_memberships WHERE user_uid=? AND organization_id=? AND status='active' AND role IN ('owner','admin','lawyer','analyst')",[c.assignedToUid,req.user?.tenantId])]);
+  if(!property.rowCount)return res.status(404).json({error:'Property not found in this workspace.'});if(!member.rowCount)return res.status(400).json({error:'Select an active workspace lawyer or analyst.'});
+  if(c.linkedDocumentId){const doc=await pool!.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[c.linkedDocumentId,c.propertyId,req.user?.tenantId]);if(!doc.rowCount)return res.status(400).json({error:'Linked document does not belong to the selected property.'});}
+  if(c.linkedFindingId){const finding=await pool!.query('SELECT id FROM risk_findings WHERE id=? AND property_id=? AND tenant_id=?',[c.linkedFindingId,c.propertyId,req.user?.tenantId]);if(!finding.rowCount)return res.status(400).json({error:'Linked finding does not belong to the selected property.'});}
+  const id=crypto.randomUUID(),code=`OJX-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;const checklist=c.checklist.map((label,index)=>({id:String(index+1),label,done:false}));
+  await pool!.query('INSERT INTO workbench_tasks (id,tenant_id,property_id,task_code,title,description,category,priority,due_date,assigned_by_uid,assigned_to_uid,reviewer_uid,linked_document_id,linked_finding_id,checklist) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,req.user?.tenantId,c.propertyId,code,c.title,c.description,c.category,c.priority,c.dueDate||null,req.user?.uid,c.assignedToUid,c.reviewerUid|| (req.user?.role==='lawyer'?req.user.uid:null),c.linkedDocumentId||null,c.linkedFindingId||null,JSON.stringify(checklist)]);
+  await recordWorkbenchActivity(req.user!.tenantId!,id,req.user!.uid,'task_created',{taskCode:code,assignedToUid:c.assignedToUid});
+  res.status(201).json({id,taskCode:code});
+}));
+app.patch('/api/workbench/tasks/:id',authGuard,asyncRoute(async(req,res)=>{
+  const scope=workbenchScope(req.user);const found=await pool!.query(`SELECT t.* FROM workbench_tasks t WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!found.rowCount)return res.status(404).json({error:'Task not found.'});
+  const task=found.rows[0],isManager=['owner','admin'].includes(req.user?.role||''),isAssigned=task.assigned_to_uid===req.user?.uid,isReviewer=task.reviewer_uid===req.user?.uid||['owner','admin','lawyer'].includes(req.user?.role||'');
+  const parsed=z.object({status:z.enum(workbenchStatuses).optional(),checklistItemId:z.string().max(40).optional(),checklistDone:z.boolean().optional(),priority:z.enum(['high','medium','low']).optional(),dueDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),assignedToUid:z.string().min(1).max(191).optional(),reviewDecision:z.enum(['approve','reject','corrections']).optional(),rationale:z.string().trim().max(1000).optional()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid task update.'});const c=parsed.data;
+  if(c.reviewDecision&&!c.rationale)return res.status(400).json({error:'A rationale is required for reviewer decisions.'});
+  if(c.reviewDecision&&task.assigned_to_uid===req.user?.uid)return res.status(403).json({error:'The assigned user cannot review their own work.'});
+  if(c.checklistItemId){if(!isAssigned)return res.status(403).json({error:'Only the assigned user can update this checklist.'});const items=typeof task.checklist==='string'?JSON.parse(task.checklist):task.checklist;const item=items.find((x:any)=>x.id===c.checklistItemId);if(!item)return res.status(404).json({error:'Checklist item not found.'});item.done=Boolean(c.checklistDone);await pool!.query('UPDATE workbench_tasks SET checklist=? WHERE id=? AND tenant_id=?',[JSON.stringify(items),task.id,req.user?.tenantId]);await recordWorkbenchActivity(req.user!.tenantId!,task.id,req.user!.uid,'checklist_updated',{item:item.label,done:item.done});}
+  if(c.assignedToUid||c.priority||c.dueDate!==undefined){if(!isManager)return res.status(403).json({error:'Only an administrator can change assignment, priority, or deadline.'});if(c.assignedToUid){const m=await pool!.query("SELECT user_uid FROM org_memberships WHERE organization_id=? AND user_uid=? AND status='active' AND role IN ('owner','admin','lawyer','analyst')",[req.user?.tenantId,c.assignedToUid]);if(!m.rowCount)return res.status(400).json({error:'Select an active workspace lawyer or analyst.'});}await pool!.query('UPDATE workbench_tasks SET assigned_to_uid=COALESCE(?,assigned_to_uid),priority=COALESCE(?,priority),due_date=? WHERE id=? AND tenant_id=?',[c.assignedToUid||null,c.priority||null,c.dueDate===undefined?task.due_date:c.dueDate,task.id,req.user?.tenantId]);await recordWorkbenchActivity(req.user!.tenantId!,task.id,req.user!.uid,c.assignedToUid?'task_reassigned':c.priority?'priority_changed':'deadline_changed',{assignedToUid:c.assignedToUid,priority:c.priority,dueDate:c.dueDate});}
+  if(c.reviewDecision){if(!isReviewer)return res.status(403).json({error:'Reviewer permission is required.'});const status=c.reviewDecision==='approve'?'completed':'in_progress';await pool!.query('UPDATE workbench_tasks SET status=? WHERE id=? AND tenant_id=?',[status,task.id,req.user?.tenantId]);await pool!.query('INSERT INTO workbench_task_comments (id,tenant_id,task_id,author_uid,body) VALUES (?,?,?,?,?)',[crypto.randomUUID(),req.user?.tenantId,task.id,req.user?.uid,`${c.reviewDecision.toUpperCase()}: ${c.rationale}`]);await recordWorkbenchActivity(req.user!.tenantId!,task.id,req.user!.uid,'review_decision',{decision:c.reviewDecision,rationale:c.rationale});}
+  else if(c.status){if(c.status==='completed')return res.status(400).json({error:'Use the review decision action with a rationale to complete a task.'});if(c.status==='under_review'&&!isAssigned)return res.status(403).json({error:'Only the assigned user can submit this task for review.'});if(c.status==='blocked'&&!isAssigned)return res.status(403).json({error:'Only the assigned user can mark this task as blocked.'});await pool!.query('UPDATE workbench_tasks SET status=? WHERE id=? AND tenant_id=?',[c.status,task.id,req.user?.tenantId]);await recordWorkbenchActivity(req.user!.tenantId!,task.id,req.user!.uid,'status_changed',{from:task.status,to:c.status});}
+  res.json({success:true});
+}));
+app.post('/api/workbench/tasks/:id/comments',authGuard,asyncRoute(async(req,res)=>{
+  const scope=workbenchScope(req.user);const task=await pool!.query(`SELECT t.id FROM workbench_tasks t WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!task.rowCount)return res.status(404).json({error:'Task not found.'});const parsed=z.object({body:z.string().trim().min(1).max(3000)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Enter a comment of up to 3,000 characters.'});await pool!.query('INSERT INTO workbench_task_comments (id,tenant_id,task_id,author_uid,body) VALUES (?,?,?,?,?)',[crypto.randomUUID(),req.user?.tenantId,req.params.id,req.user?.uid,parsed.data.body]);await recordWorkbenchActivity(req.user!.tenantId!,req.params.id,req.user!.uid,'comment_added',{});res.status(201).json({success:true});
+}));
 
 const basePropertySchema = z.object({
   name: z.string().trim().max(160).optional().default(''),
@@ -701,12 +967,16 @@ app.get('/health', asyncRoute(async (_req, res) => {
   try {
     await pool.query('SELECT 1');
     return res.json({ ...common, status: 'ok', database: 'connected' });
-  } catch {
+  } catch (error) {
+    const errorCode = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code || 'DATABASE_CONNECTIVITY_ERROR')
+      : 'DATABASE_CONNECTIVITY_ERROR';
     return res.status(503).json({
       ...common,
       status: 'not_ready',
       database: 'disconnected',
       error: 'Database connectivity check failed.',
+      errorCode,
     });
   }
 }));
@@ -781,7 +1051,7 @@ app.post('/api/auth/register/request-otp', loginOtpRequestRateLimit, asyncRoute(
   const phoneE164 = `${countryCode}${mobileNumber}`;
   if (DUMMY_ACCOUNTS.some(account => account.email.toLowerCase() === email)) return res.status(409).json({ error: 'This email already belongs to a workspace account. Please sign in.' });
   const existing = await pool.query('SELECT id, email_verified FROM user_accounts WHERE email=? LIMIT 1', [email]);
-  if (existing.rowCount && existing.rows[0].email_verified) return res.status(409).json({ error: 'An account already exists for this email. Please sign in.' });
+  if (existing.rowCount && existing.rows[0].email_verified) return res.status(409).json({ code:'EMAIL_ALREADY_VERIFIED', error: 'This email is already verified. Please sign in.' });
   const recentRequests = await pool.query("SELECT COUNT(*) AS request_count, MAX(created_at) AS last_requested_at FROM otp_challenges WHERE email=? AND purpose='registration' AND created_at>DATE_SUB(NOW(6),INTERVAL 15 MINUTE)", [email]);
   const requestCount = Number(recentRequests.rows[0]?.request_count || 0);
   const lastRequestedAt = recentRequests.rows[0]?.last_requested_at ? new Date(recentRequests.rows[0].last_requested_at).getTime() : 0;
@@ -828,7 +1098,11 @@ app.post('/api/auth/register/verify-otp', asyncRoute(async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Enter the valid six-digit verification code.' });
   const { challengeId, email, otp } = parsed.data;
   const challenge = await pool.query('SELECT * FROM otp_challenges WHERE id=? AND email=? AND purpose=\'registration\' LIMIT 1', [challengeId, email]);
-  if (!challenge.rowCount || challenge.rows[0].consumed_at) return res.status(400).json({ error: 'This verification request is no longer valid.' });
+  if (!challenge.rowCount || challenge.rows[0].consumed_at) {
+    const existingAccount=await pool.query('SELECT email_verified FROM user_accounts WHERE email=? LIMIT 1',[email]);
+    if(existingAccount.rows[0]?.email_verified)return res.status(409).json({code:'EMAIL_ALREADY_VERIFIED',error:'This email is already verified. Please sign in.'});
+    return res.status(400).json({ error: 'This verification request is no longer valid.' });
+  }
   if (new Date(challenge.rows[0].expires_at).getTime() <= Date.now()) return res.status(400).json({ error: 'The OTP has expired. Request a new code.' });
   if (Number(challenge.rows[0].attempts) >= 5) return res.status(429).json({ error: 'Too many incorrect attempts. Request a new code.' });
   if (!challenge.rows[0].otp_salt || !verifyOtp(email, otp, String(challenge.rows[0].otp_salt), String(challenge.rows[0].otp_hash))) {
@@ -941,10 +1215,10 @@ app.post('/api/auth/login/request-otp', loginOtpRequestRateLimit, asyncRoute(asy
   const localSmsPreview=deliveryChannel==='sms'&&Boolean(dummy)&&process.env.NODE_ENV!=='production'&&process.env.DEV_AUTO_FILL_MOBILE_OTP==='true';
   const deliveryTarget=deliveryChannel==='sms'?(dummy?(process.env.DEMO_OTP_PHONE?.trim()||(localSmsPreview?'local-preview':'')):(registered.rows[0]?.phone_verified_at?String(registered.rows[0].phone_e164||''):'')):(dummy?(process.env.DEMO_OTP_EMAIL?.trim()||''):email);
   if(!deliveryTarget)return res.status(400).json({error:deliveryChannel==='sms'?'No verified mobile number is available for this account. Configure SMS delivery or use email.':'Email delivery address is not configured for this demo account.'});
-  const membership=await pool.query('SELECT organization_id,status,role FROM org_memberships WHERE user_uid=? ORDER BY created_at LIMIT 1',[uid]);
+  const membership=await pool.query("SELECT organization_id,status,role FROM org_memberships WHERE user_uid=? ORDER BY (role='super_admin') DESC,created_at LIMIT 1",[uid]);
   if (!membership.rowCount||membership.rows[0].status!=='active') return res.status(403).json({error:'This workspace membership is not active.'});
   const role=membership.rows[0].role;
-  const isSuperAdmin=(process.env.NODE_ENV!=='production'&&dummy?.uid==='user-super-admin')||isConfiguredSuperAdminEmail(email);
+  const isSuperAdmin=membership.rows[0].role==='super_admin';
   const authenticatedLoginRole=isSuperAdmin?'super-admin':role;
   if(expectedRole&&expectedRole!==authenticatedLoginRole)return res.status(403).json({error:`This account is not authorized for the ${expectedRole.replace('_',' ')} sign-in portal.`});
 
@@ -985,10 +1259,10 @@ app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async
   const registered=!dummy?await pool.query("SELECT id,email,full_name FROM user_accounts WHERE id=? AND email=? AND email_verified=TRUE AND status='active' LIMIT 1",[accountUid,email]):{rowCount:0,rows:[]};
   if (!dummy&&!registered.rowCount) return res.status(401).json({ error:'The account is no longer active.' });
   const target:any=dummy||{uid:registered.rows[0].id,email:registered.rows[0].email,name:registered.rows[0].full_name,designation:'Registered Reviewer',role:'viewer',avatar:registered.rows[0].full_name.split(/\s+/).slice(0,2).map((part:string)=>part[0]).join('').toUpperCase(),description:'Verified workspace member'};
-  const membership=await pool.query('SELECT organization_id,role,status FROM org_memberships WHERE user_uid=? LIMIT 1',[target.uid]);
+  const membership=await pool.query("SELECT organization_id,role,status FROM org_memberships WHERE user_uid=? ORDER BY (role='super_admin') DESC,created_at LIMIT 1",[target.uid]);
   if (!membership.rowCount||membership.rows[0].status!=='active') return res.status(403).json({error:'This workspace membership is not active.'});
-  const isSuperAdmin=(process.env.NODE_ENV!=='production'&&dummy?.uid==='user-super-admin')||isConfiguredSuperAdminEmail(email);
-  const role=isSuperAdmin?'owner':membership.rows[0]?.role||target.role;
+  const isSuperAdmin=membership.rows[0].role==='super_admin';
+  const role=membership.rows[0]?.role||target.role;
   const authenticatedLoginRole=isSuperAdmin?'super-admin':role;
   if(expectedRole&&expectedRole!==authenticatedLoginRole)return res.status(403).json({error:`This account is not authorized for the ${expectedRole.replace('_',' ')} sign-in portal.`});
   const consumed=await pool.query("UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=? AND email=? AND account_uid=? AND purpose='login' AND consumed_at IS NULL AND attempts<5 AND expires_at>NOW(6)",[challengeId,email,accountUid]);
@@ -1002,7 +1276,7 @@ app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async
   await pool.query('INSERT INTO authentication_sessions (id,tenant_id,user_uid,token_hash,expires_at,ip_address,user_agent) VALUES (?,?,?,?,?,?,?)',[sessionId,tenantId,target.uid,crypto.createHash('sha256').update(token).digest('hex'),new Date(expiresAt),req.ip||null,String(req.header('user-agent')||'').slice(0,500)||null]);
   if(role==='support') supportSessions.set(target.uid,expiresAt);
   await audit(target.uid,tenantId,'auth.login_otp_verified','user_account',target.uid,{email,role});
-  res.json({token,user:{...target,role,tenantId,isSuperAdmin,accessExpiresAt:new Date(expiresAt).toISOString()},message:`Signed in securely as ${target.name} (${String(role).toUpperCase()})`});
+  res.json({token,user:{...target,role,tenantId,isSuperAdmin,permissions:[...(DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS]||[])],accessExpiresAt:new Date(expiresAt).toISOString()},message:`Signed in securely as ${target.name} (${isSuperAdmin?'SUPER ADMIN':String(role).toUpperCase()})`});
 }));
 
 app.post('/api/auth/login', (_req, res) => res.status(410).json({ error: 'Password-only sign-in is disabled. Use the email OTP flow.' }));
@@ -1029,6 +1303,7 @@ app.get('/api/auth/me', authGuard, asyncRoute(async (req, res) => {
       ...meta,
       role: u?.role || meta.role,
       isSuperAdmin: Boolean(u?.isSuperAdmin),
+      permissions: u?.permissions || [],
       tenantId: u?.tenantId,
       accessExpiresAt: u?.role === 'support' ? new Date(supportSessions.get(u.uid) || 0).toISOString() : undefined
     }
@@ -1070,6 +1345,8 @@ app.post('/api/auth/activity', authGuard, asyncRoute(async(req, res) => {
   if(pool)await pool.query('UPDATE authentication_sessions SET last_activity_at=NOW(6) WHERE id=? AND revoked_at IS NULL',[session.id]);
   res.json({success:true,lastActivityAt:new Date(session.lastActivityAt).toISOString()});
 }));
+
+app.get('/api/auth/workspaces',authGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT m.organization_id AS id,o.name,o.slug,m.role,m.status FROM org_memberships m JOIN organizations o ON o.id=m.organization_id WHERE m.user_uid=? AND m.status=\'active\' ORDER BY o.name',[req.user?.uid]);res.json({items:result.rows,activeWorkspaceId:req.user?.tenantId});}));
 
 app.post('/api/auth/logout', authGuard, (req, res) => {
   const user = (req as AuthenticatedRequest).user;
@@ -1190,6 +1467,10 @@ app.patch('/api/rtc/:id/confirmation', authGuard, rtcLookupGuard, asyncRoute(asy
 app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured. Start MariaDB and set DATABASE_URL.' });
   if (_req.user?.role === 'support') { const configured=await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[_req.user.tenantId]);return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:documentStorage.provider==='supabase'?'supabase_private':'local_development', ocr:configured.rowCount&&process.env.OCR_WORKER_TOKEN?'google_document_ai_configured':'not_configured', gisLayers:'unavailable' }, supportScope:'diagnostics_only' }); }
+  const assignmentColumn:Record<string,string>={lawyer:'assigned_lawyer_uid',analyst:'assigned_analyst_uid',operations:'assigned_operations_uid',consultant:'assigned_consultant_uid',viewer:'assigned_viewer_uid'};
+  const assignment=assignmentColumn[_req.user?.role||''];
+  const matterScope=assignment?` AND p.${assignment}=?${_req.user?.role==='viewer'?" AND p.status IN ('approved','complete')":''}`:'';
+  const scopeParams=assignment?[_req.user?.uid||'']:[];
   const result = await pool.query(
     `SELECT COUNT(*) AS total,
        SUM(CASE WHEN p.status='in_review' THEN 1 ELSE 0 END) AS in_review,
@@ -1204,33 +1485,33 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
          (CASE WHEN p.boundary_north<>'' AND p.boundary_south<>'' AND p.boundary_east<>'' AND p.boundary_west<>'' THEN 1 ELSE 0 END) +
          (CASE WHEN p.identity_state='verified' THEN 1 ELSE 0 END)
        ) / 5 * 100), 0) AS readiness_pct
-     FROM properties p WHERE p.tenant_id=?`,
-    [_req.user?.tenantId]
+     FROM properties p WHERE p.tenant_id=?${matterScope}`,
+    [_req.user?.tenantId,...scopeParams]
   );
-  const docs = await pool.query('SELECT COUNT(*) AS total FROM documents WHERE tenant_id=?', [_req.user?.tenantId]);
-  const recent = await pool.query(`SELECT id, name, village, survey_number, district, status, updated_at FROM properties WHERE tenant_id=? ORDER BY updated_at DESC LIMIT 5`, [_req.user?.tenantId]);
+  const docs = await pool.query(`SELECT COUNT(*) AS total FROM documents d JOIN properties p ON p.id=d.property_id AND p.tenant_id=d.tenant_id WHERE d.tenant_id=?${matterScope}`, [_req.user?.tenantId,...scopeParams]);
+  const recent = await pool.query(`SELECT p.id, p.name, p.village, p.survey_number, p.district, p.status, p.updated_at FROM properties p WHERE p.tenant_id=?${matterScope} ORDER BY p.updated_at DESC LIMIT 5`, [_req.user?.tenantId,...scopeParams]);
   const findingSummary = await pool.query(
     `SELECT COUNT(*) AS total,
        SUM(CASE WHEN severity IN ('high','critical') THEN 1 ELSE 0 END) AS high_attention
-     FROM risk_findings WHERE tenant_id=?`,
-    [_req.user?.tenantId]
+     FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id WHERE f.tenant_id=?${matterScope}`,
+    [_req.user?.tenantId,...scopeParams]
   );
   const recentFindings = await pool.query(
     `SELECT f.id, f.property_id, f.title, f.severity, f.evidence_status, f.created_at, p.name AS property_name
      FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id
-     WHERE f.tenant_id=? ORDER BY f.created_at DESC LIMIT 5`,
-    [_req.user?.tenantId]
+     WHERE f.tenant_id=?${matterScope} ORDER BY f.created_at DESC LIMIT 5`,
+    [_req.user?.tenantId,...scopeParams]
   );
   const districtDistribution = await pool.query(
-    `SELECT COALESCE(NULLIF(district,''),'Not recorded') AS district, COUNT(*) AS total
-     FROM properties WHERE tenant_id=? GROUP BY COALESCE(NULLIF(district,''),'Not recorded')
+    `SELECT COALESCE(NULLIF(p.district,''),'Not recorded') AS district, COUNT(*) AS total
+     FROM properties p WHERE p.tenant_id=?${matterScope} GROUP BY COALESCE(NULLIF(p.district,''),'Not recorded')
      ORDER BY total DESC, district LIMIT 8`,
-    [_req.user?.tenantId]
+    [_req.user?.tenantId,...scopeParams]
   );
   const documentStatus = await pool.query(
-    `SELECT processing_status AS status, COUNT(*) AS total FROM documents
-     WHERE tenant_id=? GROUP BY processing_status ORDER BY total DESC`,
-    [_req.user?.tenantId]
+    `SELECT d.processing_status AS status, COUNT(*) AS total FROM documents d JOIN properties p ON p.id=d.property_id AND p.tenant_id=d.tenant_id
+     WHERE d.tenant_id=?${matterScope} GROUP BY d.processing_status ORDER BY total DESC`,
+    [_req.user?.tenantId,...scopeParams]
   );
   const spatialLayerStatus = await pool.query("SELECT data_status, COUNT(*) AS total FROM spatial_layers WHERE active=true AND data_status='verified' AND source_name IS NOT NULL AND source_url IS NOT NULL AND source_date IS NOT NULL GROUP BY data_status");
   const portfolioCoverage = await pool.query(
@@ -1238,9 +1519,9 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
        SUM(CASE WHEN latitude IS NOT NULL AND longitude IS NOT NULL THEN 1 ELSE 0 END) AS mapped,
        SUM(CASE WHEN identity_state='verified' THEN 1 ELSE 0 END) AS verified_identity,
        SUM(CASE WHEN identity_state='disputed' THEN 1 ELSE 0 END) AS disputed_identity,
-       SUM(CASE WHEN boundary_north<>'' AND boundary_south<>'' AND boundary_east<>'' AND boundary_west<>'' THEN 1 ELSE 0 END) AS complete_boundaries
-     FROM properties WHERE tenant_id=?`,
-    [_req.user?.tenantId]
+       SUM(CASE WHEN p.boundary_north<>'' AND p.boundary_south<>'' AND p.boundary_east<>'' AND p.boundary_west<>'' THEN 1 ELSE 0 END) AS complete_boundaries
+     FROM properties p WHERE p.tenant_id=?${matterScope}`,
+    [_req.user?.tenantId,...scopeParams]
   );
   const attentionQueue = await pool.query(
     `SELECT p.id, p.name, p.district, p.village, p.property_type, p.property_identifier, p.property_identifier_type, p.survey_number, p.subdivision, p.status, p.updated_at,
@@ -1248,7 +1529,7 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
        CASE WHEN p.latitude IS NULL OR p.longitude IS NULL THEN 1 ELSE 0 END AS missing_coordinates,
        CASE WHEN p.extent='' THEN 1 ELSE 0 END AS missing_extent,
        CASE WHEN p.identity_state='disputed' THEN 1 ELSE 0 END AS disputed_identity
-     FROM properties p WHERE p.tenant_id=? AND (
+     FROM properties p WHERE p.tenant_id=?${matterScope} AND (
        NOT EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id)
        OR p.latitude IS NULL OR p.longitude IS NULL OR p.extent='' OR p.identity_state='disputed'
      )
@@ -1256,7 +1537,7 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
        CASE WHEN NOT EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id) THEN 3 ELSE 0 END +
        CASE WHEN p.latitude IS NULL OR p.longitude IS NULL THEN 2 ELSE 0 END +
        CASE WHEN p.extent='' THEN 1 ELSE 0 END) DESC, p.updated_at DESC LIMIT 6`,
-    [_req.user?.tenantId]
+    [_req.user?.tenantId,...scopeParams]
   );
   res.json({
     ...result.rows[0],
@@ -1282,19 +1563,26 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
 app.get('/api/owner/dashboard', authGuard, ownerGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const tenantId = req.user?.tenantId;
+  const boundedInt=(value:unknown,fallback:number,min:number,max:number)=>{const parsed=Number.parseInt(String(value??''),10);return Number.isFinite(parsed)?Math.max(min,Math.min(max,parsed)):fallback;};
+  const findingsPage=boundedInt(req.query.findingsPage,1,1,10000),findingsPageSize=boundedInt(req.query.findingsPageSize,6,1,25);
+  const activityPage=boundedInt(req.query.activityPage,1,1,10000),activityPageSize=boundedInt(req.query.activityPageSize,8,1,25);
   const dateValue=(value:unknown,fallback:string)=>/^\d{4}-\d{2}-\d{2}$/.test(String(value||''))?String(value):fallback;
   const defaultTo=new Date().toISOString().slice(0,10);
   const defaultFrom=new Date(Date.now()-180*24*60*60_000).toISOString().slice(0,10);
   const from=dateValue(req.query.from,defaultFrom),to=dateValue(req.query.to,defaultTo);
   if(from>to)return res.status(400).json({error:'The analytics start date must be on or before the end date.'});
-  const [metrics, workflow, recentFindings, workload, reports, activity, evidenceSources] = await Promise.all([
+  const [metrics, workflow, recentFindings, workload, reports, activity, evidenceSources, readiness, districts, taluks, villages, documentCategories, riskOverview, sourceRegistryHistory, rtcHistory, verifiedLayers, activityCount, findingsCount] = await Promise.all([
     pool.query(`SELECT
       COUNT(*) AS total_matters,
-      SUM(CASE WHEN p.status IN ('draft','documents_pending','in_review','clarification_required','ready_for_review','approved') AND p.archived_at IS NULL THEN 1 ELSE 0 END) AS active_reviews,
-      SUM(CASE WHEN p.status='ready_for_review' THEN 1 ELSE 0 END) AS ready_for_legal_review,
-      (SELECT COUNT(*) FROM documents d WHERE d.tenant_id=? AND d.governance_status='active' AND (d.manual_review_status IN ('pending','required') OR d.processing_status<>'completed')) AS documents_requiring_review,
-      SUM(CASE WHEN p.due_date<CURDATE() AND p.status NOT IN ('complete','closed','archived') THEN 1 ELSE 0 END) AS overdue_tasks
-      FROM properties p WHERE p.tenant_id=?`, [tenantId, tenantId]),
+      SUM(CASE WHEN p.status NOT IN ('complete','closed','archived') AND p.archived_at IS NULL THEN 1 ELSE 0 END) AS open_matters,
+      SUM(CASE WHEN p.status IN ('in_review','clarification_required') AND p.archived_at IS NULL THEN 1 ELSE 0 END) AS active_reviews,
+      SUM(CASE WHEN p.status IN ('documents_pending','in_review','clarification_required') AND p.archived_at IS NULL THEN 1 ELSE 0 END) AS active_due_diligence,
+      SUM(CASE WHEN p.status='ready_for_review' AND p.archived_at IS NULL THEN 1 ELSE 0 END) AS ready_for_legal_review,
+      (SELECT COUNT(*) FROM risk_findings f JOIN properties fp ON fp.id=f.property_id AND fp.tenant_id=f.tenant_id WHERE f.tenant_id=? AND fp.archived_at IS NULL AND f.severity IN ('critical','high')) AS high_attention_findings,
+      (SELECT COUNT(*) FROM workbench_tasks t JOIN properties tp ON tp.id=t.property_id AND tp.tenant_id=t.tenant_id WHERE t.tenant_id=? AND tp.archived_at IS NULL AND t.due_date<CURDATE() AND t.status NOT IN ('completed','cancelled')) AS overdue_tasks,
+      (SELECT COUNT(*) FROM documents d JOIN properties dp ON dp.id=d.property_id AND dp.tenant_id=d.tenant_id WHERE d.tenant_id=? AND dp.archived_at IS NULL AND d.governance_status='active' AND (d.manual_review_status IN ('pending','required') OR d.processing_status<>'completed')) AS documents_requiring_review,
+      (SELECT COUNT(*) FROM consultant_report_versions rr JOIN properties rp ON rp.id=rr.property_id AND rp.tenant_id=rr.tenant_id WHERE rr.tenant_id=? AND rp.archived_at IS NULL AND rr.approval_status='submitted') AS reports_awaiting_review
+      FROM properties p WHERE p.tenant_id=? AND p.archived_at IS NULL`, [tenantId, tenantId, tenantId, tenantId, tenantId]),
     pool.query(`SELECT p.*,
       (SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') AS document_count,
       (SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active' AND (d.manual_review_status IN ('pending','required') OR d.processing_status<>'completed')) AS pending_document_reviews,
@@ -1303,7 +1591,9 @@ app.get('/api/owner/dashboard', authGuard, ownerGuard, asyncRoute(async (req, re
       ((CASE WHEN p.survey_number='' AND p.property_identifier='' THEN 1 ELSE 0 END) +
        (CASE WHEN p.extent='' THEN 1 ELSE 0 END) +
        (CASE WHEN p.latitude IS NULL OR p.longitude IS NULL THEN 1 ELSE 0 END) +
-       (CASE WHEN NOT EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') THEN 1 ELSE 0 END)) AS missing_evidence,
+       (CASE WHEN NOT EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') THEN 1 ELSE 0 END) +
+       (CASE WHEN p.boundary_north='' OR p.boundary_south='' OR p.boundary_east='' OR p.boundary_west='' THEN 1 ELSE 0 END) +
+       (CASE WHEN p.identity_state<>'verified' THEN 1 ELSE 0 END)) AS missing_evidence,
       CASE
         WHEN p.status='ready_for_review' THEN 'Legal review'
         WHEN p.status='approved' THEN 'Report submission'
@@ -1325,38 +1615,55 @@ app.get('/api/owner/dashboard', authGuard, ownerGuard, asyncRoute(async (req, re
       ORDER BY (p.due_date<CURDATE() AND p.status NOT IN ('complete','closed','archived')) DESC,
         FIELD(p.workflow_priority,'urgent','high','normal','low'), p.due_date IS NULL, p.due_date, p.updated_at DESC
       LIMIT 100`, [tenantId]),
-    pool.query(`SELECT f.id,f.property_id,f.title,f.severity,f.evidence_status,f.created_at,p.name AS property_name,p.application_number
+    pool.query(`SELECT f.id,f.code,f.property_id,f.title,f.severity,f.evidence_status,f.created_at,p.name AS property_name,p.application_number,p.district,p.assigned_lawyer_uid AS assigned_owner,
+        COALESCE(fr.review_status,'pending') AS reviewer_state,
+        EXISTS(SELECT 1 FROM consultant_issue_evidence ie JOIN documents d ON d.id=ie.document_id AND d.tenant_id=ie.tenant_id WHERE ie.finding_id=f.id AND ie.tenant_id=f.tenant_id AND d.review_status='approved' AND d.governance_status='active') AS evidence_available
       FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id
-      WHERE f.tenant_id=? ORDER BY f.created_at DESC LIMIT 6`, [tenantId]),
+      LEFT JOIN consultant_finding_reviews fr ON fr.finding_id=f.id AND fr.tenant_id=f.tenant_id
+      WHERE f.tenant_id=? AND p.archived_at IS NULL ORDER BY f.created_at DESC LIMIT ? OFFSET ?`, [tenantId,findingsPageSize,(findingsPage-1)*findingsPageSize]),
     pool.query(`SELECT m.user_uid,m.email,m.role,COALESCE(u.full_name,m.email,m.user_uid) AS name,
       CASE m.role
-        WHEN 'lawyer' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_lawyer_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
-        WHEN 'analyst' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_analyst_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
-        WHEN 'operations' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_operations_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
+        WHEN 'lawyer' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.archived_at IS NULL AND p.assigned_lawyer_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
+        WHEN 'analyst' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.archived_at IS NULL AND p.assigned_analyst_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
+        WHEN 'operations' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.archived_at IS NULL AND p.assigned_operations_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
+        WHEN 'consultant' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.archived_at IS NULL AND p.assigned_consultant_uid=m.user_uid AND p.status NOT IN ('complete','closed','archived'))
         ELSE 0 END AS assigned_matters,
       CASE m.role
-        WHEN 'lawyer' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_lawyer_uid=m.user_uid AND p.status='ready_for_review')
-        WHEN 'analyst' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_analyst_uid=m.user_uid AND p.status IN ('documents_pending','in_review','clarification_required'))
-        WHEN 'operations' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_operations_uid=m.user_uid AND p.status='documents_pending')
+        WHEN 'lawyer' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.archived_at IS NULL AND p.assigned_lawyer_uid=m.user_uid AND p.status='ready_for_review')
+        WHEN 'analyst' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.archived_at IS NULL AND p.assigned_analyst_uid=m.user_uid AND p.status IN ('documents_pending','in_review','clarification_required'))
+        WHEN 'operations' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.archived_at IS NULL AND p.assigned_operations_uid=m.user_uid AND p.status='documents_pending')
+        WHEN 'consultant' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.archived_at IS NULL AND p.assigned_consultant_uid=m.user_uid AND p.status IN ('documents_pending','in_review','clarification_required'))
         ELSE 0 END AS pending_reviews,
       CASE m.role
         WHEN 'lawyer' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_lawyer_uid=m.user_uid AND p.status='complete')
         WHEN 'analyst' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_analyst_uid=m.user_uid AND p.status='complete')
         WHEN 'operations' THEN (SELECT COUNT(*) FROM properties p WHERE p.tenant_id=m.organization_id AND p.assigned_operations_uid=m.user_uid AND p.status='complete')
-        ELSE 0 END AS completed_tasks
+        ELSE 0 END AS completed_tasks,
+      (SELECT COUNT(*) FROM workbench_tasks t JOIN properties p ON p.id=t.property_id AND p.tenant_id=t.tenant_id WHERE t.tenant_id=m.organization_id AND p.archived_at IS NULL AND t.assigned_to_uid=m.user_uid AND t.status NOT IN ('completed','cancelled')) AS open_tasks,
+      (SELECT COUNT(*) FROM workbench_tasks t JOIN properties p ON p.id=t.property_id AND p.tenant_id=t.tenant_id WHERE t.tenant_id=m.organization_id AND p.archived_at IS NULL AND t.assigned_to_uid=m.user_uid AND t.status NOT IN ('completed','cancelled') AND t.due_date<CURDATE()) AS overdue_task_count,
+      (SELECT COUNT(*) FROM workbench_tasks t JOIN properties p ON p.id=t.property_id AND p.tenant_id=t.tenant_id WHERE t.tenant_id=m.organization_id AND p.archived_at IS NULL AND t.reviewer_uid=m.user_uid AND t.status='under_review') AS tasks_awaiting_review,
+      (SELECT COUNT(*) FROM workbench_tasks t JOIN properties p ON p.id=t.property_id AND p.tenant_id=t.tenant_id WHERE t.tenant_id=m.organization_id AND p.archived_at IS NULL AND t.assigned_to_uid=m.user_uid AND t.status='completed') AS completed_task_count
       FROM org_memberships m LEFT JOIN user_accounts u ON u.id=m.user_uid
-      WHERE m.organization_id=? AND m.status='active' AND m.role IN ('lawyer','analyst','operations')
-      ORDER BY assigned_matters DESC,m.role,name LIMIT 12`, [tenantId]),
-    pool.query(`SELECT p.id AS property_id,p.application_number,p.name AS property_name,p.status,p.assigned_lawyer_uid AS assigned_owner,p.due_date,p.updated_at,
-      CASE WHEN p.status='ready_for_review' THEN 'Review required' WHEN p.status='approved' THEN 'Submission required' ELSE 'Report action' END AS action
-      FROM properties p WHERE p.tenant_id=? AND p.status IN ('ready_for_review','approved') AND p.archived_at IS NULL
-      ORDER BY p.due_date IS NULL,p.due_date,p.updated_at DESC LIMIT 6`, [tenantId]),
-    pool.query(`SELECT a.id,a.actor_uid,a.action,a.entity_type,a.entity_id,a.created_at,COALESCE(u.full_name,m.email,a.actor_uid) AS actor_name
+      WHERE m.organization_id=? AND m.status='active' AND m.role IN ('lawyer','analyst','operations','consultant')
+      ORDER BY assigned_matters DESC,m.role,name LIMIT 50`, [tenantId]),
+    pool.query(`SELECT p.id AS property_id,p.application_number,p.name AS property_name,p.status,p.assigned_lawyer_uid AS assigned_owner,p.due_date,r.created_at,r.id AS report_id,r.version_number,r.title AS report_title,r.approval_status,
+      'Submitted report awaiting legal review' AS action
+      FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id
+      WHERE r.tenant_id=? AND r.approval_status='submitted' AND p.archived_at IS NULL
+      ORDER BY r.submitted_at IS NULL,r.submitted_at,r.created_at DESC LIMIT 6`, [tenantId]),
+    pool.query(`SELECT a.id,a.actor_uid,a.action,a.entity_type,a.entity_id,a.created_at,COALESCE(u.full_name,m.email,a.actor_uid) AS actor_name,
+        COALESCE(property_entity.id,document_property.id) AS property_id,
+        COALESCE(property_entity.name,document_property.name) AS property_name,
+        COALESCE(property_entity.application_number,document_property.application_number) AS application_number,
+        COALESCE(property_entity.district,document_property.district) AS district
       FROM audit_events a
       LEFT JOIN user_accounts u ON u.id=a.actor_uid
-      LEFT JOIN org_memberships m ON m.organization_id=a.tenant_id AND m.user_uid=a.actor_uid
-      WHERE a.tenant_id=? AND a.action IN ('property.created','document.uploaded','document.fields_overridden','property.workflow_updated','report.snapshot_created','title_event.reviewed')
-      ORDER BY a.created_at DESC LIMIT 8`, [tenantId]),
+      LEFT JOIN (SELECT organization_id,user_uid,MAX(email) AS email FROM org_memberships GROUP BY organization_id,user_uid) m ON m.organization_id=a.tenant_id AND m.user_uid=a.actor_uid
+      LEFT JOIN properties property_entity ON a.entity_type='property' AND property_entity.id=a.entity_id AND property_entity.tenant_id=a.tenant_id
+      LEFT JOIN documents activity_document ON a.entity_type='document' AND activity_document.id=a.entity_id AND activity_document.tenant_id=a.tenant_id
+      LEFT JOIN properties document_property ON document_property.id=activity_document.property_id AND document_property.tenant_id=a.tenant_id
+      WHERE a.tenant_id=? AND (a.action IN ('property.created','property.updated','property.workflow_updated','admin.application_assignment_changed','document.uploaded','document.fields_overridden','document.submitted_for_review','document.ocr_completed','legal.finding_report_review_decision','legal.report_review_decision','consultant.report_version_created','consultant.report_submitted','consultant.report_exported','report.snapshot_created') OR a.action LIKE 'workbench.%')
+      ORDER BY a.created_at DESC LIMIT ? OFFSET ?`, [tenantId,activityPageSize,(activityPage-1)*activityPageSize]),
     pool.query(`SELECT
       (SELECT COUNT(DISTINCT source_name) FROM rtc_lookups WHERE tenant_id=? AND status='completed') AS connected_sources,
       ((SELECT COUNT(*) FROM rtc_lookups WHERE tenant_id=? AND verification_status='source_matched') +
@@ -1366,7 +1673,46 @@ app.get('/api/owner/dashboard', authGuard, ownerGuard, asyncRoute(async (req, re
       ((SELECT COUNT(*) FROM rtc_lookups WHERE tenant_id=? AND (verification_status='source_mismatch' OR status='failed')) +
        (SELECT COUNT(*) FROM documents WHERE tenant_id=? AND governance_status IN ('rejected','quarantined'))) AS failed_verification,
       (SELECT MAX(COALESCE(retrieved_at,updated_at,created_at)) FROM rtc_lookups WHERE tenant_id=?) AS last_synchronization`,
-      [tenantId,tenantId,tenantId,tenantId,tenantId,tenantId,tenantId,tenantId])
+      [tenantId,tenantId,tenantId,tenantId,tenantId,tenantId,tenantId,tenantId]),
+    pool.query(`SELECT COUNT(*) AS total,
+      SUM(CASE WHEN p.status='ready_for_review' AND p.archived_at IS NULL THEN 1 ELSE 0 END) AS ready_for_legal_review,
+      SUM(CASE WHEN p.status IN ('documents_pending','in_review','clarification_required') AND p.archived_at IS NULL THEN 1 ELSE 0 END) AS under_review,
+      SUM(CASE WHEN p.status='draft' AND p.archived_at IS NULL THEN 1 ELSE 0 END) AS not_started,
+      SUM(CASE WHEN (
+        (NULLIF(TRIM(p.survey_number),'') IS NULL AND NULLIF(TRIM(p.property_identifier),'') IS NULL) OR NULLIF(TRIM(p.village),'') IS NULL OR NULLIF(TRIM(p.extent),'') IS NULL OR p.latitude IS NULL OR p.longitude IS NULL OR
+        NULLIF(TRIM(p.boundary_north),'') IS NULL OR NULLIF(TRIM(p.boundary_south),'') IS NULL OR NULLIF(TRIM(p.boundary_east),'') IS NULL OR NULLIF(TRIM(p.boundary_west),'') IS NULL OR COALESCE(p.identity_state,'')<>'verified' OR
+        NOT EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active')
+      ) THEN 1 ELSE 0 END) AS missing_evidence_matters,
+      ROUND(AVG((
+        (CASE WHEN (NULLIF(TRIM(p.survey_number),'') IS NOT NULL OR NULLIF(TRIM(p.property_identifier),'') IS NOT NULL) AND NULLIF(TRIM(p.village),'') IS NOT NULL AND NULLIF(TRIM(p.extent),'') IS NOT NULL THEN 1 ELSE 0 END) +
+        (CASE WHEN EXISTS (SELECT 1 FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') THEN 1 ELSE 0 END) +
+        (CASE WHEN p.latitude IS NOT NULL AND p.longitude IS NOT NULL THEN 1 ELSE 0 END) +
+        (CASE WHEN NULLIF(TRIM(p.boundary_north),'') IS NOT NULL AND NULLIF(TRIM(p.boundary_south),'') IS NOT NULL AND NULLIF(TRIM(p.boundary_east),'') IS NOT NULL AND NULLIF(TRIM(p.boundary_west),'') IS NOT NULL THEN 1 ELSE 0 END) +
+        (CASE WHEN p.identity_state='verified' THEN 1 ELSE 0 END)
+      ) / 5 * 100),0) AS readiness_pct
+      FROM properties p WHERE p.tenant_id=? AND p.archived_at IS NULL`,[tenantId]),
+    pool.query(`SELECT COALESCE(NULLIF(TRIM(district),''),'Not recorded') AS label,COUNT(*) AS value FROM properties WHERE tenant_id=? AND archived_at IS NULL GROUP BY COALESCE(NULLIF(TRIM(district),''),'Not recorded') ORDER BY value DESC,label`,[tenantId]),
+    pool.query(`SELECT COALESCE(NULLIF(TRIM(taluk),''),'Not recorded') AS label,COUNT(*) AS value FROM properties WHERE tenant_id=? AND archived_at IS NULL GROUP BY COALESCE(NULLIF(TRIM(taluk),''),'Not recorded') ORDER BY value DESC,label`,[tenantId]),
+    pool.query(`SELECT COALESCE(NULLIF(TRIM(village),''),'Not recorded') AS label,COUNT(*) AS value FROM properties WHERE tenant_id=? AND archived_at IS NULL GROUP BY COALESCE(NULLIF(TRIM(village),''),'Not recorded') ORDER BY value DESC,label`,[tenantId]),
+    pool.query(`SELECT COUNT(*) AS total_documents,
+      SUM(CASE WHEN manual_review_status IN ('pending','required') OR processing_status<>'completed' THEN 1 ELSE 0 END) AS pending_review,
+      SUM(CASE WHEN LOWER(COALESCE(doc_type,'')) IN ('sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney') THEN 1 ELSE 0 END) AS title_deeds,
+      SUM(CASE WHEN LOWER(COALESCE(doc_type,'')) IN ('encumbrance_certificate','ec') THEN 1 ELSE 0 END) AS encumbrance_certificates,
+      SUM(CASE WHEN LOWER(COALESCE(doc_type,'')) IN ('rtc_pahani','mutation_record','mutation_extract','survey_sketch_tippan','survey_sketch','khata_e_khata','e_khata','property_tax_receipt','tax_receipt') THEN 1 ELSE 0 END) AS survey_revenue_records,
+      SUM(CASE WHEN LOWER(COALESCE(doc_type,'')) NOT IN ('sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney','encumbrance_certificate','ec','rtc_pahani','mutation_record','mutation_extract','survey_sketch_tippan','survey_sketch','khata_e_khata','e_khata','property_tax_receipt','tax_receipt') THEN 1 ELSE 0 END) AS other_documents,
+      SUM(CASE WHEN (manual_review_status IN ('pending','required') OR processing_status<>'completed') AND LOWER(COALESCE(doc_type,'')) IN ('sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney') THEN 1 ELSE 0 END) AS pending_title_deeds,
+      SUM(CASE WHEN (manual_review_status IN ('pending','required') OR processing_status<>'completed') AND LOWER(COALESCE(doc_type,'')) IN ('encumbrance_certificate','ec') THEN 1 ELSE 0 END) AS pending_encumbrance_certificates,
+      SUM(CASE WHEN (manual_review_status IN ('pending','required') OR processing_status<>'completed') AND LOWER(COALESCE(doc_type,'')) IN ('rtc_pahani','mutation_record','mutation_extract','survey_sketch_tippan','survey_sketch','khata_e_khata','e_khata','property_tax_receipt','tax_receipt') THEN 1 ELSE 0 END) AS pending_survey_revenue_records,
+      SUM(CASE WHEN (manual_review_status IN ('pending','required') OR processing_status<>'completed') AND LOWER(COALESCE(doc_type,'')) NOT IN ('sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney','encumbrance_certificate','ec','rtc_pahani','mutation_record','mutation_extract','survey_sketch_tippan','survey_sketch','khata_e_khata','e_khata','property_tax_receipt','tax_receipt') THEN 1 ELSE 0 END) AS pending_other_documents
+      FROM documents d JOIN properties p ON p.id=d.property_id AND p.tenant_id=d.tenant_id WHERE d.tenant_id=? AND d.governance_status='active' AND p.archived_at IS NULL`,[tenantId]),
+    pool.query(`SELECT CASE COALESCE(r.risk_rank,0) WHEN 4 THEN 'critical' WHEN 3 THEN 'high' WHEN 2 THEN 'medium' WHEN 1 THEN 'low' ELSE 'not_assessed' END AS label,COUNT(*) AS value
+      FROM properties p LEFT JOIN (SELECT property_id,MAX(CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END) AS risk_rank FROM risk_findings WHERE tenant_id=? GROUP BY property_id) r ON r.property_id=p.id
+      WHERE p.tenant_id=? AND p.archived_at IS NULL GROUP BY label ORDER BY FIELD(label,'critical','high','medium','low','not_assessed')`,[tenantId,tenantId]),
+    pool.query(`SELECT registry_name,status,verified_at FROM source_registry_verifications WHERE tenant_id=? ORDER BY verified_at DESC LIMIT 100`,[tenantId]),
+    pool.query(`SELECT source_name,status,verification_status,COALESCE(retrieved_at,updated_at,created_at) AS checked_at FROM rtc_lookups WHERE tenant_id=? ORDER BY COALESCE(retrieved_at,updated_at,created_at) DESC LIMIT 100`,[tenantId]),
+    pool.query(`SELECT COUNT(*) AS verified_layers,MAX(source_date) AS latest_source_date FROM spatial_layers WHERE active=TRUE AND data_status='verified' AND source_name IS NOT NULL AND source_url IS NOT NULL AND source_date IS NOT NULL`),
+    pool.query(`SELECT COUNT(*) AS total FROM audit_events a WHERE a.tenant_id=? AND (a.action IN ('property.created','property.updated','property.workflow_updated','admin.application_assignment_changed','document.uploaded','document.fields_overridden','document.submitted_for_review','document.ocr_completed','legal.finding_report_review_decision','legal.report_review_decision','consultant.report_version_created','consultant.report_submitted','consultant.report_exported','report.snapshot_created') OR a.action LIKE 'workbench.%')`,[tenantId]),
+    pool.query('SELECT COUNT(*) AS total FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id WHERE f.tenant_id=? AND p.archived_at IS NULL',[tenantId])
   ]);
   const [mattersByStatus,monthlyTrends,riskSeverity,taskComparison]=await Promise.all([
     pool.query(`SELECT status AS label,COUNT(*) AS value FROM properties WHERE tenant_id=? AND DATE(created_at) BETWEEN ? AND ? GROUP BY status ORDER BY value DESC`,[tenantId,from,to]),
@@ -1375,28 +1721,63 @@ app.get('/api/owner/dashboard', authGuard, ownerGuard, asyncRoute(async (req, re
       FROM properties WHERE tenant_id=? AND DATE(created_at) BETWEEN ? AND ? GROUP BY DATE_FORMAT(created_at,'%Y-%m') ORDER BY month`,[tenantId,from,to]),
     pool.query(`SELECT f.severity AS label,COUNT(*) AS value FROM risk_findings f WHERE f.tenant_id=? AND DATE(f.created_at) BETWEEN ? AND ? GROUP BY f.severity ORDER BY value DESC`,[tenantId,from,to]),
     pool.query(`SELECT
-      SUM(CASE WHEN status IN ('complete','closed') THEN 1 ELSE 0 END) AS completed,
-      SUM(CASE WHEN status NOT IN ('complete','closed','archived') THEN 1 ELSE 0 END) AS pending
-      FROM properties WHERE tenant_id=? AND DATE(created_at) BETWEEN ? AND ?`,[tenantId,from,to])
+      SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed,
+      SUM(CASE WHEN status NOT IN ('completed','cancelled') THEN 1 ELSE 0 END) AS pending
+      FROM workbench_tasks WHERE tenant_id=? AND DATE(created_at) BETWEEN ? AND ?`,[tenantId,from,to])
   ]);
   const metricRow=metrics.rows[0]||{};
+  const latestByPattern=(rows:any[],pattern:RegExp)=>rows.find(row=>pattern.test(String(row.registry_name||'')));
+  const latestBhoomi=rtcHistory.rows.find((row:any)=>/bhoomi|rtc/i.test(String(row.source_name||'')));
+  const latestKaveri=latestByPattern(sourceRegistryHistory.rows,/kaveri/i);
+  const latestRegistration=latestByPattern(sourceRegistryHistory.rows,/registration|encumbrance|\bec\b/i);
+  const layerSummary=verifiedLayers.rows[0]||{};
+  const readinessRow=readiness.rows[0]||{};
+  const activityTotal=Number(activityCount.rows[0]?.total||0),findingsTotal=Number(findingsCount.rows[0]?.total||0);
   res.json({
     metrics:Object.fromEntries(Object.entries(metricRow).map(([key,value])=>[key,Number(value||0)])),
+    readiness:Object.fromEntries(Object.entries(readinessRow).map(([key,value])=>[key,Number(value||0)])),
+    distributions:{districts:districts.rows,taluks:taluks.rows,villages:villages.rows},
+    documentCategories:Object.fromEntries(Object.entries(documentCategories.rows[0]||{}).map(([key,value])=>[key,Number(value||0)])),
+    riskOverview:riskOverview.rows,
     workflow:workflow.rows,
     pendingActions:[
       {id:'documents',label:'Pending document reviews',count:Number(metricRow.documents_requiring_review||0),priority:Number(metricRow.documents_requiring_review||0)>0?'high':'normal',status:Number(metricRow.documents_requiring_review||0)>0?'Action required':'Clear',nextAction:'Review documents',target:'all-documents'},
-      {id:'approval',label:'Matters awaiting approval',count:Number(metricRow.ready_for_legal_review||0),priority:Number(metricRow.ready_for_legal_review||0)>0?'high':'normal',status:Number(metricRow.ready_for_legal_review||0)>0?'Pending':'Clear',nextAction:'Open matters',target:'properties'},
-      {id:'evidence',label:'Missing evidence',count:Number(workflow.rows.reduce((sum:number,item:any)=>sum+Number(item.missing_evidence||0),0)),priority:'high',status:'Review',nextAction:'Inspect workflow',target:'properties'},
-      {id:'overdue',label:'Overdue tasks',count:Number(metricRow.overdue_tasks||0),priority:Number(metricRow.overdue_tasks||0)>0?'urgent':'normal',status:Number(metricRow.overdue_tasks||0)>0?'Overdue':'Clear',nextAction:'Resolve tasks',target:'properties'},
-      {id:'legal',label:'Pending legal reviews',count:Number(metricRow.ready_for_legal_review||0),priority:Number(metricRow.ready_for_legal_review||0)>0?'high':'normal',status:Number(metricRow.ready_for_legal_review||0)>0?'Waiting':'Clear',nextAction:'Review queue',target:'all-findings'}
+      {id:'approval',label:'Matters awaiting approval',count:Number(metricRow.ready_for_legal_review||0),priority:Number(metricRow.ready_for_legal_review||0)>0?'high':'normal',status:Number(metricRow.ready_for_legal_review||0)>0?'Pending':'Clear',nextAction:'Open legal review matters',target:'overview'},
+      {id:'evidence',label:'Missing evidence',count:Number(readinessRow.missing_evidence_matters||0),priority:'high',status:'Review',nextAction:'Inspect workflow',target:'overview'},
+      {id:'overdue',label:'Overdue tasks',count:Number(metricRow.overdue_tasks||0),priority:Number(metricRow.overdue_tasks||0)>0?'urgent':'normal',status:Number(metricRow.overdue_tasks||0)>0?'Overdue':'Clear',nextAction:'Resolve tasks',target:'lawyer-workbench'},
+      {id:'legal',label:'Reports awaiting legal review',count:Number(metricRow.reports_awaiting_review||0),priority:Number(metricRow.reports_awaiting_review||0)>0?'high':'normal',status:Number(metricRow.reports_awaiting_review||0)>0?'Waiting':'Clear',nextAction:'Review submitted reports',target:'consultant-reports'}
     ],
     recentFindings:recentFindings.rows,
-    teamWorkload:workload.rows,
+    teamWorkload:workload.rows.map((member:any)=>{const completed=Number(member.completed_task_count||0),pending=Number(member.open_tasks||0),total=completed+pending;return {...member,completion_pct:total?Math.round(completed/total*100):0};}),
     reports:reports.rows,
     recentActivity:activity.rows,
+    pagination:{
+      findings:{page:findingsPage,pageSize:findingsPageSize,total:findingsTotal,totalPages:Math.max(1,Math.ceil(findingsTotal/findingsPageSize))},
+      activity:{page:activityPage,pageSize:activityPageSize,total:activityTotal,totalPages:Math.max(1,Math.ceil(activityTotal/activityPageSize))}
+    },
+    evidenceSourceStatus:[
+      {source:'Bhoomi / RTC',status:latestBhoomi?.verification_status||'not_verified',lastChecked:latestBhoomi?.checked_at||null,recordedSource:latestBhoomi?.source_name||null},
+      {source:'Kaveri',status:latestKaveri?.status||'not_verified',lastChecked:latestKaveri?.verified_at||null,recordedSource:latestKaveri?.registry_name||null},
+      {source:'Registration / EC',status:latestRegistration?.status||'not_verified',lastChecked:latestRegistration?.verified_at||null,recordedSource:latestRegistration?.registry_name||null},
+      {source:'GIS / Map Layers',status:Number(layerSummary.verified_layers||0)>0?'verified_data_available':'unavailable',verifiedLayers:Number(layerSummary.verified_layers||0),latestSourceDate:layerSummary.latest_source_date||null}
+    ],
     evidenceSources:evidenceSources.rows[0]||{},
     analytics:{from,to,mattersByStatus:mattersByStatus.rows,monthlyTrends:monthlyTrends.rows,riskSeverity:riskSeverity.rows,taskComparison:taskComparison.rows[0]||{pending:0,completed:0}}
   });
+}));
+
+app.get('/api/owner/dashboard/search', authGuard, ownerGuard, asyncRoute(async (req,res)=>{
+  if(!pool)return res.status(503).json({error:'Database not configured.'});
+  const term=String(req.query.q||'').trim().slice(0,100);
+  if(term.length<2)return res.json({items:[]});
+  const pattern=`%${term.replace(/[\\%_]/g,'\\$&')}%`;
+  const [properties,documents]=await Promise.all([
+    pool.query(`SELECT 'property' AS type,p.id,p.id AS property_id,p.application_number AS reference,p.name AS title,CONCAT_WS(' · ',NULLIF(p.village,''),NULLIF(p.taluk,''),NULLIF(p.district,'')) AS subtitle,p.updated_at
+      FROM properties p WHERE p.tenant_id=? AND p.archived_at IS NULL AND (p.name LIKE ? OR p.application_number LIKE ? OR p.village LIKE ? OR p.taluk LIKE ? OR p.district LIKE ? OR p.survey_number LIKE ?) ORDER BY p.updated_at DESC LIMIT 6`,[req.user?.tenantId,pattern,pattern,pattern,pattern,pattern,pattern]),
+    pool.query(`SELECT 'document' AS type,d.id,d.property_id,p.application_number AS reference,d.original_filename AS title,CONCAT_WS(' · ',NULLIF(d.doc_type,''),NULLIF(p.name,''),NULLIF(p.district,'')) AS subtitle,d.created_at AS updated_at
+      FROM documents d JOIN properties p ON p.id=d.property_id AND p.tenant_id=d.tenant_id WHERE d.tenant_id=? AND d.governance_status='active' AND (d.original_filename LIKE ? OR d.doc_type LIKE ? OR d.doc_type_custom LIKE ?) ORDER BY d.created_at DESC LIMIT 6`,[req.user?.tenantId,pattern,pattern,pattern])
+  ]);
+  res.json({items:[...properties.rows,...documents.rows].sort((a:any,b:any)=>new Date(b.updated_at).getTime()-new Date(a.updated_at).getTime()).slice(0,10)});
 }));
 
 app.get('/api/properties', authGuard, asyncRoute(async (req, res) => {
@@ -1407,10 +1788,11 @@ app.get('/api/properties', authGuard, asyncRoute(async (req, res) => {
      FROM properties p
      WHERE p.tenant_id=?
        AND ? <> 'support'
-       AND (? <> 'viewer' OR p.status='complete')
+       AND (? <> 'viewer' OR (p.status IN ('approved','complete') AND p.assigned_viewer_uid=?))
+       AND (? <> 'consultant' OR p.assigned_consultant_uid=?)
        AND (? <> 'lawyer' OR p.assigned_lawyer_uid=?)
        AND (? <> 'analyst' OR p.assigned_analyst_uid=?)
-       AND (? <> 'operations' OR p.assigned_operations_uid=? OR p.assigned_operations_uid IS NULL OR p.assigned_operations_uid='')
+       AND (? <> 'operations' OR p.assigned_operations_uid=?)
        AND (
          ?=''
          OR LOWER(p.application_number) LIKE LOWER(CONCAT('%', ?, '%'))
@@ -1421,7 +1803,7 @@ app.get('/api/properties', authGuard, asyncRoute(async (req, res) => {
        )
      ORDER BY p.updated_at DESC
      LIMIT 100`,
-    [req.user?.tenantId, req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', q, q, q, q, q, q]
+    [req.user?.tenantId, req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', q, q, q, q, q, q]
   );
   res.json({ items: result.rows });
 }));
@@ -1530,15 +1912,15 @@ app.post('/api/properties', authGuard, writeGuard, asyncRoute(async (req, res) =
 
 app.get('/api/properties/:id', authGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const result = await pool.query("SELECT * FROM properties WHERE id=? AND tenant_id=? AND ? <> 'support' AND (? NOT IN ('viewer','consultant') OR status IN ('approved','complete')) AND (? <> 'lawyer' OR assigned_lawyer_uid=?) AND (? <> 'analyst' OR assigned_analyst_uid=?) AND (? <> 'operations' OR assigned_operations_uid=? OR assigned_operations_uid IS NULL OR assigned_operations_uid='')", [req.params.id, req.user?.tenantId, req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '']);
-  if (!result.rowCount) return res.status(404).json({ error: 'Property not found.' });
+  const result = await pool.query("SELECT * FROM properties WHERE id=? AND tenant_id=? AND ? <> 'support' AND (? <> 'viewer' OR (status IN ('approved','complete') AND assigned_viewer_uid=?)) AND (? <> 'consultant' OR assigned_consultant_uid=?) AND (? <> 'lawyer' OR assigned_lawyer_uid=?) AND (? <> 'analyst' OR assigned_analyst_uid=?) AND (? <> 'operations' OR assigned_operations_uid=?)", [req.params.id, req.user?.tenantId, req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '']);
+  if (!result.rowCount) return res.status(404).json({ error: req.user?.role === 'consultant' ? 'This property is not assigned to your Consultant account. Ask an Admin to assign it, then refresh.' : 'Property not found.' });
   const documents = ['viewer','consultant'].includes(req.user?.role || '')
     ? await pool.query("SELECT id, original_filename, mime_type, size_bytes, sha256, doc_type, doc_type_custom, classification_confidence, classification_source, manual_review_status, processing_status, review_status, extracted_fields, extracted_text, created_at FROM documents WHERE property_id=? AND tenant_id=? AND review_status='approved' ORDER BY created_at DESC", [req.params.id, req.user?.tenantId])
     : ['support','data_steward'].includes(req.user?.role || '') ? { rows: [] }
     : await pool.query('SELECT id, original_filename, mime_type, size_bytes, sha256, doc_type, doc_type_custom, classification_confidence, classification_source, manual_review_status, processing_status, review_status, extracted_fields, extracted_text, created_at FROM documents WHERE property_id=? AND tenant_id=? ORDER BY created_at DESC', [req.params.id, req.user?.tenantId]);
   const findings = ['owner','admin','lawyer','analyst','consultant'].includes(req.user?.role || '')
     ? (['consultant','viewer'].includes(req.user?.role || '')
-      ? await pool.query("SELECT * FROM risk_findings WHERE property_id=? AND tenant_id=? AND evidence_status='verified' ORDER BY created_at DESC", [req.params.id, req.user?.tenantId])
+      ? await pool.query("SELECT f.*,COALESCE(fr.review_status,'pending') AS reviewer_state,fr.rationale AS reviewer_rationale FROM risk_findings f LEFT JOIN consultant_finding_reviews fr ON fr.finding_id=f.id AND fr.tenant_id=f.tenant_id WHERE f.property_id=? AND f.tenant_id=? ORDER BY f.created_at DESC", [req.params.id, req.user?.tenantId])
       : await pool.query('SELECT * FROM risk_findings WHERE property_id=? AND tenant_id=? ORDER BY created_at DESC', [req.params.id, req.user?.tenantId]))
     : { rows: [] };
   res.json({ item: result.rows[0], documents: documents.rows, findings: findings.rows });
@@ -1570,6 +1952,16 @@ async function getWorkflowApprovalChecks(property: any, tenantId: string) {
   if (!documentResult.rowCount) blockers.push('Upload at least one source document.');
   const manualReviewFiles = documentResult.rows.filter(document => document.manual_review_status === 'required').map(document => document.original_filename);
   if (manualReviewFiles.length) blockers.push(`Complete manual review for ${manualReviewFiles.length} document${manualReviewFiles.length === 1 ? '' : 's'}.`);
+  const unresolvedMismatches=documentResult.rows.flatMap((document:any)=>{
+    const fields=typeof document.extracted_fields==='string'?JSON.parse(document.extracted_fields||'{}'):document.extracted_fields||{};
+    return propertyDocumentIdentityIssues(fields,property).filter(issue=>/does not match|differs from|is missing/i.test(issue)).map(issue=>`${document.original_filename}: ${issue}`);
+  });
+  if(unresolvedMismatches.length)blockers.push(`Resolve ${unresolvedMismatches.length} Owner Page vs document mismatch${unresolvedMismatches.length===1?'':'es'} before approval: ${unresolvedMismatches.join(' ')}`);
+  for(const document of documentResult.rows){
+    const fields=typeof document.extracted_fields==='string'?JSON.parse(document.extracted_fields||'{}'):document.extracted_fields||{};
+    const partyIssues=await propertyDocumentPartyIssues(fields,property.id,tenantId);
+    if(partyIssues.length)blockers.push(`${document.original_filename}: ${partyIssues.join(' ')}`);
+  }
   const unverifiedFiles = documentResult.rows.filter(document => !document.extracted_fields?.reviewState?.isVerified).map(document => document.original_filename);
   if (unverifiedFiles.length) blockers.push(`Verify ${unverifiedFiles.length} source document${unverifiedFiles.length === 1 ? '' : 's'} against the application.`);
 
@@ -1971,12 +2363,11 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
     );
 
     inserted.push(result.rows[0]);
-    // Intake creates the shared provider job; it never runs OCR in the request process.
-    const configured = await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?', [req.user?.tenantId]);
-    if (configured.rowCount && process.env.OCR_WORKER_TOKEN) {
+    // Intake queues local Tesseract work; OCR runs in the isolated worker.
+    if (process.env.OCR_WORKER_TOKEN) {
       await pool.query(
-        `INSERT INTO document_processing_jobs (id,tenant_id,property_id,document_id,requested_by_uid,status)
-         VALUES (?,?,?,?,?,'queued')`,
+        `INSERT INTO document_processing_jobs (id,tenant_id,property_id,document_id,requested_by_uid,status,processing_stage)
+         VALUES (?,?,?,?,?,'queued','queued')`,
         [crypto.randomUUID(), req.user?.tenantId, req.params.id, documentId, req.user?.uid || 'unknown']
       );
       await pool.query("UPDATE documents SET processing_status='queued' WHERE id=? AND tenant_id=?", [documentId, req.user?.tenantId]);
@@ -1992,34 +2383,53 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
       verificationStatus: 'manual_review_required'
     });
   }
-  res.status(201).json({ items: inserted, note: 'Files uploaded. OCR jobs are queued when Document AI is configured; extracted facts always require human review.' });
+  res.status(201).json({ items: inserted, note: 'Files uploaded. Tesseract OCR jobs are queued automatically; extracted facts always require human review.' });
 }));
 
 app.get('/api/properties/:id/documents/:docId/jobs', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const doc = await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?', [req.params.docId, req.params.id, req.user?.tenantId]);
   if (!doc.rowCount) return res.status(404).json({ error: 'Document not found.' });
-  const jobs = await pool.query(`SELECT id,status,progress,attempts,max_attempts,pages_processed,estimated_cost_usd,error_code,error_message,started_at,completed_at,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND property_id=? AND document_id=? ORDER BY created_at DESC`, [req.user?.tenantId, req.params.id, req.params.docId]);
+  const jobs = await pool.query(`SELECT id,status,progress,processing_stage,attempts,max_attempts,pages_processed,estimated_cost_usd,error_code,error_message,started_at,completed_at,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND property_id=? AND document_id=? ORDER BY created_at DESC`, [req.user?.tenantId, req.params.id, req.params.docId]);
   res.json({ items: jobs.rows });
+}));
+
+app.get('/api/properties/:id/documents/:docId/ocr-result', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const result = await pool.query(`SELECT r.id,r.provider,r.provider_version,r.page_count,r.raw_ocr_text,r.raw_ocr_tokens,r.raw_provider_response,r.extracted_fields,r.created_at
+    FROM document_extraction_runs r JOIN documents d ON d.id=r.document_id AND d.tenant_id=r.tenant_id
+    WHERE r.tenant_id=? AND r.property_id=? AND r.document_id=? ORDER BY r.created_at DESC LIMIT 1`, [req.user?.tenantId, req.params.id, req.params.docId]);
+  if (!result.rowCount) return res.json({ result: null });
+  const row = result.rows[0];
+  const parseJson = (value: unknown) => {
+    if (typeof value !== 'string') return value;
+    try { return JSON.parse(value); } catch { return null; }
+  };
+  const extractedFields = parseJson(row.extracted_fields) || {};
+  const providerResponse = parseJson(row.raw_provider_response) || {};
+  res.json({ result: {
+    runId: row.id, provider: row.provider, providerVersion: row.provider_version,
+    pageCount: Number(row.page_count || 0), rawText: row.raw_ocr_text,
+    tokens: parseJson(row.raw_ocr_tokens) || [], pages: Array.isArray(providerResponse.pages) ? providerResponse.pages : [],
+    extractedFields, confidence: Number(extractedFields.overallConfidence || 0), createdAt: row.created_at,
+  } });
 }));
 
 app.post('/api/properties/:id/documents/:docId/jobs', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const doc = await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?', [req.params.docId, req.params.id, req.user?.tenantId]);
   if (!doc.rowCount) return res.status(404).json({ error: 'Document not found.' });
-  const configured = await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?', [req.user?.tenantId]);
-  if (!configured.rowCount) return res.status(409).json({ error: 'Google Document AI is not configured for this workspace.', code: 'DOCUMENT_AI_NOT_CONFIGURED' });
   if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker authentication is not configured on the server.',code:'OCR_WORKER_NOT_CONFIGURED'});
-  const active = await pool.query("SELECT id FROM document_processing_jobs WHERE tenant_id=? AND document_id=? AND status IN ('queued','processing') LIMIT 1", [req.user?.tenantId, req.params.docId]);
+  const active = await pool.query("SELECT id,status FROM document_processing_jobs WHERE tenant_id=? AND document_id=? AND status IN ('queued','processing','retry_wait') LIMIT 1", [req.user?.tenantId, req.params.docId]);
   if (active.rowCount) return res.status(202).json({ jobId: active.rows[0].id, status: 'already_queued' });
   const jobId = crypto.randomUUID();
-  await pool.query(`INSERT INTO document_processing_jobs (id,tenant_id,property_id,document_id,requested_by_uid,status) VALUES (?,?,?,?,?,'queued')`, [jobId, req.user?.tenantId, req.params.id, req.params.docId, req.user?.uid || 'unknown']);
+  await pool.query(`INSERT INTO document_processing_jobs (id,tenant_id,property_id,document_id,requested_by_uid,status,processing_stage) VALUES (?,?,?,?,?,'queued','queued')`, [jobId, req.user?.tenantId, req.params.id, req.params.docId, req.user?.uid || 'unknown']);
   await pool.query("UPDATE documents SET processing_status='queued',review_status='pending' WHERE id=? AND tenant_id=?", [req.params.docId, req.user?.tenantId]);
   await audit(req.user?.uid || 'unknown', req.user?.tenantId, 'document.ocr_queued', 'document', req.params.docId, { jobId });
   res.status(202).json({ jobId, status: 'queued' });
 }));
 
-// Rebuild structured fields from saved OCR output without calling Google again.
+// Rebuild structured fields from saved OCR output without rerunning Tesseract.
 // This preserves immutable OCR text/tokens and records a distinct extraction run.
 app.post('/api/properties/:id/documents/:docId/rebuild-fields', authGuard, asyncRoute(async (req,res) => {
   if (!pool) return res.status(503).json({error:'Database not configured.'});
@@ -2060,12 +2470,41 @@ app.get('/api/properties/:id/documents/:docId/extraction-history', authGuard, do
 }));
 
 // Worker callback is authenticated independently from user sessions and accepts only worker-produced results.
+app.get('/internal/ocr/jobs/:jobId/document', asyncRoute(async (req, res) => {
+  const expected = process.env.OCR_WORKER_TOKEN || '';
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!expected || supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return res.status(401).json({ error: 'Worker authentication failed.' });
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const row = await pool.query(`SELECT j.status,d.storage_key,d.mime_type FROM document_processing_jobs j
+    JOIN documents d ON d.id=j.document_id AND d.tenant_id=j.tenant_id WHERE j.id=? LIMIT 1`, [req.params.jobId]);
+  if (!row.rowCount) return res.status(404).json({ error: 'OCR document job not found.' });
+  if (row.rows[0].status !== 'processing') return res.status(409).json({ error: 'OCR document job is not processing.' });
+  const storageKey = String(row.rows[0].storage_key || '');
+  if (storageKey.startsWith('supabase:')) {
+    const signedUrl = await documentStorage.createSignedUrl(storageKey, 120);
+    if (!signedUrl) return res.status(503).json({ error: 'Private document storage is not configured.' });
+    const response = await fetch(signedUrl, { signal: AbortSignal.timeout(120_000) });
+    if (!response.ok) return res.status(502).json({ error: 'Private storage could not provide the OCR source document.' });
+    res.setHeader('Content-Type', String(row.rows[0].mime_type || 'application/octet-stream'));
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.send(Buffer.from(await response.arrayBuffer()));
+  }
+  const { safePath, isTraversal } = resolveSafeUploadPath(storageKey);
+  if (isTraversal || !safePath) return res.status(403).json({ error: 'Invalid OCR storage path.' });
+  if (!fs.existsSync(safePath) || !fs.statSync(safePath).isFile()) return res.status(404).json({ error: 'Stored OCR source document is missing.' });
+  res.setHeader('Content-Type', String(row.rows[0].mime_type || 'application/octet-stream'));
+  res.setHeader('Cache-Control', 'private, no-store');
+  const stream = fs.createReadStream(safePath);
+  stream.on('error', () => { if (!res.headersSent) res.status(500).json({ error: 'Could not read the stored OCR source document.' }); });
+  stream.pipe(res);
+}));
+
 app.post('/internal/ocr/jobs/complete', asyncRoute(async (req, res) => {
   const expected = process.env.OCR_WORKER_TOKEN || '';
   const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!expected || supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return res.status(401).json({ error: 'Worker authentication failed.' });
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const payloadSchema = z.object({ jobId:z.string().uuid(), text:z.string().max(20_000_000), tokens:z.array(z.any()).max(100_000), rawProviderResponse:z.string().max(1_000_000).optional(), pageCount:z.number().int().nonnegative(), providerVersion:z.string().max(120).optional() });
+  const payloadSchema = z.object({ jobId:z.string().uuid(), text:z.string().max(20_000_000), tokens:z.array(z.any()).max(100_000), pages:z.array(z.object({pageNumber:z.number().int().positive(),text:z.string().max(2_000_000),confidence:z.number().min(0).max(1),tokenCount:z.number().int().nonnegative()})).max(1000).optional(), rawProviderResponse:z.string().max(1_000_000).optional(), pageCount:z.number().int().nonnegative(), providerVersion:z.string().max(120).optional() });
   const parsed = payloadSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error:'Invalid OCR result payload.' });
   const jobResult = await pool.query(`SELECT j.*,d.original_filename,d.mime_type FROM document_processing_jobs j JOIN documents d ON d.id=j.document_id AND d.tenant_id=j.tenant_id WHERE j.id=?`, [parsed.data.jobId]);
@@ -2073,10 +2512,9 @@ app.post('/internal/ocr/jobs/complete', asyncRoute(async (req, res) => {
   const job = jobResult.rows[0];
   const extracted = extractDocument({ text: parsed.data.text, tokens: parsed.data.tokens }, { documentId:job.document_id, filename:job.original_filename, mimeType:job.mime_type });
   const runId = crypto.randomUUID();
-  await pool.query(`INSERT INTO document_extraction_runs (id,tenant_id,property_id,document_id,job_id,provider,provider_version,page_count,raw_ocr_text,raw_ocr_tokens,raw_provider_response,extracted_fields,created_by_uid) VALUES (?,?,?,?,?,'google_document_ai',?,?,?,?,?,?,?)`, [runId,job.tenant_id,job.property_id,job.document_id,job.id,parsed.data.providerVersion || null,parsed.data.pageCount,parsed.data.text,JSON.stringify(parsed.data.tokens),parsed.data.rawProviderResponse || null,JSON.stringify(extracted),job.requested_by_uid]);
+  await pool.query(`INSERT INTO document_extraction_runs (id,tenant_id,property_id,document_id,job_id,provider,provider_version,page_count,raw_ocr_text,raw_ocr_tokens,raw_provider_response,extracted_fields,created_by_uid) VALUES (?,?,?,?,?,'tesseract',?,?,?,?,?,?,?)`, [runId,job.tenant_id,job.property_id,job.document_id,job.id,parsed.data.providerVersion || null,parsed.data.pageCount,parsed.data.text,JSON.stringify(parsed.data.tokens),parsed.data.rawProviderResponse || JSON.stringify({pages:parsed.data.pages || []}),JSON.stringify(extracted),job.requested_by_uid]);
   await pool.query(`UPDATE documents SET extracted_text=?,extracted_fields=?,processing_status='manual_review',manual_review_status='required',review_status='pending',approved_by_uid=NULL,approved_at=NULL WHERE id=? AND tenant_id=?`, [parsed.data.text,JSON.stringify(extracted),job.document_id,job.tenant_id]);
-  const estimatedCost=Math.max(0,Number(process.env.DOCUMENT_AI_ESTIMATED_COST_PER_PAGE_USD||0))*parsed.data.pageCount;
-  await pool.query(`UPDATE document_processing_jobs SET status='completed',progress=100,pages_processed=?,estimated_cost_usd=?,completed_at=NOW(6),updated_at=NOW(6) WHERE id=?`, [parsed.data.pageCount,estimatedCost,job.id]);
+  await pool.query(`UPDATE document_processing_jobs SET status='completed',progress=100,processing_stage='completed',pages_processed=?,estimated_cost_usd=0,completed_at=NOW(6),updated_at=NOW(6) WHERE id=?`, [parsed.data.pageCount,job.id]);
   await audit(job.requested_by_uid,job.tenant_id,'document.ocr_completed','document',job.document_id,{jobId:job.id,runId,pageCount:parsed.data.pageCount,overallConfidence:extracted.overallConfidence});
   res.json({ success:true, runId });
 }));
@@ -2085,14 +2523,14 @@ app.post('/internal/ocr/jobs/fail', asyncRoute(async (req,res)=>{
   const expected=process.env.OCR_WORKER_TOKEN||'';const supplied=String(req.headers.authorization||'').replace(/^Bearer\s+/i,'');
   if(!expected||supplied.length!==expected.length||!crypto.timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)))return res.status(401).json({error:'Worker authentication failed.'});
   if(!pool)return res.status(503).json({error:'Database not configured.'});
-  const input=z.object({jobId:z.string().uuid(),errorCode:z.string().trim().min(1).max(80),errorMessage:z.string().trim().min(1).max(1000)}).safeParse(req.body);
+  const input=z.object({jobId:z.string().uuid(),errorCode:z.string().trim().min(1).max(80),errorMessage:z.string().trim().min(1).max(1000),retryable:z.boolean().default(false)}).safeParse(req.body);
   if(!input.success)return res.status(400).json({error:'Invalid worker failure payload.'});
   const job=await pool.query('SELECT * FROM document_processing_jobs WHERE id=?',[input.data.jobId]);
   if(!job.rowCount||job.rows[0].status!=='processing')return res.status(409).json({error:'OCR job is missing or no longer processing.'});
-  const status=Number(job.rows[0].attempts)<Number(job.rows[0].max_attempts)?'retry_wait':'failed';
-  await pool.query('UPDATE document_processing_jobs SET status=?,progress=0,error_code=?,error_message=?,updated_at=NOW(6) WHERE id=?',[status,input.data.errorCode,input.data.errorMessage,input.data.jobId]);
-  await pool.query("UPDATE documents SET processing_status='failed' WHERE id=? AND tenant_id=?",[job.rows[0].document_id,job.rows[0].tenant_id]);
-  await audit('document-ai-worker',job.rows[0].tenant_id,'document.ocr_failed','document',job.rows[0].document_id,{jobId:input.data.jobId,status,errorCode:input.data.errorCode});
+  const status=input.data.retryable&&Number(job.rows[0].attempts)<Number(job.rows[0].max_attempts)?'retry_wait':'failed';
+  await pool.query('UPDATE document_processing_jobs SET status=?,progress=0,processing_stage=?,error_code=?,error_message=?,updated_at=NOW(6),completed_at=IF(?=\'failed\',NOW(6),NULL) WHERE id=?',[status,status,input.data.errorCode,input.data.errorMessage,status,input.data.jobId]);
+  await pool.query("UPDATE documents SET processing_status=? WHERE id=? AND tenant_id=?",[status==='retry_wait'?'queued':'failed',job.rows[0].document_id,job.rows[0].tenant_id]);
+  await audit('tesseract-ocr-worker',job.rows[0].tenant_id,'document.ocr_failed','document',job.rows[0].document_id,{jobId:input.data.jobId,status,errorCode:input.data.errorCode});
   res.json({success:true,status});
 }));
 
@@ -2174,10 +2612,10 @@ app.post('/api/properties/:id/documents/:docId/signed-url', authGuard, asyncRout
 
 app.post('/api/properties/:id/documents/:docId/extract', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error:'Database not configured.' });
-  const doc=await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[req.params.docId,req.params.id,req.user?.tenantId]);
+  const doc=await pool.query('SELECT id,storage_key FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[req.params.docId,req.params.id,req.user?.tenantId]);
   if(!doc.rowCount)return res.status(404).json({error:'Document not found.'});
-  const configured=await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[req.user?.tenantId]);
-  if(!configured.rowCount)return res.status(409).json({error:'Google Document AI is not configured for this workspace.',code:'DOCUMENT_AI_NOT_CONFIGURED'});
+  const storageKey=String(doc.rows[0].storage_key||'');
+  if(!storageKey.startsWith('supabase:') && resolveSafeUploadPath(storageKey).isTraversal) return res.status(403).json({error:'Access denied: unsafe document storage path.'});
   if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker authentication is not configured on the server.',code:'OCR_WORKER_NOT_CONFIGURED'});
   const active=await pool.query("SELECT id FROM document_processing_jobs WHERE tenant_id=? AND document_id=? AND status IN ('queued','processing') LIMIT 1",[req.user?.tenantId,req.params.docId]);
   if(active.rowCount)return res.status(202).json({jobId:active.rows[0].id,status:'already_queued'});
@@ -2193,7 +2631,7 @@ function documentVerificationIssues(fields: ExtractedDocumentFields): string[] {
   const missing = (value: unknown) => !value || ['not recorded','not specified','none','unknown','—'].includes(String(value).trim().toLowerCase());
   const schedule = fields.propertySchedule;
   const conveyanceTypes = new Set(['sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney']);
-  if (missing(fields.documentNumber)) issues.push('Document / registration number is missing.');
+  if (missing(fields.registrationNumber||fields.documentNumber)) issues.push('Document / registration number is missing.');
   if (missing(schedule?.surveyNumber)) issues.push('Survey number is missing.');
   if (missing(schedule?.village)) issues.push('Village is missing.');
   if (!schedule?.extent?.normalizedSqFt || schedule.extent.normalizedSqFt <= 0) issues.push('A valid property extent is missing.');
@@ -2201,6 +2639,8 @@ function documentVerificationIssues(fields: ExtractedDocumentFields): string[] {
   if (!boundaries || [boundaries.north,boundaries.south,boundaries.east,boundaries.west].some(missing)) issues.push('All four schedule boundaries must be reviewed.');
   if (conveyanceTypes.has(fields.documentType)) {
     if (!fields.parties?.length) issues.push('Vendor/claimant parties are missing.');
+    if (!fields.parties?.some(party=>['seller','executant'].includes(String(party.role).toLowerCase()))) issues.push('Seller/executant is missing.');
+    if (!fields.parties?.some(party=>['buyer','claimant','donee'].includes(String(party.role).toLowerCase()))) issues.push('Buyer/transferee is missing.');
     if (missing(fields.executionDate)) issues.push('Execution date is missing.');
     if (missing(fields.registrationDate)) issues.push('Registration date is missing.');
   }
@@ -2220,15 +2660,24 @@ function propertyDocumentIdentityIssues(fields: ExtractedDocumentFields, propert
   const documentHissa = clean(fields.propertySchedule?.subdivisionHissa);
   const expectedSurvey = clean(property.survey_number);
   const expectedHissa = clean(property.subdivision);
-  if (!missing(fields.propertySchedule?.surveyNumber) && expectedSurvey) {
-    const surveyMatches = documentSurvey === clean(`${property.survey_number}${property.subdivision || ''}`) ||
-      (documentSurvey === expectedSurvey && (!documentHissa || !expectedHissa || documentHissa === expectedHissa));
-    if (!surveyMatches) issues.push(`Survey/Hissa does not match application ${property.survey_number}${property.subdivision ? `/${property.subdivision}` : ''}.`);
-  }
+  if (!missing(fields.propertySchedule?.surveyNumber) && expectedSurvey && documentSurvey !== expectedSurvey && documentSurvey !== clean(`${property.survey_number}${property.subdivision || ''}`)) issues.push(`Survey number does not match Owner Page ${property.survey_number}.`);
+  if(expectedHissa&&!missing(property.subdivision)&&missing(fields.propertySchedule?.subdivisionHissa))issues.push(`Hissa/subdivision is missing; Owner Page records ${property.subdivision}.`);
+  if(expectedHissa&&!missing(fields.propertySchedule?.subdivisionHissa)&&documentHissa!==expectedHissa)issues.push(`Hissa/subdivision does not match Owner Page ${property.subdivision}.`);
   const documentVillage = clean(fields.propertySchedule?.village);
   const expectedVillage = clean(property.village);
   if (!missing(fields.propertySchedule?.village) && expectedVillage && documentVillage !== expectedVillage) {
-    issues.push(`Village does not match application village ${property.village}.`);
+    issues.push(`Village does not match Owner Page village ${property.village}.`);
+  }
+  for(const [label,ownerValue,documentValue] of [['Hobli',property.hobli,fields.propertySchedule?.hobli],['Taluk',property.taluk,fields.propertySchedule?.taluk],['District',property.district,fields.propertySchedule?.district]] as const){
+    if(!missing(ownerValue)&&!missing(documentValue)&&clean(ownerValue)!==clean(documentValue))issues.push(`${label} does not match Owner Page value ${ownerValue}.`);
+  }
+  const ownerExtent=parseKarnatakaLandExtent(String(property.extent||'')).normalizedSqFt;
+  const deedExtent=Number(fields.propertySchedule?.extent?.normalizedSqFt||parseKarnatakaLandExtent(String(fields.propertySchedule?.extent?.rawText||'')).normalizedSqFt);
+  if(ownerExtent>0&&deedExtent>0&&Math.abs(ownerExtent-deedExtent)/Math.max(ownerExtent,deedExtent)>0.01)issues.push(`Extent differs from Owner Page ${property.extent}.`);
+  const boundaries=fields.propertySchedule?.boundaries||{};
+  for(const [direction,directionKey,column] of [['North','north','boundary_north'],['South','south','boundary_south'],['East','east','boundary_east'],['West','west','boundary_west']] as const){
+    const ownerValue=property[column],documentValue=boundaries[directionKey];
+    if(!missing(ownerValue)&&!missing(documentValue)&&clean(ownerValue)!==clean(documentValue))issues.push(`${direction} boundary does not match Owner Page value ${ownerValue}.`);
   }
   if (missing(fields.propertySchedule?.surveyNumber)) issues.push('Survey number is missing; property identity cannot be confirmed.');
   if (missing(fields.propertySchedule?.village)) issues.push('Village is missing; property identity cannot be confirmed.');
@@ -2238,6 +2687,22 @@ function propertyDocumentIdentityIssues(fields: ExtractedDocumentFields, propert
 function propertyDocumentIdentityMatches(fields: ExtractedDocumentFields, property: any): boolean {
   return propertyDocumentIdentityIssues(fields, property).length === 0 &&
     Boolean(fields.propertySchedule?.surveyNumber && fields.propertySchedule?.village);
+}
+
+async function propertyDocumentPartyIssues(fields: ExtractedDocumentFields, propertyId: string, tenantId: string): Promise<string[]> {
+  if(!pool)return [];
+  const previous=await pool.query("SELECT to_parties FROM title_events WHERE property_id=? AND tenant_id=? AND status='verified' ORDER BY event_date DESC,sequence_order DESC LIMIT 1",[propertyId,tenantId]);
+  if(!previous.rowCount)return [];
+  const raw=previous.rows[0].to_parties;
+  let owners:any[]=Array.isArray(raw)?raw:[];
+  if(typeof raw==='string'){try{owners=JSON.parse(raw);}catch{owners=[];}}
+  const expected=owners.map(party=>normalizePartyName(String(party?.name||''))).filter(Boolean);
+  const sellers=(fields.parties||[]).filter(party=>['seller','executant'].includes(String(party.role).toLowerCase())).map(party=>normalizePartyName(party.name)).filter(Boolean);
+  const buyers=(fields.parties||[]).filter(party=>['buyer','claimant','donee'].includes(String(party.role).toLowerCase())).map(party=>normalizePartyName(party.name)).filter(Boolean);
+  const issues:string[]=[];
+  if(expected.length&&sellers.length&&!sellers.some(name=>expected.includes(name)))issues.push(`Seller/executant does not match the current verified Owner Page title-chain owner (${owners.map(party=>party.name).filter(Boolean).join(', ')}).`);
+  if(expected.length&&buyers.length&&!buyers.some(name=>expected.includes(name)))issues.push(`Buyer/transferee does not match the current verified Owner Page title-chain owner (${owners.map(party=>party.name).filter(Boolean).join(', ')}).`);
+  return issues;
 }
 
 app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, asyncRoute(async (req, res) => {
@@ -2255,8 +2720,8 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
       ? doc.extracted_fields
       : extractDocument('', { documentId: doc.id, filename: doc.original_filename, mimeType: doc.mime_type });
 
-  const { fieldPath, newValue, rationale, overrides } = req.body || {};
-  if (!rationale && !overrides && !fieldPath && req.body?.isVerified === undefined) {
+  const { fieldPath, newValue, rationale, overrides, reviewAction } = req.body || {};
+  if (!rationale && !overrides && !fieldPath && !reviewAction && req.body?.isVerified === undefined) {
     return res.status(400).json({ error: 'Rationale and field updates are required for reviewer overrides.' });
   }
 
@@ -2274,7 +2739,7 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
   }
 
   // Enforce mandatory non-empty review rationale when overriding fields
-  if (fieldPath && (!rationale || typeof rationale !== 'string' || rationale.trim().length === 0)) {
+  if ((fieldPath || reviewAction) && (!rationale || typeof rationale !== 'string' || rationale.trim().length === 0)) {
     return res.status(400).json({ error: 'A non-empty review rationale is mandatory when overriding extracted document fields.' });
   }
 
@@ -2290,7 +2755,21 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
   currentFields.reviewState = currentFields.reviewState || { isVerified: false, overrides: {} };
   currentFields.reviewState.overrides = currentFields.reviewState.overrides || {};
 
-  if (fieldPath) {
+  if (reviewAction) {
+    const actions = new Set(['approve','reject','not_found','comment']);
+    if (!actions.has(reviewAction) || typeof fieldPath !== 'string' || !isSafeFieldPath(fieldPath)) {
+      return res.status(400).json({error:'A supported reviewAction and safe fieldPath are required.'});
+    }
+    const status = ({approve:'approved',reject:'rejected',not_found:'not_found',comment:'commented'} as const)[reviewAction as 'approve'|'reject'|'not_found'|'comment'];
+    const value = getNestedValue(currentFields, fieldPath);
+    const reviewedAt = new Date().toISOString();
+    currentFields.reviewState.fieldReviews = currentFields.reviewState.fieldReviews || {};
+    currentFields.reviewState.fieldReviews[fieldPath] = {status,comment:String(rationale).trim(),reviewerUid:req.user?.uid||'unknown',reviewedAt};
+    await pool.query(`INSERT INTO document_field_history (id,tenant_id,property_id,document_id,field_path,previous_value,new_value,action,rationale,actor_uid,actor_role) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [crypto.randomUUID(),doc.tenant_id,req.params.id,doc.id,fieldPath,JSON.stringify(value ?? null),JSON.stringify(value ?? null),status,String(rationale).trim(),req.user?.uid||'unknown',req.user?.role||'unknown']);
+    await audit(req.user?.uid||'unknown',req.user?.tenantId,`document.field_${status}`,'document',doc.id,{fieldPath,reviewerUid:req.user?.uid,reviewedAt});
+  }
+
+  if (fieldPath && !reviewAction) {
     const previousValue = getNestedValue(currentFields, fieldPath);
     setNestedValue(currentFields, fieldPath, newValue);
     await pool.query(`INSERT INTO document_field_history (id,tenant_id,property_id,document_id,field_path,previous_value,new_value,action,rationale,actor_uid,actor_role) VALUES (?,?,?,?,?,?,?,'corrected',?,?,?)`, [crypto.randomUUID(),doc.tenant_id,req.params.id,doc.id,fieldPath,JSON.stringify(previousValue ?? null),JSON.stringify(newValue ?? null),String(rationale).trim(),req.user?.uid || 'unknown',req.user?.role || 'unknown']);
@@ -2327,7 +2806,7 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
     }
     if (Boolean(req.body.isVerified)) {
       const verificationIssues = documentVerificationIssues(currentFields);
-      const propertyResult = await pool.query('SELECT survey_number, subdivision, village, district FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
+      const propertyResult = await pool.query('SELECT survey_number, subdivision, village, hobli, taluk, district, extent, boundary_north, boundary_south, boundary_east, boundary_west FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
       const identityIssues = propertyResult.rowCount ? propertyDocumentIdentityIssues(currentFields, propertyResult.rows[0]) : ['Property application was not found.'];
       if (verificationIssues.length || identityIssues.length) return res.status(409).json({ error: identityIssues.length ? 'Document identity does not match or cannot yet be confirmed for this application.' : 'Document cannot be verified until required evidence fields are reviewed.', issues: [...identityIssues, ...verificationIssues] });
     }
@@ -2364,7 +2843,7 @@ app.patch('/api/properties/:id/documents/:docId/fields', authGuard, writeGuard, 
     [doc.id, req.params.id, req.user?.tenantId]
   );
 
-  await audit(req.user?.uid || 'unknown', req.user?.tenantId, 'document.fields_overridden', 'document', doc.id, {
+  await audit(req.user?.uid || 'unknown', req.user?.tenantId, reviewAction ? 'document.field_review_recorded' : 'document.fields_overridden', 'document', doc.id, {
     reviewerUid: req.user?.uid,
     rationale,
     overridesCount: Object.keys(currentFields.reviewState.overrides || {}).length,
@@ -2383,10 +2862,12 @@ app.post('/api/properties/:id/documents/:docId/submit-review', authGuard, asyncR
   if (!doc.rowCount) return res.status(404).json({error:'Document not found.'});
   if (!doc.rows[0].extracted_text) return res.status(409).json({error:'OCR extraction must finish before review submission.'});
   const fields = doc.rows[0].extracted_fields || {};
-  const property = await pool.query('SELECT survey_number,subdivision,village,district FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);
+  const property = await pool.query('SELECT survey_number,subdivision,village,hobli,taluk,district,extent,boundary_north,boundary_south,boundary_east,boundary_west FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);
   const identityIssues = property.rowCount ? propertyDocumentIdentityIssues(fields,property.rows[0]) : ['Property case was not found.'];
   const identityMatches = property.rowCount ? propertyDocumentIdentityMatches(fields,property.rows[0]) : false;
-  if (!identityMatches) {
+  const partyIssues=await propertyDocumentPartyIssues(fields,req.params.id,req.user?.tenantId||'');
+  if (!identityMatches||partyIssues.length) {
+    identityIssues.push(...partyIssues);
     await audit(req.user?.uid||'unknown',req.user?.tenantId,'document.property_association_blocked','document',req.params.docId,{propertyId:req.params.id,identityIssues});
     return res.status(409).json({error:'Document identity does not match the current property case. Automatic property association is blocked; analyst review is required.',code:'PROPERTY_IDENTITY_MISMATCH',issues:identityIssues});
   }
@@ -2409,10 +2890,11 @@ app.post('/api/properties/:id/documents/:docId/review', authGuard, legalReviewer
   const decision = input.data.decision;
   if (decision === 'approve') {
     const issues = documentVerificationIssues(fields);
-    const property = await pool.query('SELECT survey_number,subdivision,village,district FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);
+    const property = await pool.query('SELECT survey_number,subdivision,village,hobli,taluk,district,extent,boundary_north,boundary_south,boundary_east,boundary_west FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);
     const identityIssues = property.rowCount ? propertyDocumentIdentityIssues(fields,property.rows[0]) : ['Property was not found.'];
     const identityMatches = property.rowCount ? propertyDocumentIdentityMatches(fields,property.rows[0]) : false;
-    if (issues.length || !identityMatches) return res.status(409).json({error:'Evidence cannot be approved until required fields and property identity are resolved.',issues:[...issues,...identityIssues]});
+    const partyIssues=await propertyDocumentPartyIssues(fields,req.params.id,req.user?.tenantId||'');
+    if (issues.length || !identityMatches || partyIssues.length) return res.status(409).json({error:'Evidence cannot be approved until required fields and Owner Page identity are resolved.',issues:[...issues,...identityIssues,...partyIssues]});
   }
   const nextStatus = decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'disputed';
   fields.reviewState = {...(fields.reviewState || {}),isVerified:decision === 'approve',verifiedByUid:decision === 'approve' ? req.user?.uid : undefined,verifiedAt:decision === 'approve' ? new Date().toISOString() : undefined};
@@ -2708,7 +3190,10 @@ app.get('/api/properties/:id/spatial-screening', authGuard, asyncRoute(async (re
       : parcelAudit.rows[0].parcel_geojson;
   }
 
-  const result = screenSpatialBuffers({ latitude: lat, longitude: lon }, layers, linkedParcelGeoJSON);
+  const activeGis=await pool.query("SELECT version_number,configuration FROM owner_configuration_versions WHERE tenant_id=? AND config_type='gis_rules' AND status='active' ORDER BY version_number DESC LIMIT 1",[req.user?.tenantId]);
+  const gisRules=activeGis.rowCount?(typeof activeGis.rows[0].configuration==='string'?JSON.parse(activeGis.rows[0].configuration):activeGis.rows[0].configuration):{};
+  const result = screenSpatialBuffers({ latitude: lat, longitude: lon }, layers, linkedParcelGeoJSON, gisRules);
+  (result as any).ruleVersion=activeGis.rowCount?Number(activeGis.rows[0].version_number):null;
   if (linkedParcelGeoJSON) {
     result.cadastralParcelGeoJSON = linkedParcelGeoJSON;
   }
@@ -2901,7 +3386,9 @@ app.get('/api/properties/:id/discrepancies', authGuard, asyncRoute(async (req, r
     extractedFields: typeof r.extracted_fields === 'string' ? JSON.parse(r.extracted_fields) : (r.extracted_fields || {}),
   }));
 
-  const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0]);
+  const activeRules=await pool.query("SELECT version_number,configuration FROM owner_configuration_versions WHERE tenant_id=? AND config_type='discrepancy_rules' AND status='active' ORDER BY version_number DESC LIMIT 1",[req.user?.tenantId]);
+  const discrepancyRules=activeRules.rowCount?(typeof activeRules.rows[0].configuration==='string'?JSON.parse(activeRules.rows[0].configuration):activeRules.rows[0].configuration):{};
+  const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0], discrepancyRules);
   const riskSummary = calculateRiskScore(discrepancies.map(d => ({ severity: d.severity, points: d.points, code: d.code })));
 
   res.json({
@@ -2948,7 +3435,9 @@ app.post('/api/properties/:id/due-diligence-snapshot', authGuard, writeGuard, as
     originalFilename: r.original_filename,
     extractedFields: typeof r.extracted_fields === 'string' ? JSON.parse(r.extracted_fields) : (r.extracted_fields || {}),
   }));
-  const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0]);
+  const activeRules=await pool.query("SELECT version_number,configuration FROM owner_configuration_versions WHERE tenant_id=? AND config_type='discrepancy_rules' AND status='active' ORDER BY version_number DESC LIMIT 1",[req.user?.tenantId]);
+  const discrepancyRules=activeRules.rowCount?(typeof activeRules.rows[0].configuration==='string'?JSON.parse(activeRules.rows[0].configuration):activeRules.rows[0].configuration):{};
+  const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0], discrepancyRules);
 
   const snapshot = createDueDiligenceSnapshot({
     property: p.rows[0],
@@ -2957,6 +3446,7 @@ app.post('/api/properties/:id/due-diligence-snapshot', authGuard, writeGuard, as
     titleGaps,
     discrepancies,
   });
+  (snapshot as any).discrepancyRuleVersion=activeRules.rowCount?Number(activeRules.rows[0].version_number):null;
 
   await audit(req.user?.uid || 'unknown', req.user?.tenantId, 'report.snapshot_created', 'property', req.params.id, {
     reportId: snapshot.reportId,
@@ -3003,7 +3493,11 @@ app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(a
     originalFilename: r.original_filename,
     extractedFields: typeof r.extracted_fields === 'string' ? JSON.parse(r.extracted_fields) : (r.extracted_fields || {}),
   }));
-  const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0]);
+  const activeRules=await pool.query("SELECT version_number,configuration FROM owner_configuration_versions WHERE tenant_id=? AND config_type='discrepancy_rules' AND status='active' ORDER BY version_number DESC LIMIT 1",[req.user?.tenantId]);
+  const discrepancyRules=activeRules.rowCount?(typeof activeRules.rows[0].configuration==='string'?JSON.parse(activeRules.rows[0].configuration):activeRules.rows[0].configuration):{};
+  const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0], discrepancyRules);
+  const activeTemplate=await pool.query("SELECT version_number,name,configuration FROM owner_configuration_versions WHERE tenant_id=? AND config_type='report_templates' AND status='active' ORDER BY version_number DESC LIMIT 1",[req.user?.tenantId]);
+  const reportTemplate=activeTemplate.rowCount?{version:Number(activeTemplate.rows[0].version_number),name:activeTemplate.rows[0].name,configuration:typeof activeTemplate.rows[0].configuration==='string'?JSON.parse(activeTemplate.rows[0].configuration):activeTemplate.rows[0].configuration}:null;
   const snapshot = createDueDiligenceSnapshot({
     property: p.rows[0],
     documents: docs.rows,
@@ -3011,6 +3505,8 @@ app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(a
     titleGaps,
     discrepancies,
   });
+  (snapshot as any).reportTemplate=reportTemplate;
+  (snapshot as any).discrepancyRuleVersion=activeRules.rowCount?Number(activeRules.rows[0].version_number):null;
 
   const report = generateDueDiligenceReport(snapshot);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -3298,14 +3794,14 @@ app.get('/api/documents/all', authGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const result = await pool.query(
     `SELECT d.id,d.tenant_id,d.property_id,d.doc_type,d.doc_type_custom,d.classification_confidence,
-            d.classification_source,d.manual_review_status,d.governance_status,d.original_filename,
+            d.classification_source,d.manual_review_status,d.review_status,d.governance_status,d.original_filename,
             d.mime_type,d.size_bytes,d.sha256,d.processing_status,d.uploaded_by_uid,d.created_at,
             p.name as property_name,p.application_number,p.survey_number,p.village,p.district
      FROM documents d
      JOIN properties p ON d.property_id=p.id
-     WHERE d.tenant_id=? AND (? <> 'lawyer' OR p.assigned_lawyer_uid=?) AND (? <> 'analyst' OR p.assigned_analyst_uid=?) AND (? <> 'operations' OR p.assigned_operations_uid=? OR p.assigned_operations_uid IS NULL OR p.assigned_operations_uid='') AND (? NOT IN ('consultant','viewer') OR (d.review_status='approved' AND p.status IN ('approved','complete')))
+     WHERE d.tenant_id=? AND (? <> 'lawyer' OR p.assigned_lawyer_uid=?) AND (? <> 'analyst' OR p.assigned_analyst_uid=?) AND (? <> 'operations' OR p.assigned_operations_uid=?) AND (? <> 'consultant' OR p.assigned_consultant_uid=?) AND (? NOT IN ('consultant','viewer') OR d.review_status='approved') AND (? <> 'viewer' OR (p.status IN ('approved','complete') AND p.assigned_viewer_uid=?)) AND (? <> '1' OR (p.archived_at IS NULL AND d.governance_status='active' AND (d.manual_review_status IN ('pending','required') OR d.processing_status<>'completed')))
      ORDER BY d.created_at DESC LIMIT 200`,
-    [req.user?.tenantId,req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer']
+    [req.user?.tenantId,req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.role||'viewer',req.user?.uid||'',String(req.query.review||'')]
   );
   res.json({ items: result.rows, count: result.rows.length });
 }));
@@ -3316,9 +3812,9 @@ app.get('/api/findings/all', authGuard, asyncRoute(async (req, res) => {
     `SELECT f.*, p.name as property_name, p.survey_number, p.village, p.district
      FROM risk_findings f
      JOIN properties p ON f.property_id=p.id
-     WHERE f.tenant_id=? AND (? <> 'lawyer' OR p.assigned_lawyer_uid=?) AND (? <> 'analyst' OR p.assigned_analyst_uid=?) AND (? <> 'operations' OR p.assigned_operations_uid=?) AND (? NOT IN ('consultant','viewer') OR f.evidence_status='verified')
+     WHERE f.tenant_id=? AND (? <> 'lawyer' OR p.assigned_lawyer_uid=?) AND (? <> 'analyst' OR p.assigned_analyst_uid=?) AND (? <> 'operations' OR p.assigned_operations_uid=?) AND (? <> 'consultant' OR p.assigned_consultant_uid=?) AND (? <> 'viewer' OR f.evidence_status='verified')
      ORDER BY f.created_at DESC LIMIT 200`,
-    [req.user?.tenantId,req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer']
+    [req.user?.tenantId,req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer',req.user?.uid||'',req.user?.role||'viewer']
   );
   const severityCounts = { critical: 0, high: 0, medium: 0, low: 0, unverified: 0 };
   for (const r of result.rows) {
@@ -3328,7 +3824,7 @@ app.get('/api/findings/all', authGuard, asyncRoute(async (req, res) => {
 }));
 
 const ADMIN_ROLES=['admin','lawyer','analyst','operations','consultant','support','data_steward','viewer'] as const;
-const ROLE_PERMISSIONS:Record<string,string[]>={owner:['workspace_admin','member_admin','property_edit','document_intake','ocr_correct','ocr_submit','legal_review','source_governance','audit_read','retention_admin'],admin:['workspace_admin','member_admin','property_edit','document_intake','document_ai_config','source_governance','audit_read','retention_admin'],lawyer:['property_read','document_read','document_intake','evidence_approve','legal_review'],analyst:['property_edit','document_read','document_intake','ocr_correct','ocr_submit'],operations:['document_intake','ocr_job_retry'],consultant:['property_read','approved_document_read','approved_report_export'],support:['diagnostics_read','scoped_ocr_retry'],data_steward:['source_governance','ocr_mapping_admin'],viewer:['property_read','approved_evidence_read','approved_report_read']};
+const ROLE_ASSIGNABLE_ROLES=RBAC_ROLES.filter(role=>!['super_admin','owner'].includes(role));
 const reasonSchema=z.object({reason:z.string().trim().min(3).max(500)});
 const pageSchema=z.object({page:z.coerce.number().int().min(1).default(1),limit:z.coerce.number().int().min(1).max(100).default(25),search:z.string().trim().max(120).optional().default('')});
 
@@ -3439,7 +3935,7 @@ app.patch('/api/super-admin/properties/:id/archive',authGuard,superAdminGuard,as
 }));
 app.patch('/api/super-admin/members/:id',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
   const normalizeChoice=(value:unknown)=>typeof value==='string'?value.trim().toLowerCase().replace(/[\s-]+/g,'_'):value;
-  const parsed=z.object({status:z.preprocess(normalizeChoice,z.enum(['active','disabled']).optional()),role:z.preprocess(normalizeChoice,z.enum(['owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional()),reason:z.string().trim().min(3).max(500)}).refine(value=>value.status||value.role).safeParse(req.body);
+  const parsed=z.object({status:z.preprocess(normalizeChoice,z.enum(['active','disabled','revoked']).optional()),role:z.preprocess(normalizeChoice,z.enum(['owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional()),reason:z.string().trim().min(3).max(500)}).refine(value=>value.status||value.role).safeParse(req.body);
   if(!parsed.success)return res.status(400).json({error:'Choose a supported role or status and provide a reason.'});
   const {status,role,reason}=parsed.data;
   const conn=await pool!.getConnection();
@@ -3448,13 +3944,13 @@ app.patch('/api/super-admin/members/:id',authGuard,superAdminGuard,asyncRoute(as
     const current=await conn.query('SELECT id,organization_id,user_uid,email,role,status FROM org_memberships WHERE id=? FOR UPDATE',[req.params.id]);
     if(!current.rowCount){await conn.rollback();return res.status(404).json({error:'Workspace membership not found.'});}
     const member=current.rows[0];
-    if(member.user_uid===req.user?.uid&&status==='disabled'){await conn.rollback();return res.status(409).json({error:'You cannot disable your own active membership.'});}
+    if(member.user_uid===req.user?.uid&&(status&&status!=='active'||role)){await conn.rollback();return res.status(409).json({error:'You cannot change your own platform membership.'});}
     if(member.role==='owner'&&member.status==='active'&&(status==='disabled'||(role&&role!=='owner'))){
       const owners=await conn.query("SELECT id FROM org_memberships WHERE organization_id=? AND role='owner' AND status='active' FOR UPDATE",[member.organization_id]);
       if(owners.rowCount<=1){await conn.rollback();return res.status(409).json({error:'Each organization must retain at least one active owner.'});}
     }
     await conn.query('UPDATE org_memberships SET role=COALESCE(?,role),status=COALESCE(?,status),updated_at=NOW(6) WHERE id=?',[role||null,status||null,member.id]);
-    if(status==='disabled')await conn.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE user_uid=? AND tenant_id=? AND revoked_at IS NULL',[req.user?.uid||'unknown',reason,member.user_uid,member.organization_id]);
+    if(status&&status!=='active')await conn.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE user_uid=? AND tenant_id=? AND revoked_at IS NULL',[req.user?.uid||'unknown',reason,member.user_uid,member.organization_id]);
     await audit(req.user?.uid||'unknown',member.organization_id,'super_admin.membership_updated','org_membership',member.id,{email:member.email,previousRole:member.role,role:role||member.role,previousStatus:member.status,status:status||member.status,reason});
     await conn.commit();res.json({success:true});
   }catch(error){await conn.rollback();throw error;}finally{conn.release();}
@@ -3513,12 +4009,13 @@ app.delete('/api/admin/members/:id',authGuard,adminGuard,asyncRoute(async(req,re
 
 app.post('/api/admin/members/:id/revoke-sessions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A revocation reason is required.'});const member=await pool!.query('SELECT * FROM org_memberships WHERE id=? AND organization_id=?',[req.params.id,req.user?.tenantId]);if(!member.rowCount)return res.status(404).json({error:'Member not found.'});await pool!.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE tenant_id=? AND user_uid=? AND revoked_at IS NULL',[req.user?.uid,parsed.data.reason,req.user?.tenantId,member.rows[0].user_uid]);for(const[token,session]of authSessions)if(session.tenantId===req.user?.tenantId&&session.uid===member.rows[0].user_uid)authSessions.delete(token);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.sessions_revoked','user_account',member.rows[0].user_uid,{reason:parsed.data.reason});res.json({success:true});}));
 
-app.get('/api/admin/roles',authGuard,adminGuard,(_req,res)=>res.json({items:Object.entries(ROLE_PERMISSIONS).map(([role,permissions])=>({role,permissions}))}));
-app.get('/api/admin/permissions',authGuard,adminGuard,(_req,res)=>res.json({roles:ROLE_PERMISSIONS}));
+app.get('/api/admin/roles',authGuard,adminGuard,(_req,res)=>res.json({items:RBAC_ROLES.map(role=>({role,assignable:ROLE_ASSIGNABLE_ROLES.includes(role as any),permissions:[...(DEFAULT_ROLE_PERMISSIONS[role]||[])]}))}));
+app.get('/api/admin/permissions',authGuard,adminGuard,asyncRoute(async(req,res)=>{try{const result=await pool!.query('SELECT role,resource,action,allowed,updated_by_uid,updated_at FROM workspace_permission_overrides WHERE tenant_id=? ORDER BY role,resource,action',[req.user?.tenantId]);const roles=Object.fromEntries(RBAC_ROLES.map(role=>{const permissions=new Set(DEFAULT_ROLE_PERMISSIONS[role]);for(const override of result.rows.filter((row:any)=>row.role===role)){const key=`${override.resource}.${override.action}` as any;if(Boolean(override.allowed))permissions.add(key);else permissions.delete(key);}return[role,{defaults:[...(DEFAULT_ROLE_PERMISSIONS[role]||[])],effective:[...permissions]}];}));res.json({roles,overrides:result.rows,actions:RBAC_ACTIONS,migrationReady:true});}catch(error:any){if(error?.code==='ER_NO_SUCH_TABLE'||error?.errno===1146)return res.status(503).json({error:'Apply migration 033 before configuring workspace permissions.',migrationReady:false});throw error;}}));
+app.put('/api/admin/permissions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const schema=z.object({changes:z.array(z.object({role:z.enum(ROLE_ASSIGNABLE_ROLES as [string,...string[]]),resource:z.string().trim().regex(/^[a-z][a-z0-9_]{1,79}$/),action:z.enum(RBAC_ACTIONS),allowed:z.boolean(),reason:z.string().trim().min(3).max(500)})).min(1).max(100)});const parsed=schema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Provide valid role permission changes with a reason.'});if(parsed.data.changes.some(change=>change.resource==='super_admin'||change.role==='owner'||change.role==='super_admin'))return res.status(403).json({error:'Workspace permission settings cannot grant or change platform Super Admin or Owner permissions.'});if(req.user?.role==='admin'&&parsed.data.changes.some(change=>change.role==='admin'))return res.status(403).json({error:'Only the workspace Owner can change the Admin role permissions.'});if(parsed.data.changes.some(change=>change.allowed&&!DEFAULT_ROLE_PERMISSIONS[change.role as keyof typeof DEFAULT_ROLE_PERMISSIONS]?.has(`${change.resource}.${change.action}` as any)))return res.status(400).json({error:'A role permission cannot be granted outside its approved server-side baseline.'});try{for(const change of parsed.data.changes){await pool!.query('INSERT INTO workspace_permission_overrides (tenant_id,role,resource,action,allowed,updated_by_uid) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE allowed=VALUES(allowed),updated_by_uid=VALUES(updated_by_uid),updated_at=NOW(6)',[req.user?.tenantId,change.role,change.resource,change.action,change.allowed,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.permission_override_changed','workspace_permission_override',`${change.role}:${change.resource}.${change.action}`,{...change,updatedByRole:req.user?.role});}res.json({success:true,updated:parsed.data.changes.length});}catch(error:any){if(error?.code==='ER_NO_SUCH_TABLE'||error?.errno===1146)return res.status(503).json({error:'Apply migration 033 before configuring workspace permissions.',migrationReady:false});throw error;}}));
 
 app.get('/api/admin/applications',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query(`SELECT p.*,(SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') document_count,(SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.manual_review_status='required' AND d.governance_status='active') manual_review_count FROM properties p WHERE p.tenant_id=? ORDER BY p.archived_at IS NOT NULL,p.due_date IS NULL,p.due_date,p.updated_at DESC LIMIT 500`,[req.user?.tenantId]);res.json({items:result.rows});}));
 
-app.patch('/api/admin/applications/:id/assignment',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({assignedLawyerUid:z.string().max(191).default(''),assignedAnalystUid:z.string().max(191).default(''),assignedOperationsUid:z.string().max(191).default(''),priority:z.enum(['low','normal','high','urgent']),dueDate:z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/),z.literal(''),z.null()]),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid assignment update.'});const current=await pool!.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!current.rowCount)return res.status(404).json({error:'Application not found.'});for(const[role,uid]of [['lawyer',parsed.data.assignedLawyerUid],['analyst',parsed.data.assignedAnalystUid],['operations',parsed.data.assignedOperationsUid]])if(uid){const member=await pool!.query("SELECT id FROM org_memberships WHERE organization_id=? AND user_uid=? AND role=? AND status='active'",[req.user?.tenantId,uid,role]);if(!member.rowCount)return res.status(400).json({error:`Assigned ${role} is not an active member.`});}await pool!.query('UPDATE properties SET assigned_lawyer_uid=?,assigned_analyst_uid=?,assigned_operations_uid=?,workflow_priority=?,due_date=?,updated_by_uid=?,updated_at=NOW(6) WHERE id=? AND tenant_id=?',[parsed.data.assignedLawyerUid,parsed.data.assignedAnalystUid,parsed.data.assignedOperationsUid,parsed.data.priority,parsed.data.dueDate||null,req.user?.uid,req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.application_assignment_changed','property',req.params.id,{before:current.rows[0],after:parsed.data,reason:parsed.data.reason});res.json({success:true});}));
+app.patch('/api/admin/applications/:id/assignment',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({assignedLawyerUid:z.string().max(191).default(''),assignedAnalystUid:z.string().max(191).default(''),assignedOperationsUid:z.string().max(191).default(''),assignedConsultantUid:z.string().max(191).optional(),assignedViewerUid:z.string().max(191).optional().default(''),priority:z.enum(['low','normal','high','urgent']),dueDate:z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/),z.literal(''),z.null()]),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid assignment update.'});const current=await pool!.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!current.rowCount)return res.status(404).json({error:'Application not found.'});const consultantInput=parsed.data.assignedConsultantUid?.trim()||'';let consultantUid=consultantInput;if(consultantInput.includes('@')){const consultant=await pool!.query("SELECT user_uid FROM org_memberships WHERE organization_id=? AND LOWER(email)=LOWER(?) AND role='consultant' AND status='active' LIMIT 1",[req.user?.tenantId,consultantInput]);if(!consultant.rowCount)return res.status(400).json({error:'No active Consultant member matches that email in this workspace.'});consultantUid=consultant.rows[0].user_uid;}for(const[role,uid]of [['lawyer',parsed.data.assignedLawyerUid],['analyst',parsed.data.assignedAnalystUid],['operations',parsed.data.assignedOperationsUid],['consultant',consultantUid],['viewer',parsed.data.assignedViewerUid||'']])if(uid){const member=await pool!.query("SELECT id FROM org_memberships WHERE organization_id=? AND user_uid=? AND role=? AND status='active'",[req.user?.tenantId,uid,role]);if(!member.rowCount)return res.status(400).json({error:`Assigned ${role} is not an active member.`});}await pool!.query('UPDATE properties SET assigned_lawyer_uid=?,assigned_analyst_uid=?,assigned_operations_uid=?,assigned_consultant_uid=COALESCE(?,assigned_consultant_uid),assigned_viewer_uid=?,workflow_priority=?,due_date=?,updated_by_uid=?,updated_at=NOW(6) WHERE id=? AND tenant_id=?',[parsed.data.assignedLawyerUid,parsed.data.assignedAnalystUid,parsed.data.assignedOperationsUid,consultantUid||null,parsed.data.assignedViewerUid||'',parsed.data.priority,parsed.data.dueDate||null,req.user?.uid,req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.application_assignment_changed','property',req.params.id,{before:current.rows[0],after:{...parsed.data,assignedConsultantUid:consultantUid||''},reason:parsed.data.reason});res.json({success:true});}));
 
 app.patch('/api/admin/applications/:id/workflow',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({status:z.enum(['draft','documents_pending','in_review','clarification_required','ready_for_review','closed']),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Admins may update operational statuses only; legal approval and release are excluded.'});const current=await pool!.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!current.rowCount)return res.status(404).json({error:'Application not found.'});await pool!.query('UPDATE properties SET status=?,updated_by_uid=?,updated_at=NOW(6) WHERE id=? AND tenant_id=?',[parsed.data.status,req.user?.uid,req.params.id,req.user?.tenantId]);await pool!.query('INSERT INTO property_workflow_history (id,tenant_id,property_id,previous_status,new_status,reason,changes_json,changed_by_uid) VALUES (?,?,?,?,?,?,?,?)',[crypto.randomUUID(),req.user?.tenantId,req.params.id,current.rows[0].status,parsed.data.status,parsed.data.reason,JSON.stringify({administrative:true}),req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.application_workflow_changed','property',req.params.id,{before:current.rows[0].status,after:parsed.data.status,reason:parsed.data.reason});res.json({success:true});}));
 
@@ -3533,15 +4030,23 @@ app.patch('/api/admin/documents/:id/manual-review',authGuard,adminGuard,asyncRou
 for(const action of ['reject','delete'] as const){const method=action==='delete'?'delete':'post';(app as any)[method](`/api/admin/documents/:id${action==='reject'?'/reject':''}`,authGuard,adminGuard,asyncRoute(async(req:AuthenticatedRequest,res:Response)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A reason is required.'});const status=action==='reject'?'rejected':'quarantined';const result=await pool!.query("UPDATE documents SET governance_status=?,governance_reason=?,governance_by_uid=?,governance_at=NOW(6),manual_review_status='required' WHERE id=? AND tenant_id=?",[status,parsed.data.reason,req.user?.uid,req.params.id,req.user?.tenantId]);if(!result.rowCount)return res.status(404).json({error:'Document not found.'});await audit(req.user?.uid||'unknown',req.user?.tenantId,`admin.document_${status}`,'document',req.params.id,{reason:parsed.data.reason,softDelete:true});res.json({success:true,softDelete:true});}));}
 
 app.get('/api/admin/document-ai/config',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT project_id,location,processor_id,processor_version,language_hints,updated_by_uid,updated_at FROM document_ai_config WHERE tenant_id=?',[req.user?.tenantId]);res.json({configured:Boolean(result.rowCount),config:result.rows[0]||null,credentials:'server_side_only'});}));
-app.put('/api/admin/document-ai/config',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({projectId:z.string().trim().min(1).max(255),location:z.string().trim().min(1).max(80),processorId:z.string().trim().min(1).max(255),processorVersion:z.string().trim().max(255).optional(),languageHints:z.array(z.string().trim().min(2).max(12)).max(10).optional()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Valid Google Document AI processor settings are required.'});const c=parsed.data;await pool!.query(`INSERT INTO document_ai_config (tenant_id,project_id,location,processor_id,processor_version,language_hints,updated_by_uid) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE project_id=VALUES(project_id),location=VALUES(location),processor_id=VALUES(processor_id),processor_version=VALUES(processor_version),language_hints=VALUES(language_hints),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,c.projectId,c.location,c.processorId,c.processorVersion||null,JSON.stringify(c.languageHints||[]),req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.document_ai_configured','integration','google_document_ai',{projectId:c.projectId,location:c.location,processorId:c.processorId});res.json({success:true,credentials:'server_side_only'});}));
+app.put('/api/admin/document-ai/config',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({projectId:z.string().trim().min(1).max(255),location:z.string().trim().min(1).max(80).transform(value=>value.toLowerCase()),processorId:z.string().trim().min(1).max(255),processorVersion:z.string().trim().max(255).optional(),languageHints:z.array(z.string().trim().min(2).max(12)).max(10).optional()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Valid Google Document AI processor settings are required.'});const c=parsed.data,tenant=req.user?.tenantId||'';const prior=await pool!.query('SELECT project_id,location,processor_id,processor_version,language_hints FROM document_ai_config WHERE tenant_id=?',[tenant]);const count=await pool!.query("SELECT COALESCE(MAX(version_number),0)+1 version FROM owner_configuration_versions WHERE tenant_id=? AND config_type='document_ai'",[tenant]);const version=Number(count.rows[0]?.version||1);await pool!.query('INSERT INTO owner_configuration_versions (id,tenant_id,config_type,version_number,status,name,configuration,created_by_uid) VALUES (?,?,?,?,?,?,?,?)',[crypto.randomUUID(),tenant,'document_ai',version,'configured','Google Document AI',JSON.stringify({previous:prior.rows[0]||null,current:c}),req.user?.uid||'unknown']);await pool!.query(`INSERT INTO document_ai_config (tenant_id,project_id,location,processor_id,processor_version,language_hints,updated_by_uid) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE project_id=VALUES(project_id),location=VALUES(location),processor_id=VALUES(processor_id),processor_version=VALUES(processor_version),language_hints=VALUES(language_hints),updated_by_uid=VALUES(updated_by_uid)`,[tenant,c.projectId,c.location,c.processorId,c.processorVersion||null,JSON.stringify(c.languageHints||[]),req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',tenant,'admin.document_ai_configured','integration','google_document_ai',{version,projectId:c.projectId,location:c.location,processorId:c.processorId,previous:prior.rows[0]||null});res.json({success:true,version,credentials:'server_side_only'});}));
 app.get('/api/admin/document-ai/metrics',authGuard,adminGuard,asyncRoute(async(req,res)=>{const [stats,failures]=await Promise.all([pool!.query(`SELECT status,COUNT(*) jobs,COALESCE(SUM(pages_processed),0) pages,COALESCE(SUM(estimated_cost_usd),0) estimated_cost_usd FROM document_processing_jobs WHERE tenant_id=? AND created_at>=DATE_SUB(NOW(),INTERVAL 30 DAY) GROUP BY status`,[req.user?.tenantId]),pool!.query(`SELECT id,document_id,status,attempts,error_code,error_message,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND status IN ('failed','retry_wait') ORDER BY updated_at DESC LIMIT 100`,[req.user?.tenantId])]);res.json({windowDays:30,estimatedCostPerPageUsd:Number(process.env.DOCUMENT_AI_ESTIMATED_COST_PER_PAGE_USD||0),stats:stats.rows,failures:failures.rows});}));
+app.get('/api/admin/configuration-versions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT id,config_type,version_number,status,name,configuration,created_by_uid,created_at FROM owner_configuration_versions WHERE tenant_id=? ORDER BY config_type,version_number DESC LIMIT 300',[req.user?.tenantId]);res.json({items:result.rows});}));
+app.get('/api/admin/source-health',authGuard,adminGuard,asyncRoute(async(req,res)=>{const probe=await sourceRegistryEngine.getRegistryHealth(true);const history=await pool!.query('SELECT registry_name,MAX(verified_at) last_refresh,COUNT(*) snapshots,SUM(status=\'failed\') failures FROM source_registry_verifications WHERE tenant_id=? GROUP BY registry_name',[req.user?.tenantId]);const byName=new Map(history.rows.map((r:any)=>[String(r.registry_name),r]));res.json({checkedAt:new Date().toISOString(),items:probe.map((s:any)=>{const h:any=byName.get(String(s.name));const reachability=String(s.portalReachability||'not_checked').toLowerCase();const hasSnapshot=Boolean(h?.last_refresh);const status=reachability==='unreachable'?'DEGRADED':reachability==='reachable'&&hasSnapshot?'STALE':'DEGRADED';return {name:s.displayName||s.name,authority:s.department||'Unclassified',connectorType:'portal_probe_only',licenceTerms:'Not recorded',status,lastRefresh:h?.last_refresh||null,parserVersion:null,snapshotCount:Number(h?.snapshots||0),lastError:Number(h?.failures||0)>0?'One or more historical verification attempts failed.':null,probeLatencyMs:s.averageLatencyMs,probeStatus:s.portalReachability,detail:'Live official record connector is not configured; this reachability probe does not qualify as UP.'};}),connectorsConfigured:false});}));
+app.get('/api/admin/governance/:type',authGuard,adminGuard,asyncRoute(async(req,res)=>{const type=req.params.type;if(!['gis_rules','discrepancy_rules','models','report_templates'].includes(type))return res.status(400).json({error:'Unknown configuration type.'});const result=await pool!.query('SELECT id,config_type,version_number,status,name,configuration,created_by_uid,created_at FROM owner_configuration_versions WHERE tenant_id=? AND config_type=? ORDER BY version_number DESC LIMIT 200',[req.user?.tenantId,type]);res.json({items:result.rows});}));
+app.post('/api/admin/governance/:type',authGuard,adminGuard,asyncRoute(async(req,res)=>{const type=req.params.type;if(!['gis_rules','discrepancy_rules','models','report_templates'].includes(type))return res.status(400).json({error:'Unknown configuration type.'});const parsed=z.object({name:z.string().trim().min(2).max(160),configuration:z.record(z.unknown()),status:z.enum(['draft','active','disabled']).default('draft'),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Provide a configuration name, object, status, and change reason.'});const c:any=parsed.data.configuration;if(type==='gis_rules'){const valid=z.object({buffers:z.record(z.number().min(0).max(100000)).optional(),proximityMeters:z.record(z.number().min(0).max(100000)).optional(),severityByLayer:z.record(z.enum(['critical','high','medium','low'])).optional()}).safeParse(c);if(!valid.success)return res.status(400).json({error:'GIS configuration may contain valid buffer distances, proximity thresholds, and severity mappings only.'});}if(type==='discrepancy_rules'){const valid=z.object({tolerancePct:z.number().min(0).max(1).optional(),highPct:z.number().min(0).max(1).optional(),criticalPct:z.number().min(0).max(1).optional(),severityByBand:z.record(z.enum(['critical','high','medium','low'])).optional()}).safeParse(c);if(!valid.success)return res.status(400).json({error:'Discrepancy configuration contains invalid percentage thresholds or severity mappings.'});const v=valid.data;if((v.highPct??0.05)>=(v.criticalPct??0.10)||(v.tolerancePct??0.01)>=(v.highPct??0.05))return res.status(400).json({error:'Thresholds must satisfy tolerancePct < highPct < criticalPct.'});}if(type==='report_templates'){const valid=z.object({executiveSummaryTitle:z.string().max(120).optional(),disclaimerVersion:z.string().max(80).optional(),layout:z.string().max(120).optional()}).safeParse(c);if(!valid.success)return res.status(400).json({error:'Report template contains unsupported fields.'});}if(type==='models'){const valid=z.object({provider:z.enum(['google_document_ai','vertex_ai']),modelName:z.string().min(1).max(160),promptVersion:z.string().min(1).max(80),schemaVersion:z.string().min(1).max(80),safetySettings:z.record(z.unknown()).default({})}).safeParse(c);if(!valid.success)return res.status(400).json({error:'Model configuration requires provider, model, prompt version, schema version, and safety settings.'});if(parsed.data.status==='active'&&valid.data.provider==='vertex_ai')return res.status(409).json({error:'Vertex AI activation is unavailable; the application has no Vertex provider adapter.'});if(parsed.data.status==='active'&&valid.data.provider==='google_document_ai'&&!(process.env.OCR_WORKER_TOKEN&&process.env.GOOGLE_APPLICATION_CREDENTIALS||process.env.OCR_WORKER_TOKEN&&process.env.GOOGLE_CLOUD_PROJECT))return res.status(409).json({error:'Document AI cannot be activated until worker authentication and server-side Google credentials or workload identity are configured.'});}const tenant=req.user?.tenantId||'';const result=await pool!.query('SELECT COALESCE(MAX(version_number),0)+1 version FROM owner_configuration_versions WHERE tenant_id=? AND config_type=?',[tenant,type]);const version=Number(result.rows[0]?.version||1),id=crypto.randomUUID();await pool!.query('INSERT INTO owner_configuration_versions (id,tenant_id,config_type,version_number,status,name,configuration,created_by_uid) VALUES (?,?,?,?,?,?,?,?)',[id,tenant,type,version,parsed.data.status,parsed.data.name,JSON.stringify(parsed.data.configuration),req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',tenant,`admin.${type}_version_created`,'owner_configuration_version',id,{version,status:parsed.data.status,reason:parsed.data.reason});res.status(201).json({id,version,status:parsed.data.status});}));
+app.get('/api/admin/exports',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT id,actor_uid,resource_type,resource_id,export_format,watermark_enabled,expires_at,result,details,created_at FROM workspace_export_events WHERE tenant_id=? ORDER BY created_at DESC LIMIT 200',[req.user?.tenantId]);res.json({items:result.rows});}));
+app.get('/api/admin/purge-requests',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT r.*,d.original_filename,d.governance_status FROM workspace_purge_requests r JOIN documents d ON d.id=r.document_id AND d.tenant_id=r.tenant_id WHERE r.tenant_id=? ORDER BY r.created_at DESC LIMIT 200',[req.user?.tenantId]);res.json({items:result.rows,physicalPurgeAvailable:typeof documentStorage.delete==='function'&&documentStorage.provider!=='local'});}));
+app.post('/api/admin/purge-requests',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({documentId:z.string().uuid(),reason:z.string().trim().min(10).max(1000)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Document UUID and detailed purge reason are required.'});const tenant=req.user?.tenantId||'';const document=await pool!.query('SELECT id,storage_key FROM documents WHERE id=? AND tenant_id=?',[parsed.data.documentId,tenant]);if(!document.rowCount)return res.status(404).json({error:'Document not found.'});const policy=await pool!.query('SELECT legal_hold,retention_days FROM workspace_retention_policies WHERE tenant_id=?',[tenant]);if(policy.rows[0]?.legal_hold)return res.status(409).json({error:'Legal hold blocks purge requests.'});const requestId=crypto.randomUUID();await pool!.query("INSERT INTO workspace_purge_requests (id,tenant_id,document_id,requested_by_uid,reason,status) VALUES (?,?,?,?,?,'pending')",[requestId,tenant,parsed.data.documentId,req.user?.uid,parsed.data.reason]);await audit(req.user?.uid||'unknown',tenant,'admin.purge_requested','document',parsed.data.documentId,{requestId,reason:parsed.data.reason,physicalPurgeAvailable:typeof documentStorage.delete==='function'&&documentStorage.provider!=='local'});res.status(201).json({id:requestId,status:'pending',physicalPurgeAvailable:typeof documentStorage.delete==='function'&&documentStorage.provider!=='local'});}));
+app.post('/api/admin/purge-requests/:id/approve',authGuard,ownerGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A separate approval reason is required.'});const tenant=req.user?.tenantId||'';const request=await pool!.query("SELECT r.*,d.storage_key,d.created_at document_created_at FROM workspace_purge_requests r JOIN documents d ON d.id=r.document_id AND d.tenant_id=r.tenant_id WHERE r.id=? AND r.tenant_id=? AND r.status='pending'",[req.params.id,tenant]);if(!request.rowCount)return res.status(404).json({error:'Pending purge request not found.'});const policy=await pool!.query('SELECT legal_hold,retention_days FROM workspace_retention_policies WHERE tenant_id=?',[tenant]);if(policy.rows[0]?.legal_hold)return res.status(409).json({error:'Legal hold blocks purge.'});const retentionDays=Number(policy.rows[0]?.retention_days||2555);const created=new Date(request.rows[0].document_created_at).getTime();if(Date.now()-created<retentionDays*86400000)return res.status(409).json({error:'Retention window has not elapsed; purge is blocked.'});if(!documentStorage.delete||documentStorage.provider==='local')return res.status(501).json({error:'Configured storage provider does not support verified physical deletion.'});await documentStorage.delete(String(request.rows[0].storage_key));await pool!.query("UPDATE workspace_purge_requests SET status='completed',approved_by_uid=?,approved_at=NOW(6),completed_at=NOW(6) WHERE id=? AND tenant_id=?",[req.user?.uid,req.params.id,tenant]);await pool!.query("UPDATE documents SET governance_status='purged',governance_reason=?,governance_by_uid=?,governance_at=NOW(6) WHERE id=? AND tenant_id=?",[parsed.data.reason,req.user?.uid,request.rows[0].document_id,tenant]);await audit(req.user?.uid||'unknown',tenant,'admin.purge_completed','document',request.rows[0].document_id,{requestId:req.params.id,requestReason:request.rows[0].reason,approvalReason:parsed.data.reason,retentionDays});res.json({success:true,status:'completed'});}));
 app.get('/api/ocr/mappings',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT source_field,canonical_field,normalization_rule,active,updated_by_uid,updated_at FROM ocr_field_mappings WHERE tenant_id=? ORDER BY source_field',[req.user?.tenantId]);res.json({items:result.rows});}));
 app.get('/api/ocr/document-types',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT source_category,canonical_doc_type,active,updated_by_uid,updated_at FROM ocr_document_type_mappings WHERE tenant_id=? ORDER BY source_category',[req.user?.tenantId]);res.json({items:result.rows});}));
 app.put('/api/ocr/document-types/:sourceCategory',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const canonicalTypes=['sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney','encumbrance_certificate','rtc_pahani','mutation_record','survey_sketch_tippan','khata_e_khata','property_tax_receipt','layout_approval_conversion_order','master_plan_zoning_document','court_order_legal_notice','other','e_khata','mutation_extract','survey_sketch','tax_receipt','conversion_order','layout_approval','court_order'];const parsed=z.object({canonicalDocType:z.enum(canonicalTypes as [string,...string[]]),active:z.boolean()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid canonical document category.'});await pool!.query(`INSERT INTO ocr_document_type_mappings (tenant_id,source_category,canonical_doc_type,active,updated_by_uid) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE canonical_doc_type=VALUES(canonical_doc_type),active=VALUES(active),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,req.params.sourceCategory,parsed.data.canonicalDocType,parsed.data.active,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'data_steward.document_type_mapping_updated','ocr_document_type_mapping',req.params.sourceCategory,parsed.data);res.json({success:true});}));
 app.put('/api/ocr/mappings/:sourceField',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const parsed=z.object({canonicalField:z.string().trim().min(1).max(255),normalizationRule:z.enum(['trim','uppercase','lowercase','digits_only','survey_number','extent','date']),active:z.boolean()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid field mapping.'});await pool!.query(`INSERT INTO ocr_field_mappings (tenant_id,source_field,canonical_field,normalization_rule,active,updated_by_uid) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE canonical_field=VALUES(canonical_field),normalization_rule=VALUES(normalization_rule),active=VALUES(active),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,req.params.sourceField,parsed.data.canonicalField,parsed.data.normalizationRule,parsed.data.active,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'data_steward.ocr_mapping_updated','ocr_field_mapping',req.params.sourceField,parsed.data);res.json({success:true});}));
 app.get('/api/support/ocr/jobs',authGuard,asyncRoute(async(req,res)=>{if(req.user?.role!=='support')return res.status(403).json({error:'Scoped OJIX Support role required.'});const rows=await pool!.query(`SELECT id,status,progress,attempts,max_attempts,error_code,started_at,completed_at,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND created_at>=DATE_SUB(NOW(),INTERVAL 24 HOUR) ORDER BY created_at DESC LIMIT 100`,[req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'support.ocr_diagnostics_viewed','ocr_jobs','tenant',{windowHours:24,rowCount:rows.rows.length});res.json({windowHours:24,items:rows.rows});}));
-app.post('/api/support/ocr/jobs/:id/retry',authGuard,asyncRoute(async(req,res)=>{if(req.user?.role!=='support')return res.status(403).json({error:'Scoped OJIX Support role required.'});const job=await pool!.query('SELECT id,status,document_id FROM document_processing_jobs WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!job.rowCount)return res.status(404).json({error:'OCR diagnostic job not found.'});if(!['failed','retry_wait'].includes(String(job.rows[0].status)))return res.status(409).json({error:'Only failed OCR jobs can be retried.'});if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker is not configured.'});await pool!.query("UPDATE document_processing_jobs SET status='queued',progress=0,attempts=0,error_code=NULL,error_message=NULL,started_at=NULL,completed_at=NULL,updated_at=NOW(6) WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);await pool!.query("UPDATE documents SET processing_status='queued' WHERE id=? AND tenant_id=?",[job.rows[0].document_id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'support.ocr_job_retried','ocr_job',req.params.id,{documentId:job.rows[0].document_id});res.status(202).json({success:true,status:'queued'});}));
-app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}const emailConfigured=Boolean(process.env.SMTP_USER?.trim()&&process.env.SMTP_PASS?.trim()&&(process.env.SMTP_HOST?.trim()||process.env.SMTP_USER?.trim().endsWith('@gmail.com')));const ai=await pool!.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[(_req as AuthenticatedRequest).user?.tenantId]);const workerReady=Boolean(process.env.OCR_WORKER_TOKEN);res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:documentStorage.provider==='supabase'?'supabase_private':'local_development',testSupported:false,detail:documentStorage.provider==='supabase'?'Private Supabase Storage with server-created expiring links.':'Local sandbox storage; configure private storage for production.'},{id:'ocr',label:'Google Document AI',state:ai.rowCount&&workerReady?'configured':ai.rowCount?'worker_not_configured':'not_configured',testSupported:false,detail:!ai.rowCount?'Configure project, location, and processor.':!workerReady?'Processor settings are saved, but OCR_WORKER_TOKEN is missing on the server.':'Processor and worker token are configured; Google credentials are resolved by the worker at runtime.'},{id:'email',label:'OTP email delivery',state:emailConfigured?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false}]});}));
+app.post('/api/support/ocr/jobs/:id/retry',authGuard,asyncRoute(async(req,res)=>{if(!['owner','admin','support'].includes(req.user?.role||''))return res.status(403).json({error:'Workspace admin or scoped OJIX Support role required.'});const job=await pool!.query('SELECT id,status,document_id FROM document_processing_jobs WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!job.rowCount)return res.status(404).json({error:'OCR diagnostic job not found.'});if(!['failed','retry_wait'].includes(String(job.rows[0].status)))return res.status(409).json({error:'Only failed OCR jobs can be retried.'});if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker is not configured.'});await pool!.query("UPDATE document_processing_jobs SET status='queued',processing_stage='queued',progress=0,attempts=0,error_code=NULL,error_message=NULL,started_at=NULL,completed_at=NULL,updated_at=NOW(6) WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);await pool!.query("UPDATE documents SET processing_status='queued' WHERE id=? AND tenant_id=?",[job.rows[0].document_id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.ocr_job_retried','ocr_job',req.params.id,{documentId:job.rows[0].document_id});res.status(202).json({success:true,status:'queued'});}));
+app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}const emailConfigured=Boolean(process.env.SMTP_USER?.trim()&&process.env.SMTP_PASS?.trim()&&(process.env.SMTP_HOST?.trim()||process.env.SMTP_USER?.trim().endsWith('@gmail.com')));const ai=await pool!.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[(_req as AuthenticatedRequest).user?.tenantId]);const workerReady=Boolean(process.env.OCR_WORKER_TOKEN);res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:documentStorage.provider==='supabase'?'supabase_private':'local_development',testSupported:false,detail:documentStorage.provider==='supabase'?'Private Supabase Storage with server-created expiring links.':'Local sandbox storage; configure private storage for production.'},{id:'ocr',label:'Google Document AI',state:ai.rowCount&&workerReady?'configured':ai.rowCount?'worker_not_configured':'not_configured',testSupported:false,detail:!ai.rowCount?'Configure project, location, and processor.':!workerReady?'Processor settings are saved, but OCR_WORKER_TOKEN is missing on the server.':'Processor and worker token are configured; Google credentials are resolved by the worker at runtime.'},{id:'email',label:'OTP email delivery',state:emailConfigured?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false,detail:'No authorized live government connector is configured.'},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false,detail:'No live GIS provider health check is configured.'}]});}));
 app.post('/api/admin/integrations/:id/test',authGuard,adminGuard,asyncRoute(async(req,res)=>{if(req.params.id!=='mariadb')return res.status(501).json({error:'A live connection test is unsupported for this integration.'});await pool!.query('SELECT 1');await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.integration_tested','integration','mariadb',{result:'connected'});res.json({state:'connected',checkedAt:new Date().toISOString()});}));
 
 app.get('/api/admin/sessions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT s.id,s.user_uid,s.created_at,s.last_activity_at,s.expires_at,s.ip_address,s.user_agent,m.email,m.role FROM authentication_sessions s LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid WHERE s.tenant_id=? AND s.revoked_at IS NULL AND s.expires_at>NOW(6) ORDER BY s.last_activity_at DESC',[req.user?.tenantId]);res.json({items:result.rows});}));
@@ -3650,7 +4155,7 @@ if (webDistPath) {
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `File exceeds ${process.env.MAX_UPLOAD_MB || 25} MB limit.` : err.message });
-  if (err instanceof OtpDeliveryError) return res.status(503).json({ error: err.message });
+  if (err instanceof OtpDeliveryError) return res.status(503).json({ error: err.message, code:err.code });
   if (err?.message?.includes('Only PDF')) return res.status(400).json({ error: err.message });
   console.error(err);
   res.status(500).json({ error: 'Internal server error.' });
@@ -3659,6 +4164,9 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 let server: any;
 if (process.env.NODE_ENV !== 'test') {
   void (async () => {
+    const smtpIssues=getSmtpConfigurationIssues();
+    if(smtpIssues.length)console.warn(`[smtp] Email OTP delivery is unavailable; configure: ${smtpIssues.join(', ')}.`);
+    else console.info('[smtp] SMTP settings passed local validation; provider connectivity is checked when sending.');
     if (pool) {
       const bootstrap = await bootstrapSuperAdmin(pool as unknown as import('./super-admin-bootstrap.js').BootstrapPool);
       if (bootstrap.configured) console.log(`Super Admin bootstrap ready (${bootstrap.created ? 'created' : 'account preserved'}).`);

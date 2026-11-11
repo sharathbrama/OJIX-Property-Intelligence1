@@ -77,6 +77,29 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
    npm run db:locations
    ```
 
+   For an existing database volume, add Lawyer Workbench task management once:
+
+   ```bash
+   docker compose exec -T db mariadb -uojix -pojix_local_only ojix_property_mysql < database/migrations/029_lawyer_workbench_tasks.sql
+   ```
+
+   Add Consultant matter assignments and versioned approved report exports once as well:
+
+   ```bash
+   docker compose exec -T db mariadb -uojix -pojix_local_only ojix_property_mysql < database/migrations/030_consultant_reports_and_assignments.sql
+   ```
+
+   Add the tenant-scoped RBAC override table and explicit Viewer matter assignments to an existing database:
+
+   ```bash
+   docker compose exec -T db mariadb -uojix -pojix_local_only ojix_property_mysql < database/migrations/033_workspace_rbac_permission_overrides.sql
+   docker compose exec -T db mariadb -uojix -pojix_local_only ojix_property_mysql < database/migrations/034_viewer_matter_assignment.sql
+   ```
+
+   Server-side role baselines are in `apps/api/src/rbac.ts`; migration 033 stores audited per-workspace restrictions and restorations. Admins can restrict or restore baseline permissions, but cannot grant permissions outside the server baseline. Workspace selection is validated against an active `org_memberships` row; API clients may send `X-OJIX-Workspace-Id` to select an active workspace. Platform Super Admin remains the separate `super_admin` membership and does not inherit Workspace Owner access.
+
+   New databases include the task tables from `database/mysql-schema.sql`.
+
 5. Start API and web app in separate terminals (or use `npm run dev` from the root):
 
    ```bash

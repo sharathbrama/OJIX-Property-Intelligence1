@@ -34,6 +34,14 @@ test('F11 Tier 1: Primary SWD buffer screening (distance <= 50m flags critical 3
   assert.equal(f.bufferM, 50);
 });
 
+test('Active GIS rule config overrides default buffer and severity', () => {
+  const result = screenSpatialBuffers({latitude:12.9,longitude:77.6},[{id:'rule',layerType:'swd_primary',label:'Rule test',distanceM:40}],undefined,{buffers:{swd_primary:30},severityByLayer:{swd_primary:'high'}});
+  assert.equal(result.findings.length,1);
+  assert.equal(result.findings[0].bufferM,30);
+  assert.equal(result.findings[0].severity,'high');
+  assert.equal(result.findings[0].isInsideBuffer,false);
+});
+
 test('F11 Tier 1: Secondary SWD buffer screening (distance <= 25m flags high 25 pts)', () => {
   const propertyPoint = { latitude: 12.9250, longitude: 77.6850 }; // Bellandur
   const layers = [

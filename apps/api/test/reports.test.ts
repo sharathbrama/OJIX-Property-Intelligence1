@@ -397,8 +397,8 @@ test('F21 Tier 1: Evidence anchor bounding boxes are normalized [0.0 - 1.0]', ()
     extractedSnippet: 'test',
     confidenceScore: 0.9,
   };
-  assert.ok(anchor.boundingBox.ymin >= 0 && anchor.boundingBox.ymax <= 1);
-  assert.ok(anchor.boundingBox.xmin >= 0 && anchor.boundingBox.xmax <= 1);
+  assert.ok(anchor.boundingBox!.ymin >= 0 && anchor.boundingBox!.ymax <= 1);
+  assert.ok(anchor.boundingBox!.xmin >= 0 && anchor.boundingBox!.xmax <= 1);
 });
 
 test('F21 Tier 1: High confidence score (>=0.85) reflected on evidence anchors', () => {
@@ -409,7 +409,7 @@ test('F21 Tier 1: High confidence score (>=0.85) reflected on evidence anchors',
     extractedSnippet: 'test snippet',
     confidenceScore: 0.96,
   };
-  assert.ok(anchor.confidenceScore >= 0.85);
+  assert.ok(anchor.confidenceScore! >= 0.85);
 });
 
 test('F21 Tier 2: Handles empty evidence appendix gracefully', () => {

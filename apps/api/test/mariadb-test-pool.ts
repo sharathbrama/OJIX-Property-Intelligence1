@@ -1,11 +1,12 @@
 import mysql from 'mysql2/promise';
 import crypto from 'node:crypto';
 
-const databaseUrl = process.env.DATABASE_URL || 'mysql://ojix:ojix_local_only@127.0.0.1:3306/ojix_property_mysql';
-const mysqlPool = mysql.createPool({ uri: databaseUrl, connectionLimit: 4 });
+const databaseUrl = process.env.TEST_DATABASE_URL || '';
+const mysqlPool = mysql.createPool({ uri: databaseUrl || 'mysql://missing:test@127.0.0.1:1/missing_test_database', connectionLimit: 4 });
 
 export const pool = {
   async query(sql: string, params: unknown[] = []) {
+    if (!databaseUrl) throw new Error('Set TEST_DATABASE_URL to a dedicated disposable test database before running database-backed API tests.');
     let returnedId: string | undefined;
     if (/\/\*RETURN_ID\*\/\s*;?\s*$/i.test(sql)) {
       returnedId = crypto.randomUUID();

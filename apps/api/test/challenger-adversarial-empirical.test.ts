@@ -5,6 +5,7 @@ import { pool } from './mariadb-test-pool.js';
 import crypto from 'node:crypto';
 
 const serverBaseUrl = process.env.TEST_API_URL || 'http://localhost:4000';
+const fetchAsOwner = (input: RequestInfo | URL, init: RequestInit = {}) => fetch(input, { ...init, headers: { ...(init.headers as Record<string,string> || {}), 'x-user-uid': 'local-developer' } });
 
 const PROPERTY_ID = '22222222-2222-4222-8222-222222222222';
 const TENANT_ID = '11111111-1111-4111-8111-111111111111';
@@ -30,7 +31,7 @@ async function cleanupDoc(id: string) {
 test('EMPIRICAL PROTO-1: Prototype pollution via fieldPath __proto__.polluted is rejected with 400', async () => {
   const docId = await createTestDoc();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -53,7 +54,7 @@ test('EMPIRICAL PROTO-1: Prototype pollution via fieldPath __proto__.polluted is
 test('EMPIRICAL PROTO-2: Prototype pollution via fieldPath constructor.prototype.polluted is rejected with 400', async () => {
   const docId = await createTestDoc();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -76,7 +77,7 @@ test('EMPIRICAL PROTO-2: Prototype pollution via fieldPath constructor.prototype
 test('EMPIRICAL PROTO-3: Prototype pollution via overrides key __proto__.polluted is rejected with 400', async () => {
   const docId = await createTestDoc();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -101,7 +102,7 @@ test('EMPIRICAL PROTO-3: Prototype pollution via overrides key __proto__.pollute
 test('EMPIRICAL PROTO-4: Prototype pollution via overrides key constructor.prototype.polluted is rejected with 400', async () => {
   const docId = await createTestDoc();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -126,7 +127,7 @@ test('EMPIRICAL PROTO-4: Prototype pollution via overrides key constructor.proto
 test('EMPIRICAL TRAVERSAL-1: Path traversal via ../package.json returns 403 Forbidden', async () => {
   const docId = await createTestDoc('../package.json');
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/file`);
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/file`);
     const body = await res.text();
     assert.equal(res.status, 403, 'Must return HTTP 403 Forbidden');
     assert.ok(!body.includes('@ojix/property-api'), 'Must not leak package.json');
@@ -139,7 +140,7 @@ test('EMPIRICAL TRAVERSAL-1: Path traversal via ../package.json returns 403 Forb
 test('EMPIRICAL TRAVERSAL-2: Path traversal via /etc/passwd returns 403 Forbidden', async () => {
   const docId = await createTestDoc('/etc/passwd');
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/file`);
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/file`);
     const body = await res.text();
     assert.equal(res.status, 403, 'Must return HTTP 403 Forbidden');
     assert.ok(!body.includes('root:'), 'Must not leak /etc/passwd');
@@ -152,7 +153,7 @@ test('EMPIRICAL TRAVERSAL-2: Path traversal via /etc/passwd returns 403 Forbidde
 test('EMPIRICAL TRAVERSAL-3: Path traversal via ..\\package.json (Windows separators) returns 403 Forbidden', async () => {
   const docId = await createTestDoc('..\\package.json');
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/file`);
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/file`);
     assert.equal(res.status, 403, 'Must return HTTP 403 Forbidden');
   } finally {
     await cleanupDoc(docId);
@@ -162,7 +163,7 @@ test('EMPIRICAL TRAVERSAL-3: Path traversal via ..\\package.json (Windows separa
 test('EMPIRICAL TRAVERSAL-4: Path traversal via dir/../../package.json returns 403 Forbidden', async () => {
   const docId = await createTestDoc('dir/../../package.json');
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/file`);
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/file`);
     assert.equal(res.status, 403, 'Must return HTTP 403 Forbidden');
   } finally {
     await cleanupDoc(docId);
@@ -172,7 +173,7 @@ test('EMPIRICAL TRAVERSAL-4: Path traversal via dir/../../package.json returns 4
 test('EMPIRICAL RATIONALE-1: Missing rationale in PATCH /fields returns 400 Bad Request', async () => {
   const docId = await createTestDoc();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -191,7 +192,7 @@ test('EMPIRICAL RATIONALE-1: Missing rationale in PATCH /fields returns 400 Bad 
 test('EMPIRICAL RATIONALE-2: Empty string rationale in PATCH /fields returns 400 Bad Request', async () => {
   const docId = await createTestDoc();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -211,7 +212,7 @@ test('EMPIRICAL RATIONALE-2: Empty string rationale in PATCH /fields returns 400
 test('EMPIRICAL RATIONALE-3: Whitespace-only rationale (spaces, tabs, newlines) returns 400 Bad Request', async () => {
   const docId = await createTestDoc();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -231,7 +232,7 @@ test('EMPIRICAL RATIONALE-3: Whitespace-only rationale (spaces, tabs, newlines) 
 test('EMPIRICAL RATIONALE-4: Whitespace rationale inside overrides object returns 400 Bad Request', async () => {
   const docId = await createTestDoc();
   try {
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -255,7 +256,7 @@ test('EMPIRICAL VALID-OVERRIDE: Legitimate correction is audited but does not au
   const docId = await createTestDoc();
   try {
     const rationaleText = 'Verified against certified copy from Sub-Registrar Office Gandhinagar';
-    const res = await fetch(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
+    const res = await fetchAsOwner(`${serverBaseUrl}/api/properties/${PROPERTY_ID}/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

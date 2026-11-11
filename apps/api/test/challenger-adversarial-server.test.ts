@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 const serverBaseUrl = process.env.TEST_API_URL || 'http://localhost:4000';
+const fetchAsOwner = (input: RequestInfo | URL, init: RequestInit = {}) => fetch(input, { ...init, headers: { ...(init.headers as Record<string,string> || {}), 'x-user-uid': 'local-developer' } });
 
 // ============================================================================
 // ADVERSARIAL CHALLENGER TEST SUITE: SERVER API & ADVERSARIAL HARNESS
@@ -35,7 +36,7 @@ test('SECURITY: Path Traversal blocked in GET /api/properties/:id/documents/:doc
   const docId = res.rows[0].id;
 
   try {
-    const streamRes = await fetch(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/file`);
+    const streamRes = await fetchAsOwner(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/file`);
     const body = await streamRes.text();
 
     assert.equal(streamRes.status, 403, 'Server correctly returns 403 Forbidden on path traversal');
@@ -46,7 +47,7 @@ test('SECURITY: Path Traversal blocked in GET /api/properties/:id/documents/:doc
 });
 
 test('CHALLENGER STRESS: Non-UUID docId parameter causes unhandled 500 error instead of 400/404', async () => {
-  const streamRes = await fetch(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/not-a-valid-uuid/file`);
+  const streamRes = await fetchAsOwner(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/not-a-valid-uuid/file`);
   const body = await streamRes.json();
   // MariaDB compares a CHAR UUID column without a cast, so an invalid UUID is simply absent: returns 500 Internal server error
   assert.equal(streamRes.status, 404);
@@ -78,7 +79,7 @@ test('SECURITY: PATCH /fields enforces mandatory rationale and rejects missing r
 
   try {
     // Send PATCH with fieldPath and newValue, but NO rationale
-    const patchRes = await fetch(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
+    const patchRes = await fetchAsOwner(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -119,7 +120,7 @@ test('SECURITY: PATCH /fields rejects whitespace-only rationale with 400', async
   const docId = res.rows[0].id;
 
   try {
-    const patchRes = await fetch(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
+    const patchRes = await fetchAsOwner(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -162,7 +163,7 @@ test('SECURITY: Prototype Pollution blocked in PATCH /fields and setNestedValue'
 
   try {
     // 1. Verify PATCH /fields rejects prototype pollution attempts
-    const patchRes = await fetch(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
+    const patchRes = await fetchAsOwner(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -239,19 +240,19 @@ test('CHALLENGER VERIFICATION: Tenant Boundary Enforcement is strictly enforced 
 
   try {
     // 1. Tenant 1 cannot GET Tenant 2 property
-    const rProp = await fetch(`${serverBaseUrl}/api/properties/${prop2Id}`);
+    const rProp = await fetchAsOwner(`${serverBaseUrl}/api/properties/${prop2Id}`);
     assert.equal(rProp.status, 404);
 
     // 2. Tenant 1 cannot GET Tenant 2 document file directly
-    const rFile1 = await fetch(`${serverBaseUrl}/api/properties/${prop2Id}/documents/${doc2Id}/file`);
+    const rFile1 = await fetchAsOwner(`${serverBaseUrl}/api/properties/${prop2Id}/documents/${doc2Id}/file`);
     assert.equal(rFile1.status, 404);
 
     // 3. Tenant 1 cannot access Tenant 2 document file via Tenant 1 property
-    const rFile2 = await fetch(`${serverBaseUrl}/api/properties/${prop1Id}/documents/${doc2Id}/file`);
+    const rFile2 = await fetchAsOwner(`${serverBaseUrl}/api/properties/${prop1Id}/documents/${doc2Id}/file`);
     assert.equal(rFile2.status, 404);
 
     // 4. Tenant 1 cannot trigger extraction on Tenant 2 document
-    const rExtract = await fetch(`${serverBaseUrl}/api/properties/${prop2Id}/documents/${doc2Id}/extract`, {
+    const rExtract = await fetchAsOwner(`${serverBaseUrl}/api/properties/${prop2Id}/documents/${doc2Id}/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: 'malicious' }),
@@ -259,7 +260,7 @@ test('CHALLENGER VERIFICATION: Tenant Boundary Enforcement is strictly enforced 
     assert.equal(rExtract.status, 404);
 
     // 5. Tenant 1 cannot override fields on Tenant 2 document
-    const rPatch = await fetch(`${serverBaseUrl}/api/properties/${prop2Id}/documents/${doc2Id}/fields`, {
+    const rPatch = await fetchAsOwner(`${serverBaseUrl}/api/properties/${prop2Id}/documents/${doc2Id}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fieldPath: 'docNum', newValue: 'X', rationale: 'hack' }),
@@ -296,14 +297,14 @@ test('CHALLENGER VERIFICATION: Empty or missing updates payload returns 400 Bad 
   const docId = res.rows[0].id;
 
   try {
-    const rEmpty = await fetch(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
+    const rEmpty = await fetchAsOwner(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
     assert.equal(rEmpty.status, 400);
 
-    const rGibberish = await fetch(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
+    const rGibberish = await fetchAsOwner(`${serverBaseUrl}/api/properties/22222222-2222-4222-8222-222222222222/documents/${docId}/fields`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ unsupportedAttribute: true }),

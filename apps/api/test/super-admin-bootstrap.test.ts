@@ -16,6 +16,7 @@ const credentials = {
 class BootstrapStore implements BootstrapConnection {
   account: { id: string; status: string; email_verified: boolean; passwordHash?: string } | null = null;
   membership: { role: string; status: string } | null = null;
+  auditCount = 0;
   orgExists = false;
   begins = 0;
   commits = 0;
@@ -44,10 +45,14 @@ class BootstrapStore implements BootstrapConnection {
       if (!this.account) this.account = { id: params[0], email_verified: true, status: 'active', passwordHash: params[3] };
       return { rows: [], rowCount: 1 };
     }
-    if (sql.includes('INSERT INTO org_memberships')) {
+    if (sql.includes('SELECT id,role,status FROM org_memberships')) {
+      return { rows: this.membership ? [{id:'membership',...this.membership}] : [], rowCount: this.membership ? 1 : 0 };
+    }
+    if (sql.includes('INSERT IGNORE INTO org_memberships')) {
       this.membership = { role: 'super_admin', status: 'active' };
       return { rows: [], rowCount: 1 };
     }
+    if (sql.includes('INSERT INTO audit_events')) { this.auditCount++; return { rows: [], rowCount: 1 }; }
     throw new Error(`Unexpected SQL in bootstrap test: ${sql}`);
   }
 }
@@ -80,6 +85,7 @@ test('bootstrap inserts one hashed admin and is idempotent across redeploys', as
   assert.notEqual(db.account?.passwordHash, credentials.SUPER_ADMIN_PASSWORD);
   assert.deepEqual(db.membership, { role: 'super_admin', status: 'active' });
   assert.equal(db.commits, 1);
+  assert.equal(db.auditCount,1);
 
   const redeploy = await bootstrapSuperAdmin(makePool(db), credentials, {
     hash: () => { throw new Error('A redeploy must not hash or replace an existing password.'); },
@@ -87,6 +93,18 @@ test('bootstrap inserts one hashed admin and is idempotent across redeploys', as
   assert.equal(redeploy.created, false);
   assert.equal(db.accountInsertCount, 1);
   assert.equal(db.commits, 2);
+  assert.equal(db.auditCount,1);
+});
+
+test('bootstrap preserves an explicitly revoked platform membership', async () => {
+  const db=new BootstrapStore();
+  db.orgExists=true;
+  db.account={id:'platform-user',status:'active',email_verified:true};
+  db.membership={role:'super_admin',status:'revoked'};
+  const result=await bootstrapSuperAdmin(makePool(db),credentials);
+  assert.equal(result.membershipStatus,'revoked');
+  assert.equal(db.membership.status,'revoked');
+  assert.equal(db.auditCount,0);
 });
 
 test('bootstrap refuses disabled or unverified pre-existing accounts', async () => {

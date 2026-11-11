@@ -221,7 +221,7 @@ export function normalizePersonName(name: string | any): string {
 }
 
 /**
- * Classifies document text into one of 6 Karnataka document types + other.
+ * Classifies from document text indicators. Filename is retained as a weak supporting clue.
  */
 export function classifyKarnatakaDocument(
   text: string | any,
@@ -239,6 +239,9 @@ export function classifyKarnatakaDocument(
     encumbrance_certificate: { count: 0, matches: [] },
     e_khata: { count: 0, matches: [] },
     mutation_extract: { count: 0, matches: [] },
+    property_tax_receipt: { count: 0, matches: [] },
+    survey_sketch: { count: 0, matches: [] },
+    conversion_order: { count: 0, matches: [] },
     other: { count: 0, matches: [] },
   };
 
@@ -280,8 +283,20 @@ export function classifyKarnatakaDocument(
       { pattern: /\b(?:bhoomi\s+mutation|mutation\s+order|j-slip|pauti|inheritance|inheritance\s+khata)\b/i, weight: 3, label: 'mutation terms' },
       { pattern: /\b(?:certified\s+by\s+tahsildar|sheristedar|deputy\s+tahsildar)\b/i, weight: 2, label: 'revenue certification' },
     ],
+    property_tax_receipt: [
+      { pattern: /\b(?:property\s+tax\s+(?:paid\s+)?receipt|tax\s+paid\s+receipt|property\s+tax\s+payment)\b/i, weight: 5, label: 'property tax receipt wording' },
+      { pattern: /\b(?:SAS\s+application|PID\s*(?:no\.?|number)|receipt\s+no\.?)\b/i, weight: 1, label: 'property tax receipt identifiers' },
+    ],
+    survey_sketch: [
+      { pattern: /\b(?:survey\s+sketch|village\s+map|tippani|akarband|atlas\s+map)\b/i, weight: 5, label: 'survey sketch wording' },
+      { pattern: /(?:ಸರ್ವೆ\s*ನಕ್ಷೆ|ಗ್ರಾಮ\s*ನಕ್ಷೆ|ಟಿಪ್ಪಣಿ)/iu, weight: 4, label: 'Kannada survey sketch wording' },
+    ],
+    conversion_order: [
+      { pattern: /\b(?:land\s+conversion\s+order|conversion\s+order|non[- ]agricultural\s+order)\b/i, weight: 5, label: 'conversion order wording' },
+      { pattern: /(?:ಭೂ\s*ಪರಿವರ್ತನೆ\s*ಆದೇಶ|ಪರಿವರ್ತನೆ\s*ಆದೇಶ)/iu, weight: 4, label: 'Kannada conversion order wording' },
+    ],
     other: [
-      { pattern: /\b(?:general\s+power\s+of\s+attorney|gpa|affidavit|conversion\s+order|akarband|tippani)\b/i, weight: 2, label: 'ancillary legal document' },
+      { pattern: /\b(?:general\s+power\s+of\s+attorney|gpa|affidavit)\b/i, weight: 2, label: 'ancillary legal document' },
       { pattern: /(?:ಅಫಿಡವಿಟ್|ಜಿಪಿಎ|ಪವರ್\s*ಆಫ್\s*ಅಟಾರ್ನಿ|ಆಕಾರಬಂಧು|ಟಿಪ್ಪಣಿ)/iu, weight: 2, label: 'kannada ancillary document' },
     ],
   };
@@ -378,9 +393,9 @@ export function splitIntoPages(text: string): Array<{ pageNumber: number; text: 
 }
 
 /**
- * Creates an EvidenceAnchor with normalized page-level bounding box [ymin, xmin, ymax, xmax].
- * If OCR tokens are present for this match, uses token coordinates.
- * Otherwise computes deterministic normalized coordinates based on position within page.
+ * Evidence locations use exact page text and contiguous OCR tokens. The reported
+ * confidence is mean matched-token confidence multiplied by token coverage.
+ * Missing/unmatched token evidence stays unavailable.
  */
 export function buildEvidenceAnchor(
   matchSnippet: string | any,
@@ -388,108 +403,54 @@ export function buildEvidenceAnchor(
   pages: Array<{ pageNumber: number; text: string; startChar: number }>,
   tokens: OCRToken[] | undefined,
   documentId: string,
-  confidence: number
+  _legacyConfidence?: number
 ): EvidenceAnchor {
-  const safeSnippet = typeof matchSnippet === 'string' ? matchSnippet : (matchSnippet !== null && matchSnippet !== undefined ? String(matchSnippet) : '');
-  const safeFullText = typeof fullText === 'string' ? fullText : (fullText !== null && fullText !== undefined ? String(fullText) : '');
-  const cleanSnippet = safeSnippet.trim().slice(0, 150);
-
-  // If tokens exist, try token matching
-  if (tokens && tokens.length > 0) {
-    const firstWord = cleanSnippet.split(/\s+/)[0]?.toLowerCase();
-    const matchedTokens = firstWord ? tokens.filter(t => typeof t.text === 'string' && t.text.toLowerCase().includes(firstWord)) : [];
-    if (matchedTokens.length > 0) {
-      const targetToken = matchedTokens[0];
-      const sanitizeCoord = (val: any, fallback: number) => {
-        const num = Number(val);
-        if (typeof num !== 'number' || isNaN(num)) return fallback;
-        return Math.max(0, Math.min(1, num));
-      };
-
-      const y1 = sanitizeCoord(targetToken.bbox?.ymin, 0.1);
-      const y2 = sanitizeCoord(targetToken.bbox?.ymax, 0.2);
-      const x1 = sanitizeCoord(targetToken.bbox?.xmin, 0.1);
-      const x2 = sanitizeCoord(targetToken.bbox?.xmax, 0.9);
-
-      let ymin = Math.min(y1, y2);
-      let ymax = Math.max(y1, y2);
-      let xmin = Math.min(x1, x2);
-      let xmax = Math.max(x1, x2);
-
-      const targetPage = (typeof targetToken.pageNumber === 'number' && !isNaN(targetToken.pageNumber) && targetToken.pageNumber >= 1)
-        ? targetToken.pageNumber
-        : 1;
-
-      return {
-        documentId,
-        pageNumber: targetPage,
-        boundingBox: {
-          ymin: Math.round(ymin * 1000) / 1000,
-          xmin: Math.round(xmin * 1000) / 1000,
-          ymax: Math.round(ymax * 1000) / 1000,
-          xmax: Math.round(xmax * 1000) / 1000,
-        },
-        extractedSnippet: cleanSnippet,
-        confidenceScore: Math.round(confidence * 100) / 100,
-      };
-    }
-  }
-
-  // Find which page contains snippet
+  const snippet = typeof matchSnippet === 'string' ? matchSnippet.trim().slice(0, 500) : String(matchSnippet ?? '').trim().slice(0, 500);
+  const source = typeof fullText === 'string' ? fullText : String(fullText ?? '');
+  const normalize = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g,' ').trim();
   let pageNumber = 1;
-  let pageText = pages[0]?.text || safeFullText;
-  let indexInPage = pageText.indexOf(safeSnippet);
-
-  if (indexInPage === -1 && safeSnippet) {
-    for (const p of pages) {
-      const idx = p.text.indexOf(safeSnippet);
-      if (idx !== -1) {
-        pageNumber = p.pageNumber;
-        pageText = p.text;
-        indexInPage = idx;
-        break;
-      }
+  let found = false;
+  const target = normalize(snippet);
+  for (const page of pages) {
+    const normalized = normalize(page.text);
+    if (target && normalized.includes(target)) { pageNumber = page.pageNumber; found = true; break; }
+  }
+  if (!found && snippet) {
+    const index = source.indexOf(snippet);
+    if (index >= 0) {
+      pageNumber = pages.find(page => index >= page.startChar && index <= page.startChar + page.text.length)?.pageNumber || 1;
+      found = true;
     }
   }
-
-  if (indexInPage === -1) {
-    // If exact snippet not found in single page, fallback to first page relative calculation
-    pageNumber = 1;
-    indexInPage = 0;
+  const anchor: EvidenceAnchor = { documentId, pageNumber, extractedSnippet: snippet, locationSource: 'text_page' };
+  const expected = target.split(/\s+/).filter(Boolean);
+  const pageTokens = (tokens || []).filter(token => token.pageNumber === pageNumber && token.text && token.bbox && Number.isFinite(token.confidence) && [token.bbox.xmin,token.bbox.xmax,token.bbox.ymin,token.bbox.ymax].every(value=>Number.isFinite(value)&&value>=0&&value<=1) && token.bbox.xmin<=token.bbox.xmax && token.bbox.ymin<=token.bbox.ymax);
+  let matched: OCRToken[] = [];
+  for (let start = 0; expected.length && start < pageTokens.length; start++) {
+    const candidate: OCRToken[] = [];
+    let cursor = 0;
+    for (let index = start; index < pageTokens.length && cursor < expected.length; index++) {
+      if (normalize(pageTokens[index].text) === expected[cursor]) { candidate.push(pageTokens[index]); cursor++; }
+      else if (candidate.length) break;
+    }
+    if (candidate.length > matched.length) matched = candidate;
+    if (matched.length === expected.length) break;
   }
-
-  // Calculate line number and column number in page
-  const textBefore = pageText.slice(0, Math.max(0, indexInPage));
-  const linesBefore = textBefore.split('\n');
-  const lineIndex = linesBefore.length - 1;
-  const colIndex = linesBefore[linesBefore.length - 1].length;
-
-  const totalLines = Math.max(1, pageText.split('\n').length);
-  const avgLineLen = 80;
-
-  // Normalized coordinates (0.0 - 1.0)
-  const ymin = Math.max(0.04, Math.min(0.92, (lineIndex + 0.5) / (totalLines + 2)));
-  const snippetLineHeight = Math.max(0.025, Math.min(0.08, (cleanSnippet.split('\n').length * 1.2) / totalLines));
-  const ymax = Math.min(0.98, ymin + snippetLineHeight);
-
-  const xmin = Math.max(0.05, Math.min(0.75, colIndex / avgLineLen));
-  const snippetWidth = Math.max(0.20, Math.min(0.85, (cleanSnippet.length * 0.8) / avgLineLen));
-  const xmax = Math.min(0.95, xmin + snippetWidth);
-
-  const boundingBox: BoundingBox = {
-    ymin: Math.round(ymin * 1000) / 1000,
-    xmin: Math.round(xmin * 1000) / 1000,
-    ymax: Math.round(ymax * 1000) / 1000,
-    xmax: Math.round(xmax * 1000) / 1000,
-  };
-
-  return {
-    documentId,
-    pageNumber,
-    boundingBox,
-    extractedSnippet: cleanSnippet,
-    confidenceScore: Math.round(confidence * 100) / 100,
-  };
+  if (matched.length) {
+    const scores = matched.map(token => Math.max(0, Math.min(1, Number(token.confidence))));
+    const average = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+    anchor.confidenceScore = Math.round(average * (expected.length ? matched.length / expected.length : 0) * 1000) / 1000;
+    const boxes = matched.map(token => token.bbox!);
+    anchor.boundingBox = {
+      xmin: Math.min(...boxes.map(box => box.xmin)), xmax: Math.max(...boxes.map(box => box.xmax)),
+      ymin: Math.min(...boxes.map(box => box.ymin)), ymax: Math.max(...boxes.map(box => box.ymax)),
+    };
+    anchor.locationSource = 'ocr_tokens';
+  }
+  // `found` is intentionally not used to invent a page coordinate. Page 1 is retained
+  // only as the safe viewer default when OCR text cannot be mapped to an actual page.
+  void found;
+  return anchor;
 }
 
 /**
@@ -915,7 +876,11 @@ export function extractDocument(
     district: district || undefined,
     khataNumber: jsonPayload?.propertySchedule?.khataNumber || (scheduleText.match(/ಖಾತ\s*ನಂ\.?\s*[:.-]?\s*([A-Z0-9/-]+)/iu) || rawText.match(/ಖಾತ\s*ನಂ\.?\s*[:.-]?\s*([A-Z0-9/-]+)/iu))?.[1],
     mutationReference: jsonPayload?.propertySchedule?.mutationReference || (scheduleText.match(/MR\.?\s*NO\.?\s*[:.-]?\s*([A-Z0-9/-]+)/i) || rawText.match(/MR\.?\s*NO\.?\s*[:.-]?\s*([A-Z0-9/-]+)/i))?.[1],
+    propertyIdentificationNumber: jsonPayload?.propertySchedule?.propertyIdentificationNumber || (rawText.match(/(?:PID|Property\s*ID)\s*(?:No\.?|Number)?\s*[:#-]?\s*([A-Z0-9/-]+)/i))?.[1],
     landClassification: jsonPayload?.propertySchedule?.landClassification || (/(?:ಖುಷಿ\s*ಜಮೀನು|ಖುಷಿ\s*ವಿಸ್ತ)/u.test(scheduleText) ? 'Dry land (OCR: ಖುಷಿ ಜಮೀನು)' : undefined),
+    rtcYear: jsonPayload?.propertySchedule?.rtcYear || rawText.match(/(?:RTC|Pahani)\s*(?:year|period)?\s*[:#-]?\s*((?:19|20)\d{2}\s*[-–/]\s*(?:19|20)?\d{2})/i)?.[1],
+    landRevenue: jsonPayload?.propertySchedule?.landRevenue || rawText.match(/(?:land\s*revenue|revenue\s*payable|ಕಂದಾಯ)\s*[:#-]?\s*(?:₹|Rs\.?\s*)?([\d,]+(?:\.\d{1,2})?)/iu)?.[1],
+    cropDetails: jsonPayload?.propertySchedule?.cropDetails || rawText.match(/(?:crops?|crop\s*details|ಬೆಳೆ)\s*[:#-]?\s*([^\n]{1,180})/iu)?.[1]?.trim(),
     description: jsonPayload?.propertySchedule?.description || scheduleText.match(/ಷೆಡ್ಯೂಲ್\s*ಸ್ವತ್ತಿನ\s*ವಿವರ\s*[:.-]?\s*([\s\S]{0,500}?)(?=ಚಕ್ಕುಬಂದಿ|ಪೂರ್ವಕ್ಕೆ|$)/u)?.[1]?.replace(/\s+/g, ' ').trim(),
     extent,
     totalExtent: jsonPayload?.propertySchedule?.totalExtent || extent,
@@ -997,39 +962,34 @@ export function extractDocument(
   if (mutationMatch) ownershipEvents.push({eventType:'Mutation / khata entry stated',reference:mutationMatch[1],to:parties.find(p=>p.role==='seller')?.name,sourceStatus:'mentioned_in_deed',evidenceAnchor:buildEvidenceAnchor(mutationMatch[0],rawText,pages,tokens,documentId,0.7)});
   if (docType === 'sale_deed' && executionDate) ownershipEvents.push({eventType:'Sale deed conveyance stated',eventDate:executionDate,from:parties.filter(p=>p.role==='seller').map(p=>p.name).join(', ')||undefined,to:parties.find(p=>p.role==='buyer')?.name,reference:registrationNumber,sourceStatus:'registered_document',evidenceAnchor:consideration?.evidenceAnchor});
 
+  const documentTypeEvidence = rawText.match(/(?:absolute\s+sale\s+deed|sale\s+deed|kraya\s*patra|ಕ್ರಯ\s*ಪತ್ರ|gift\s+deed|dhana\s*patra|ದಾನ\s*ಪತ್ರ|encumbrance\s+certificate|RTC|Pahani|ಪಹಣಿ|record\s+of\s+rights|mutation\s+(?:extract|register)|ಮ್ಯುಟೇಶನ್|e-?khata|e-?aasthi|ಖಾತಾ\s*ಪ್ರಮಾಣ\s*ಪತ್ರ|property\s+tax\s+(?:paid\s+)?receipt|survey\s+sketch|ಸರ್ವೆ\s*ನಕ್ಷೆ|land\s+conversion\s+order|ಪರಿವರ್ತನೆ\s*ಆದೇಶ)/iu)?.[0];
+
   // 8. Field-level Confidence and Overall Confidence Scoring
-  const fieldConfidence: Record<string, number> = {
-    documentType: docTypeConfidence,
-    documentNumber: docNumberConfidence,
-    parties: parties.length > 0 ? 0.90 : 0.40,
-    surveyNumber: surveyNumber ? 0.92 : 0.40,
-    extent: extent.normalizedSqFt > 0 ? 0.88 : 0.40,
-    boundaries: (boundaries.north && boundaries.south && boundaries.east && boundaries.west) ? 0.90 : boundaries.north ? 0.70 : 0.40,
-    dates: (executionDate || registrationDate) ? 0.85 : 0.40,
-    consideration: consideration ? 0.88 : 0.50,
-    village: village ? 0.78 : 0.40,
-    registrationDate: registrationDate ? 0.78 : 0.40,
-    executionDate: executionDate ? 0.78 : 0.40,
-    subRegistrarOffice: sro ? 0.70 : 0.40,
-    khataNumber: propertySchedule.khataNumber ? 0.72 : 0.40,
-    mutationReference: propertySchedule.mutationReference ? 0.75 : 0.40,
+  const fieldAnchors: Record<string, EvidenceAnchor> = {
+    ...(docNumber ? { documentNumber: docNumberAnchor || buildEvidenceAnchor(docNumber,rawText,pages,tokens,documentId) } : {}),
+    ...(registrationNumber ? { registrationNumber: buildEvidenceAnchor(explicitRegistrationMatch?.[0] || registrationNumber,rawText,pages,tokens,documentId) } : {}),
+    ...(executionDate ? { executionDate: buildEvidenceAnchor(execMatch?.[0] || executionDate,rawText,pages,tokens,documentId) } : {}),
+    ...(registrationDate ? { registrationDate: buildEvidenceAnchor(regMatch?.[0] || registrationDate,rawText,pages,tokens,documentId) } : {}),
+    ...(surveyNumber ? { surveyNumber: buildEvidenceAnchor(surveyNumber,rawText,pages,tokens,documentId) } : {}),
+    ...(hissa ? { subdivisionHissa: buildEvidenceAnchor(hissa,rawText,pages,tokens,documentId) } : {}),
+    ...(village ? { village: buildEvidenceAnchor(village,rawText,pages,tokens,documentId) } : {}),
+    ...(hobli ? { hobli: buildEvidenceAnchor(hobli,rawText,pages,tokens,documentId) } : {}),
+    ...(taluk ? { taluk: buildEvidenceAnchor(taluk,rawText,pages,tokens,documentId) } : {}),
+    ...(district ? { district: buildEvidenceAnchor(district,rawText,pages,tokens,documentId) } : {}),
+    ...(extent.rawText ? { extent: buildEvidenceAnchor(extent.rawText,rawText,pages,tokens,documentId) } : {}),
+    ...(propertySchedule.khataNumber ? { khataNumber: buildEvidenceAnchor(propertySchedule.khataNumber,rawText,pages,tokens,documentId) } : {}),
+    ...(propertySchedule.mutationReference ? { mutationReference: buildEvidenceAnchor(propertySchedule.mutationReference,rawText,pages,tokens,documentId) } : {}),
+    ...(sro ? { subRegistrarOffice: buildEvidenceAnchor(sro,rawText,pages,tokens,documentId) } : {}),
+    ...(['north','south','east','west'] as const).reduce((out,direction) => boundaries[direction] ? {...out,[`boundaries.${direction}`]:buildEvidenceAnchor(boundaries[direction],rawText,pages,tokens,documentId)} : out, {} as Record<string,EvidenceAnchor>),
+    ...(documentTypeEvidence ? { documentType: buildEvidenceAnchor(documentTypeEvidence,rawText,pages,tokens,documentId) } : {}),
   };
-
-  const weights: Record<string, number> = {
-    documentType: 0.20,
-    documentNumber: 0.10,
-    parties: 0.25,
-    surveyNumber: 0.15,
-    extent: 0.15,
-    boundaries: 0.10,
-    dates: 0.05,
-  };
-
-  let overallConfidence = 0;
-  for (const [k, w] of Object.entries(weights)) {
-    overallConfidence += (fieldConfidence[k] || 0.5) * w;
+  const fieldConfidence: Record<string, number> = Object.fromEntries(Object.entries(fieldAnchors).flatMap(([key,anchor]) => anchor.confidenceScore === undefined ? [] : [[key,anchor.confidenceScore]]));
+  if (parties.length) {
+    const scores = parties.map(party=>party.evidenceAnchor?.confidenceScore).filter((score): score is number=>score !== undefined);
+    if (scores.length) fieldConfidence.parties = scores.reduce((sum,score)=>sum+score,0)/scores.length;
   }
-  overallConfidence = Math.round(overallConfidence * 100) / 100;
+  const availableScores = Object.values(fieldConfidence);
+  const overallConfidence = availableScores.length ? Math.round(availableScores.reduce((sum,score)=>sum+score,0)/availableScores.length*1000)/1000 : 0;
 
   // 9. Review State
   const reviewState = jsonPayload?.reviewState || {
@@ -1056,11 +1016,8 @@ export function extractDocument(
     overallConfidence,
     fieldConfidence,
     fieldAnchors: {
-      ...(docNumberAnchor ? { documentNumber: docNumberAnchor } : {}),
-      ...(explicitRegistrationMatch ? { registrationNumber: buildEvidenceAnchor(explicitRegistrationMatch[0],rawText,pages,tokens,documentId,0.8) } : {}),
-      ...(executionDate ? { executionDate: buildEvidenceAnchor(execMatch?.[0] || executionDate, rawText, pages, tokens, documentId, fieldConfidence.executionDate) } : {}),
-      ...(registrationDate ? { registrationDate: buildEvidenceAnchor(regMatch?.[0] || registrationDate, rawText, pages, tokens, documentId, fieldConfidence.registrationDate) } : {}),
-      ...(stampPaperMatch ? { stampPaperNumber: buildEvidenceAnchor(stampPaperMatch[0], rawText, pages, tokens, documentId, 0.65) } : {}),
+      ...fieldAnchors,
+      ...(stampPaperMatch ? { stampPaperNumber: buildEvidenceAnchor(stampPaperMatch[0], rawText, pages, tokens, documentId) } : {}),
     },
     extractionMetadata: {
       source: tokens?.length ? 'ocr' : jsonPayload ? 'provider' : 'text',

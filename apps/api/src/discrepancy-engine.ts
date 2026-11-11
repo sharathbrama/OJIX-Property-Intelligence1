@@ -139,7 +139,8 @@ export function compareExtents(
   extentA: number,
   extentB: number,
   docAName: string = 'Document A',
-  docBName: string = 'Document B'
+  docBName: string = 'Document B',
+  rules: { tolerancePct?: number; highPct?: number; criticalPct?: number; severityByBand?: Partial<Record<'medium'|'high'|'critical',DiscrepancyFinding['severity']>> } = {},
 ): DiscrepancyFinding | null {
   if (extentA <= 0 || extentB <= 0) return null;
   const maxExt = Math.max(extentA, extentB);
@@ -147,17 +148,18 @@ export function compareExtents(
   const deltaPct = diff / maxExt;
 
   // Margin of tolerance: <= 1% is considered acceptable survey variation
-  if (deltaPct <= 0.01) return null;
+  if (deltaPct <= (rules.tolerancePct ?? 0.01)) return null;
 
   let severity: DiscrepancyFinding['severity'] = 'medium';
   let points = 15;
-  if (deltaPct > 0.10) {
+  if (deltaPct > (rules.criticalPct ?? 0.10)) {
     severity = 'critical';
     points = 35;
-  } else if (deltaPct > 0.05) {
+  } else if (deltaPct > (rules.highPct ?? 0.05)) {
     severity = 'high';
     points = 25;
   }
+  severity = rules.severityByBand?.[severity as 'medium'|'high'|'critical'] ?? severity;
 
   return {
     id: `DISC-EXT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -272,7 +274,8 @@ export function detectCrossDocumentDiscrepancies(
     name?: string;
     extent?: string;
     surveyNumber?: string;
-  }
+  },
+  rules: { tolerancePct?: number; highPct?: number; criticalPct?: number; severityByBand?: Partial<Record<'medium'|'high'|'critical',DiscrepancyFinding['severity']>> } = {},
 ): DiscrepancyFinding[] {
   const discrepancies: DiscrepancyFinding[] = [];
 
@@ -282,7 +285,7 @@ export function detectCrossDocumentDiscrepancies(
     for (const doc of documents) {
       if (doc.extractedFields?.extent) {
         const docExtentNorm = doc.extractedFields.extent.normalizedSqFt || parseKarnatakaLandExtent(doc.extractedFields.extent.rawText).normalizedSqFt;
-        const disc = compareExtents(propExtentNorm, docExtentNorm, `Property Master (${property.name || 'Dossier'})`, doc.originalFilename);
+        const disc = compareExtents(propExtentNorm, docExtentNorm, `Property Master (${property.name || 'Dossier'})`, doc.originalFilename, rules);
         if (disc) discrepancies.push(disc);
       }
     }
@@ -298,7 +301,7 @@ export function detectCrossDocumentDiscrepancies(
       if (docA.extractedFields?.extent && docB.extractedFields?.extent) {
         const extA = docA.extractedFields.extent.normalizedSqFt || parseKarnatakaLandExtent(docA.extractedFields.extent.rawText).normalizedSqFt;
         const extB = docB.extractedFields.extent.normalizedSqFt || parseKarnatakaLandExtent(docB.extractedFields.extent.rawText).normalizedSqFt;
-        const disc = compareExtents(extA, extB, docA.originalFilename, docB.originalFilename);
+        const disc = compareExtents(extA, extB, docA.originalFilename, docB.originalFilename, rules);
         if (disc) discrepancies.push(disc);
       }
 

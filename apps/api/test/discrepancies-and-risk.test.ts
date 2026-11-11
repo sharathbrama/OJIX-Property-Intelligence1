@@ -92,6 +92,13 @@ test('F16 Tier 1: Matching extents (<1% diff) return null finding', () => {
   assert.equal(finding, null);
 });
 
+test('Active discrepancy rules override extent thresholds and severity mapping', () => {
+  const finding = compareExtents(10000, 9700, 'A', 'B', {tolerancePct:0.02,highPct:0.04,criticalPct:0.08,severityByBand:{medium:'low'}});
+  assert.ok(finding);
+  assert.equal(finding.severity,'low');
+  assert.equal(compareExtents(10000,9900,'A','B',{tolerancePct:0.02}),null);
+});
+
 test('F16 Tier 1: Minor divergence (1% to 5%) flags medium severity (15 pts)', () => {
   // 65340 vs 63500 (~2.8% diff)
   const finding = compareExtents(65340, 63500, 'Sale Deed', 'RTC');

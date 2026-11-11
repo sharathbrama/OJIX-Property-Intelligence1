@@ -4,7 +4,7 @@ ON DUPLICATE KEY UPDATE id=VALUES(id);
 INSERT INTO org_memberships (id, organization_id, user_uid, email, role)
 VALUES 
   (UUID(), '11111111-1111-4111-8111-111111111111', 'local-developer', 'developer@localhost', 'owner'),
-  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-super-admin', 'mrsharath3126@gmail.com', 'owner'),
+  (UUID(), '11111111-1111-4111-8111-111111111111', 'user-super-admin', 'mrsharath3126@gmail.com', 'super_admin'),
   (UUID(), '11111111-1111-4111-8111-111111111111', 'user-owner', 'mrsharath3126@gmail.com', 'owner'),
   (UUID(), '11111111-1111-4111-8111-111111111111', 'user-admin', 'mrsharath3126@gmail.com', 'admin'),
   (UUID(), '11111111-1111-4111-8111-111111111111', 'user-lawyer', 'mrsharath3126@gmail.com', 'lawyer'),

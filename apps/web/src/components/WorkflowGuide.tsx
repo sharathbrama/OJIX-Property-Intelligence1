@@ -25,6 +25,7 @@ const platformSteps:Step[]=[
  {title:'Audit platform activity',description:'Use Audit log to review recent events across organizations.'},
 ];
 const roleSteps:Record<UserRole,Step[]>={
+ super_admin:platformSteps,
  owner:[{title:'Open the case list',description:'Start from Properties, choose an application, and use the case tabs to review documents, findings, maps and the report.',destination:'properties',linkLabel:'Open Properties'},{title:'Review the property portfolio',description:'Track document readiness, findings and map context across workspace matters.',destination:'overview',linkLabel:'Open Overview',roles:'Owner'}],
  admin:[{title:'Review assigned applications',description:'Open the Admin Overview and use Applications to track status, priority, deadlines and assignments.',destination:'admin-overview',linkLabel:'Open Admin Console'},{title:'Manage workspace access',description:'Invite members, change supported roles and inspect security and audit controls.',destination:'admin-overview',linkLabel:'Manage members'}],
  operations:[{title:'Open assigned properties',description:'Choose an application, then open its Documents tab to add and classify source files.',destination:'properties',linkLabel:'Open Properties'},{title:'Hand off complete evidence',description:'Check filenames and document types, upload only to the correct property, then leave the case ready for extraction review.',destination:'properties',linkLabel:'Continue document intake'}],

@@ -12,6 +12,7 @@ export interface DocumentStorage {
   readonly provider: StorageProviderName;
   put(input: { localPath: string; objectKey: string; mimeType: string }): Promise<StoredDocument>;
   createSignedUrl(storageKey: string, expiresInSeconds: number): Promise<string | null>;
+  delete?(storageKey: string): Promise<void>;
 }
 
 export function normalizeObjectKey(value: string): string {
@@ -92,6 +93,12 @@ export class SupabaseDocumentStorage implements DocumentStorage {
     const signedPath = payload.signedURL || payload.signedUrl;
     if (!signedPath) throw new Error('Supabase did not return a signed URL.');
     return signedPath.startsWith('http') ? signedPath : `${this.baseUrl.replace(/\/$/, '')}/storage/v1${signedPath.startsWith('/') ? '' : '/'}${signedPath}`;
+  }
+
+  async delete(storageKey: string): Promise<void> {
+    if (!storageKey.startsWith('supabase:')) throw new Error('Storage key does not belong to Supabase.');
+    const response = await this.fetchImpl(this.objectUrl(storageKey, 'object'), { method: 'DELETE', headers: this.headers() });
+    if (!response.ok && response.status !== 404) throw new Error(`Supabase storage deletion failed (${response.status}).`);
   }
 }
 

@@ -10,6 +10,7 @@ interface GlobalDoc {
   sha256?: string;
   doc_type?: string;
   processing_status: string;
+  manual_review_status?: string;
   created_at: string;
   property_id: string;
   property_name: string;
@@ -17,20 +18,20 @@ interface GlobalDoc {
   village: string;
 }
 
-export function GlobalDocumentsView({ apiUrl, onOpenProperty }: { apiUrl: string; onOpenProperty?: (propId: string) => void }) {
+export function GlobalDocumentsView({ apiUrl, onOpenProperty, initialReviewOnly = false }: { apiUrl: string; onOpenProperty?: (propId: string) => void; initialReviewOnly?: boolean }) {
   const [docs, setDocs] = useState<GlobalDoc[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterType, setFilterType] = useState('all');
+  const [filterType, setFilterType] = useState(initialReviewOnly ? 'needs-review' : 'all');
   const [search, setSearch] = useState('');
 
   useEffect(() => {
     fetchDocs();
-  }, []);
+  }, [initialReviewOnly, apiUrl]);
 
   const fetchDocs = async () => {
     setLoading(true);
     try {
-      const res = await authFetch(`${apiUrl}/api/documents/all`);
+      const res = await authFetch(`${apiUrl}/api/documents/all${initialReviewOnly ? '?review=1' : ''}`);
       const data = await res.json();
       setDocs(data.items || []);
     } catch { /* graceful fallback */ }
@@ -38,6 +39,7 @@ export function GlobalDocumentsView({ apiUrl, onOpenProperty }: { apiUrl: string
   };
 
   const filtered = docs.filter(d => {
+    if (filterType === 'needs-review') return true;
     if (filterType !== 'all' && d.doc_type !== filterType) return false;
     if (search) {
       const q = search.toLowerCase();
@@ -84,6 +86,7 @@ export function GlobalDocumentsView({ apiUrl, onOpenProperty }: { apiUrl: string
             style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
           >
             <option value="all">All Document Types</option>
+            {initialReviewOnly && <option value="needs-review">Awaiting review</option>}
             <option value="sale_deed">Sale Deeds</option>
             <option value="encumbrance_certificate">Encumbrance Certificates</option>
             <option value="rtc_pahani">RTC / Pahani</option>

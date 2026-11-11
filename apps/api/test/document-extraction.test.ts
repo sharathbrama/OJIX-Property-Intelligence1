@@ -268,12 +268,12 @@ test('F3 Tier 2: Rejects undefined or missing properties in bounding box', () =>
   assert.equal(validateBoundingBox(box), false);
 });
 
-test('F3 Tier 2: Verifies metadata extractor produces valid evidence anchors', () => {
+test('F3 Tier 2: Text metadata has a page citation but no fabricated OCR confidence or coordinates', () => {
   const text = 'Vendor: Sri K. R. Ramesh. Consideration: Rs. 5000000. Sy No: 34/2';
   const extracted = extractDocumentMetadata(text, 'sale_deed');
   assert.ok(extracted.propertySchedule.evidenceAnchor);
-  assert.equal(validateBoundingBox(extracted.propertySchedule.evidenceAnchor.boundingBox), true);
-  assert.ok(extracted.propertySchedule.evidenceAnchor.confidenceScore >= 0.80);
+  assert.equal(extracted.propertySchedule.evidenceAnchor.boundingBox, undefined);
+  assert.equal(extracted.propertySchedule.evidenceAnchor.confidenceScore, undefined);
 });
 
 // ============================================================================
@@ -587,11 +587,11 @@ test('Tier 3 Pairwise: Document Classification -> Extraction -> Bounding Box Anc
   assert.equal(metadata.propertySchedule.surveyNumber, '34/2');
   assert.equal(metadata.propertySchedule.extent.normalizedSqFt, 65340);
 
-  // Verify bounding box on schedule anchor
+  // Text-only extraction cannot claim visual coordinates or OCR confidence.
   const anchor = metadata.propertySchedule.evidenceAnchor;
   assert.ok(anchor);
-  assert.equal(validateBoundingBox(anchor.boundingBox), true);
-  assert.ok(anchor.confidenceScore >= 0.85);
+  assert.equal(anchor.boundingBox, undefined);
+  assert.equal(anchor.confidenceScore, undefined);
 });
 
 test('Tier 3 Pairwise: Document Upload -> Checksum -> Tenant Isolation -> Audit Logging', () => {
@@ -687,7 +687,7 @@ test('Direct Extractor Integration: extractDocument parses full text into Extrac
   assert.equal(extracted.propertySchedule.boundaries.north, '60ft Main Road');
   assert.equal(extracted.consideration?.amount, 8500000);
   assert.ok(extracted.propertySchedule.evidenceAnchor);
-  assert.equal(validateBoundingBox(extracted.propertySchedule.evidenceAnchor.boundingBox), true);
+  assert.equal(extracted.propertySchedule.evidenceAnchor.boundingBox, undefined);
 });
 
 test('Sale deed OCR: structures Kannada identity, parties, dates, schedule and separate charges', async () => {

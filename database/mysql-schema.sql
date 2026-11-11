@@ -32,6 +32,20 @@ CREATE TABLE IF NOT EXISTS org_memberships (
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS workspace_permission_overrides (
+    tenant_id CHAR(36) NOT NULL,
+    role VARCHAR(24) NOT NULL,
+    resource VARCHAR(80) NOT NULL,
+    action VARCHAR(24) NOT NULL,
+    allowed BOOLEAN NOT NULL,
+    updated_by_uid VARCHAR(191) NOT NULL,
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (tenant_id, role, resource, action),
+    KEY workspace_permission_overrides_role_idx (tenant_id, role, updated_at),
+    CONSTRAINT workspace_permission_overrides_tenant_fk FOREIGN KEY (tenant_id)
+        REFERENCES organizations(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS user_accounts (
     id CHAR(36) NOT NULL,
     email VARCHAR(255) NOT NULL,
@@ -202,6 +216,8 @@ CREATE TABLE IF NOT EXISTS properties (
     assigned_lawyer_uid VARCHAR(191) NOT NULL DEFAULT '',
     assigned_analyst_uid VARCHAR(191) NOT NULL DEFAULT '',
     assigned_operations_uid VARCHAR(191) NOT NULL DEFAULT '',
+    assigned_consultant_uid VARCHAR(191) NOT NULL DEFAULT '',
+    assigned_viewer_uid VARCHAR(191) NOT NULL DEFAULT '',
     archived_at DATETIME(6) NULL,
     archived_by_uid VARCHAR(191) NULL,
     archive_reason TEXT NULL,
@@ -321,6 +337,7 @@ CREATE TABLE IF NOT EXISTS document_processing_jobs (
     requested_by_uid VARCHAR(191) NOT NULL,
     status VARCHAR(24) NOT NULL DEFAULT 'queued',
     progress TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    processing_stage VARCHAR(40) NOT NULL DEFAULT 'queued',
     attempts SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     max_attempts SMALLINT UNSIGNED NOT NULL DEFAULT 3,
     provider VARCHAR(40) NOT NULL DEFAULT 'google_document_ai',
@@ -697,6 +714,86 @@ CREATE TABLE IF NOT EXISTS workspace_settings (
 
 CREATE TABLE IF NOT EXISTS workspace_invitations (id CHAR(36) NOT NULL,tenant_id CHAR(36) NOT NULL,email VARCHAR(255) NOT NULL,invited_name VARCHAR(160) NOT NULL,assigned_role VARCHAR(20) NOT NULL,invitation_token_hash CHAR(64) NOT NULL,status VARCHAR(20) NOT NULL DEFAULT 'pending',delivery_status VARCHAR(20) NOT NULL DEFAULT 'not_configured',invited_by_uid VARCHAR(191) NOT NULL,expires_at DATETIME(6) NOT NULL,accepted_at DATETIME(6) NULL,created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),PRIMARY KEY(id),KEY workspace_invitations_tenant_status_idx(tenant_id,status,created_at),KEY workspace_invitations_email_idx(tenant_id,email),CONSTRAINT workspace_invitations_tenant_fk FOREIGN KEY(tenant_id) REFERENCES organizations(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS workbench_tasks (
+  id CHAR(36) NOT NULL, tenant_id CHAR(36) NOT NULL, property_id CHAR(36) NOT NULL,
+  task_code VARCHAR(32) NOT NULL, title VARCHAR(255) NOT NULL, description TEXT NOT NULL,
+  category VARCHAR(80) NOT NULL, priority VARCHAR(16) NOT NULL DEFAULT 'medium',
+  status VARCHAR(24) NOT NULL DEFAULT 'pending', due_date DATE NULL,
+  assigned_by_uid VARCHAR(191) NOT NULL, assigned_to_uid VARCHAR(191) NOT NULL,
+  reviewer_uid VARCHAR(191) NULL, linked_document_id CHAR(36) NULL,
+  linked_finding_id CHAR(36) NULL, checklist JSON NOT NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (id), UNIQUE KEY workbench_task_code_tenant_key (tenant_id, task_code),
+  KEY workbench_task_assignee_status_idx (tenant_id, assigned_to_uid, status, due_date),
+  KEY workbench_task_property_idx (tenant_id, property_id, created_at),
+  CONSTRAINT workbench_task_tenant_fk FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  CONSTRAINT workbench_task_property_fk FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS workbench_task_activity (
+  id CHAR(36) NOT NULL, tenant_id CHAR(36) NOT NULL, task_id CHAR(36) NOT NULL,
+  actor_uid VARCHAR(191) NOT NULL, action VARCHAR(48) NOT NULL, details JSON NOT NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (id),
+  KEY workbench_task_activity_idx (tenant_id, task_id, created_at),
+  CONSTRAINT workbench_task_activity_tenant_fk FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  CONSTRAINT workbench_task_activity_task_fk FOREIGN KEY (task_id) REFERENCES workbench_tasks(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS workbench_task_comments (
+  id CHAR(36) NOT NULL, tenant_id CHAR(36) NOT NULL, task_id CHAR(36) NOT NULL,
+  author_uid VARCHAR(191) NOT NULL, body TEXT NOT NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (id),
+  KEY workbench_task_comments_idx (tenant_id, task_id, created_at),
+  CONSTRAINT workbench_task_comments_tenant_fk FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  CONSTRAINT workbench_task_comments_task_fk FOREIGN KEY (task_id) REFERENCES workbench_tasks(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS consultant_report_versions (
+  id CHAR(36) NOT NULL, tenant_id CHAR(36) NOT NULL, property_id CHAR(36) NOT NULL,
+  version_number INT UNSIGNED NOT NULL, report_type VARCHAR(40) NOT NULL,
+  title VARCHAR(255) NOT NULL, approval_status VARCHAR(20) NOT NULL DEFAULT 'draft',
+  snapshot JSON NOT NULL, snapshot_sha256 CHAR(64) NOT NULL,
+  data_checked_at DATETIME(6) NOT NULL, created_by_uid VARCHAR(191) NOT NULL,
+  submitted_at DATETIME(6) NULL, reviewed_by_uid VARCHAR(191) NULL,
+  review_decision VARCHAR(20) NULL, review_rationale TEXT NULL, reviewed_at DATETIME(6) NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (id),
+  UNIQUE KEY consultant_report_property_version_key (tenant_id, property_id, version_number),
+  KEY consultant_report_status_idx (tenant_id, approval_status, created_at),
+  CONSTRAINT consultant_report_tenant_fk FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  CONSTRAINT consultant_report_property_fk FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS consultant_report_shares (
+  id CHAR(36) NOT NULL, tenant_id CHAR(36) NOT NULL, report_id CHAR(36) NOT NULL,
+  token_hash CHAR(64) NOT NULL, expires_at DATETIME(6) NULL, revoked_at DATETIME(6) NULL,
+  created_by_uid VARCHAR(191) NOT NULL, created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (id), UNIQUE KEY consultant_report_share_token_key (token_hash),
+  KEY consultant_report_share_idx (tenant_id, report_id, created_at),
+  CONSTRAINT consultant_report_share_tenant_fk FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  CONSTRAINT consultant_report_share_report_fk FOREIGN KEY (report_id) REFERENCES consultant_report_versions(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS consultant_issue_evidence (
+  id CHAR(36) NOT NULL, tenant_id CHAR(36) NOT NULL, property_id CHAR(36) NOT NULL,
+  finding_id CHAR(36) NOT NULL, document_id CHAR(36) NOT NULL, linked_by_uid VARCHAR(191) NOT NULL,
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (id),
+  UNIQUE KEY consultant_issue_evidence_key (tenant_id, finding_id, document_id),
+  CONSTRAINT consultant_issue_evidence_tenant_fk FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  CONSTRAINT consultant_issue_evidence_property_fk FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE,
+  CONSTRAINT consultant_issue_evidence_finding_fk FOREIGN KEY (finding_id) REFERENCES risk_findings(id) ON DELETE CASCADE,
+  CONSTRAINT consultant_issue_evidence_document_fk FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS consultant_finding_reviews (
+  id CHAR(36) NOT NULL, tenant_id CHAR(36) NOT NULL, property_id CHAR(36) NOT NULL,
+  finding_id CHAR(36) NOT NULL, review_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  rationale TEXT NOT NULL, reviewer_uid VARCHAR(191) NOT NULL,
+  reviewed_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (id),
+  UNIQUE KEY consultant_finding_review_key (tenant_id, finding_id),
+  CONSTRAINT consultant_finding_review_tenant_fk FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  CONSTRAINT consultant_finding_review_property_fk FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE,
+  CONSTRAINT consultant_finding_review_finding_fk FOREIGN KEY (finding_id) REFERENCES risk_findings(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS authentication_sessions (id CHAR(36) NOT NULL,tenant_id CHAR(36) NOT NULL,user_uid VARCHAR(191) NOT NULL,token_hash CHAR(64) NOT NULL,created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),last_activity_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),expires_at DATETIME(6) NOT NULL,revoked_at DATETIME(6) NULL,revoked_by_uid VARCHAR(191) NULL,revoke_reason TEXT NULL,ip_address VARCHAR(64) NULL,user_agent VARCHAR(500) NULL,PRIMARY KEY(id),UNIQUE KEY authentication_sessions_token_hash_key(token_hash),KEY authentication_sessions_tenant_user_idx(tenant_id,user_uid,expires_at),CONSTRAINT authentication_sessions_tenant_fk FOREIGN KEY(tenant_id) REFERENCES organizations(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS workspace_retention_policies (tenant_id CHAR(36) NOT NULL,retention_days INT NOT NULL DEFAULT 2555,archive_after_days INT NOT NULL DEFAULT 365,legal_hold BOOLEAN NOT NULL DEFAULT FALSE,automatic_cleanup_enabled BOOLEAN NOT NULL DEFAULT FALSE,updated_by_uid VARCHAR(191) NOT NULL,updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),PRIMARY KEY(tenant_id),CONSTRAINT workspace_retention_tenant_fk FOREIGN KEY(tenant_id) REFERENCES organizations(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS owner_configuration_versions (id CHAR(36) NOT NULL,tenant_id CHAR(36) NOT NULL,config_type VARCHAR(40) NOT NULL,version_number INT UNSIGNED NOT NULL,status VARCHAR(20) NOT NULL DEFAULT 'draft',name VARCHAR(160) NOT NULL,configuration JSON NOT NULL,created_by_uid VARCHAR(191) NOT NULL,created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),PRIMARY KEY(id),UNIQUE KEY owner_config_version_key(tenant_id,config_type,version_number),KEY owner_config_history_idx(tenant_id,config_type,created_at),CONSTRAINT owner_config_tenant_fk FOREIGN KEY(tenant_id) REFERENCES organizations(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS workspace_export_events (id CHAR(36) NOT NULL,tenant_id CHAR(36) NOT NULL,actor_uid VARCHAR(191) NOT NULL,resource_type VARCHAR(60) NOT NULL,resource_id VARCHAR(191) NULL,export_format VARCHAR(30) NOT NULL,watermark_enabled BOOLEAN NOT NULL DEFAULT FALSE,expires_at DATETIME(6) NULL,result VARCHAR(20) NOT NULL DEFAULT 'success',details JSON NULL,created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),PRIMARY KEY(id),KEY workspace_export_tenant_time_idx(tenant_id,created_at),CONSTRAINT workspace_export_tenant_fk FOREIGN KEY(tenant_id) REFERENCES organizations(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS workspace_purge_requests (id CHAR(36) NOT NULL,tenant_id CHAR(36) NOT NULL,document_id CHAR(36) NOT NULL,requested_by_uid VARCHAR(191) NOT NULL,reason TEXT NOT NULL,status VARCHAR(20) NOT NULL DEFAULT 'pending',approved_by_uid VARCHAR(191) NULL,approved_at DATETIME(6) NULL,completed_at DATETIME(6) NULL,created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),PRIMARY KEY(id),KEY workspace_purge_tenant_status_idx(tenant_id,status,created_at),CONSTRAINT workspace_purge_tenant_fk FOREIGN KEY(tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,CONSTRAINT workspace_purge_document_fk FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE RESTRICT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

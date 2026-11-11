@@ -38,7 +38,7 @@ services:
       SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-}
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       OCR_WORKER_TOKEN: ${OCR_WORKER_TOKEN:-}
-      DOCUMENT_AI_ESTIMATED_COST_PER_PAGE_USD: ${DOCUMENT_AI_ESTIMATED_COST_PER_PAGE_USD:-0}
+      OCR_RETRY_DELAY_SECONDS: ${OCR_RETRY_DELAY_SECONDS:-30}
       DATABASE_SSL: ${DATABASE_SSL:-false}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -73,28 +73,24 @@ services:
       - ojix_net
 
   ocr-worker:
-    profiles: ["document-ai"]
     build:
       context: ./apps/api/worker
       dockerfile: Dockerfile
-    container_name: ojix-document-ai-worker
+    container_name: ojix-tesseract-ocr-worker
     restart: unless-stopped
     environment:
       DATABASE_URL: mysql://ojix:ojix_local_only@db:3306/ojix_property_mysql
-      OCR_API_INTERNAL_URL: http://api:4000
+      OCR_API_INTERNAL_URL: ${OCR_API_INTERNAL_URL:-http://api:4000}
       OCR_WORKER_TOKEN: ${OCR_WORKER_TOKEN:-}
-      DOCUMENT_AI_PROJECT_ID: ${DOCUMENT_AI_PROJECT_ID:-}
-      DOCUMENT_AI_LOCATION: ${DOCUMENT_AI_LOCATION:-us}
-      DOCUMENT_AI_PROCESSOR_ID: ${DOCUMENT_AI_PROCESSOR_ID:-}
-      DOCUMENT_AI_PROCESSOR_VERSION: ${DOCUMENT_AI_PROCESSOR_VERSION:-}
-      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      OCR_LANGUAGES: kan+eng
+      OCR_MAX_PAGES: 5
+      OCR_TIMEOUT_MS: 120000
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
       SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET:-private-documents}
       OCR_WORKER_POLL_SECONDS: 3
     volumes:
       - ojix_uploads:/app/uploads:ro
-      - ${GOOGLE_APPLICATION_CREDENTIALS_HOST_PATH:-/dev/null}:/run/secrets/google-cloud.json:ro
     depends_on:
       api:
         condition: service_healthy

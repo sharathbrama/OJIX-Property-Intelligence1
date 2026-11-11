@@ -87,27 +87,41 @@ test('CHALLENGE: Missing party relationships (no S/o, W/o, D/o) does not crash',
   assert.equal(buyer.relationship, undefined);
 });
 
-test('CHALLENGE: Missing boundaries completely produces fallback defaults with low boundary confidence', () => {
+test('CHALLENGE: Missing boundaries remain absent and have no fabricated confidence score', () => {
   const doc = 'Gift Deed\nDonor: Sri Krishna\nDonee: Kumari Radha\nSurvey No: 88\nExtent: 1 Acre';
   const extracted = extractDocument(doc);
   assert.equal(extracted.propertySchedule.boundaries.north, '');
   assert.equal(extracted.propertySchedule.boundaries.south, '');
   assert.equal(extracted.propertySchedule.boundaries.east, '');
   assert.equal(extracted.propertySchedule.boundaries.west, '');
-  assert.equal(extracted.fieldConfidence.boundaries, 0.40);
+  assert.equal(extracted.fieldConfidence.boundaries, undefined);
 });
 
-test('CHALLENGE: Synthetic evidence anchors strictly conform to [0.0, 1.0] coordinates', () => {
+test('CHALLENGE: Text-only evidence links a page without inventing visual coordinates or OCR confidence', () => {
   const pages = splitIntoPages('Test text\nLine 2\nLine 3 Target Snippet');
   const anchor = buildEvidenceAnchor('Target Snippet', 'Test text\nLine 2\nLine 3 Target Snippet', pages, undefined, 'doc-1', 0.90);
-  assert.equal(validateBoxBounds(anchor.boundingBox), true);
+  assert.equal(anchor.pageNumber, 1);
+  assert.equal(anchor.boundingBox, undefined);
+  assert.equal(anchor.confidenceScore, undefined);
 });
 
-test('CHALLENGE: Giant single line of 50,000 characters without newlines does not exceed bounds', () => {
+test('CHALLENGE: Unaligned long text does not receive fabricated evidence coordinates', () => {
   const giant = 'Absolute Sale Deed ' + 'filler '.repeat(500) + 'Vendor: Sri Alpha Purchaser: Smt Beta Sy No 50/1 Extent: 1 Acre';
   const pages = splitIntoPages(giant);
   const anchor = buildEvidenceAnchor('Alpha', giant, pages, undefined, 'doc-2', 0.85);
-  assert.equal(validateBoxBounds(anchor.boundingBox), true);
+  assert.equal(anchor.boundingBox, undefined);
+});
+
+test('Evidence confidence uses matched OCR token mean and coverage, not caller-supplied score', () => {
+  const text = 'Survey 34/2';
+  const tokens: OCRToken[] = [
+    {text:'Survey',pageNumber:1,bbox:{xmin:.1,ymin:.2,xmax:.2,ymax:.25},confidence:.8},
+    {text:'34/2',pageNumber:1,bbox:{xmin:.21,ymin:.2,xmax:.28,ymax:.25},confidence:.6},
+  ];
+  const anchor = buildEvidenceAnchor(text,text,splitIntoPages(text),tokens,'doc-ocr',.99);
+  assert.equal(anchor.confidenceScore,.7);
+  assert.equal(anchor.locationSource,'ocr_tokens');
+  assert.deepEqual(anchor.boundingBox,{xmin:.1,ymin:.2,xmax:.28,ymax:.25});
 });
 
 // ============================================================================
@@ -142,7 +156,7 @@ test('BUG 4 REMEDIATION: Handles party array containing null defensively without
   });
 });
 
-test('BUG 5 REMEDIATION: Inverted bounding box coordinates sanitized so ymin <= ymax and xmin <= xmax', () => {
+test('BUG 5 REMEDIATION: Invalid OCR coordinate boxes are omitted rather than used as evidence', () => {
   const tokens: OCRToken[] = [
     {
       text: 'Survey',
@@ -154,12 +168,11 @@ test('BUG 5 REMEDIATION: Inverted bounding box coordinates sanitized so ymin <= 
   const pages = splitIntoPages('Survey 34/2');
   const anchor = buildEvidenceAnchor('Survey', 'Survey 34/2', pages, tokens, 'doc-inv', 0.95);
 
-  assert.ok(anchor.boundingBox.ymin <= anchor.boundingBox.ymax);
-  assert.ok(anchor.boundingBox.xmin <= anchor.boundingBox.xmax);
-  assert.equal(validateBoxBounds(anchor.boundingBox), true);
+  assert.equal(anchor.boundingBox, undefined);
+  assert.equal(anchor.confidenceScore, undefined);
 });
 
-test('BUG 6 REMEDIATION: NaN bounding box coordinates sanitized with valid fallback coordinates', () => {
+test('BUG 6 REMEDIATION: NaN bounding box coordinates are not replaced with guessed values', () => {
   const tokens: OCRToken[] = [
     {
       text: 'Survey',
@@ -171,8 +184,8 @@ test('BUG 6 REMEDIATION: NaN bounding box coordinates sanitized with valid fallb
   const pages = splitIntoPages('Survey 34/2');
   const anchor = buildEvidenceAnchor('Survey', 'Survey 34/2', pages, tokens, 'doc-nan', 0.95);
 
-  assert.equal(isNaN(anchor.boundingBox.ymin), false);
-  assert.equal(validateBoxBounds(anchor.boundingBox), true);
+  assert.equal(anchor.boundingBox, undefined);
+  assert.equal(anchor.confidenceScore, undefined);
 });
 
 test('BUG 7 REMEDIATION: Boundary descriptions strip leading colons and preserve initials with periods', () => {

@@ -17,9 +17,12 @@ export interface BoundingBox {
 export interface EvidenceAnchor {
   documentId: string;
   pageNumber: number; // 1-indexed
-  boundingBox: BoundingBox;
+  /** Present only when the OCR token coordinates could be matched to this evidence. */
+  boundingBox?: BoundingBox;
   extractedSnippet: string;
-  confidenceScore: number; // 0.0 to 1.0
+  /** Mean matched Tesseract token confidence × token coverage. Omitted when unavailable. */
+  confidenceScore?: number;
+  locationSource?: 'ocr_tokens' | 'text_page';
 }
 
 export type KarnatakaDocumentType =
@@ -29,6 +32,9 @@ export type KarnatakaDocumentType =
   | 'encumbrance_certificate'
   | 'e_khata'
   | 'mutation_extract'
+  | 'property_tax_receipt'
+  | 'survey_sketch'
+  | 'conversion_order'
   | 'other';
 
 export interface ExtractedParty {
@@ -69,7 +75,13 @@ export interface PropertySchedule {
   district?: string;
   khataNumber?: string;
   mutationReference?: string;
+  propertyIdentificationNumber?: string;
   landClassification?: string;
+  rtcYear?: string;
+  landRevenue?: string;
+  cropDetails?: string;
+  cultivableExtent?: PropertyExtent;
+  nonCultivableExtent?: PropertyExtent;
   description?: string;
   totalExtent?: PropertyExtent;
   transferredExtent?: PropertyExtent;
@@ -129,6 +141,12 @@ export interface ReviewState {
   verifiedByUid?: string;
   verifiedAt?: string;
   overrides?: Record<string, FieldOverride>;
+  fieldReviews?: Record<string, {
+    status: 'approved' | 'rejected' | 'not_found' | 'commented';
+    comment: string;
+    reviewerUid: string;
+    reviewedAt: string;
+  }>;
 }
 
 export interface ExtractedDocumentFields {

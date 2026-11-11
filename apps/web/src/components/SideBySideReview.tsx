@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { authFetch } from '../authFetch';
 import { StructuredExtractionReview } from './StructuredExtractionReview';
+import './owner-document-comparison.css';
 import {
   X,
   CheckCircle2,
@@ -26,6 +27,7 @@ import {
   Check,
   RefreshCw,
   Activity,
+  Download,
 } from 'lucide-react';
 import type {
   ExtractedDocumentFields,
@@ -37,7 +39,7 @@ import type {
 
 interface SideBySideReviewProps {
   propertyId: string;
-  propertyIdentity: { survey_number:string; subdivision:string; village:string; district:string; taluk?:string; hobli?:string; extent:string; boundary_north:string; boundary_south:string; boundary_east:string; boundary_west:string };
+  propertyIdentity: { name?:string; survey_number:string; subdivision:string; village:string; district:string; taluk?:string; hobli?:string; extent:string; extent_value?:number|null; extent_unit?:string; boundary_north:string; boundary_south:string; boundary_east:string; boundary_west:string };
   doc: PropertyDoc;
   onClose: () => void;
   onDocumentUpdated?: (updatedDoc: PropertyDoc) => void;
@@ -53,11 +55,13 @@ interface ActiveBox {
   xmin: number;
   ymax: number;
   xmax: number;
-  confidence: number;
+  confidence?: number;
   snippet?: string;
 }
 
 type ReviewTab = 'document' | 'extracted' | 'history' | 'verification' | 'audit';
+type ComparisonSection = 'comparison' | 'missing' | 'findings';
+type ComparisonFilter = 'all' | 'match' | 'mismatch' | 'missing' | 'needs_review';
 
 function getVerificationIssues(fields: ExtractedDocumentFields | null): string[] {
   if (!fields) return ['Document extraction has not completed.'];
@@ -101,6 +105,8 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
   const [error, setError] = useState<string>('');
   const [successNotice, setSuccessNotice] = useState<string>('');
   const [job, setJob] = useState<any>(null);
+  const [ocrPages, setOcrPages] = useState<any[]>([]);
+  const [ocrSavedAt, setOcrSavedAt] = useState<string | null>(null);
   const [showRawText, setShowRawText] = useState(false);
   const [rawText, setRawText] = useState((doc as any).extracted_text || '');
   const [documentUrl, setDocumentUrl] = useState<string>('');
@@ -110,6 +116,9 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
   const [reviewHistory, setReviewHistory] = useState<any[]>([]);
   const [fieldHistory, setFieldHistory] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<ReviewTab>('extracted');
+  const [comparisonSection, setComparisonSection] = useState<ComparisonSection>('comparison');
+  const [comparisonFilter, setComparisonFilter] = useState<ComparisonFilter>('all');
+  const [selectedComparisonField, setSelectedComparisonField] = useState<any>(null);
   const verificationIssues = useMemo(() => getVerificationIssues(fields), [fields]);
   useEffect(() => {
     let cancelled = false;
@@ -126,53 +135,92 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     }).catch(()=>{});
     return () => { cancelled = true; };
   }, [propertyId, doc.id]);
-  const identityAssessment = useMemo(() => {
-    if (!fields) return {status:'unknown' as const, details:['Document extraction has not completed.']};
-    const clean=(value:unknown)=>String(value||'').normalize('NFKC').toLowerCase().replace(/guntas?/g,'gunta').replace(/[^\p{L}\p{N}]/gu,'');
-    const missing=(value:unknown)=>!value||['notrecorded','notspecified','none','unknown'].includes(clean(value));
-    const expectedSurvey=clean(propertyIdentity.survey_number);
-    const expectedHissa=clean(propertyIdentity.subdivision==='*'?'':propertyIdentity.subdivision);
-    const documentSurvey=clean(fields.propertySchedule?.surveyNumber);
-    const documentHissa=clean(fields.propertySchedule?.subdivisionHissa);
-    const expectedVillage=clean(propertyIdentity.village);
-    const documentVillage=clean(fields.propertySchedule?.village);
-    const conflicts:string[]=[];
-    const confirmed:string[]=[];
-    if (!missing(fields.propertySchedule?.surveyNumber)&&expectedSurvey) {
-      const surveyMatches=documentSurvey===clean(`${propertyIdentity.survey_number}${propertyIdentity.subdivision&&propertyIdentity.subdivision!=='*'?propertyIdentity.subdivision:''}`)||(documentSurvey===expectedSurvey&&(!documentHissa||!expectedHissa||documentHissa===expectedHissa));
-      const displayDocumentSurvey=`${fields.propertySchedule.surveyNumber}${fields.propertySchedule.subdivisionHissa&&!String(fields.propertySchedule.surveyNumber).includes('/')?`/${fields.propertySchedule.subdivisionHissa}`:''}`;
-      (surveyMatches?confirmed:conflicts).push(`Survey/Hissa: application ${propertyIdentity.survey_number}${propertyIdentity.subdivision&&propertyIdentity.subdivision!=='*'?`/${propertyIdentity.subdivision}`:''}, document ${displayDocumentSurvey}`);
-    }
-    if (!missing(fields.propertySchedule?.village)&&expectedVillage) (documentVillage===expectedVillage?confirmed:conflicts).push(`Village: application ${propertyIdentity.village}, document ${fields.propertySchedule.village}`);
-    const normalizeExtent=(value:string)=>value.toLowerCase().replace(/,/g,' ').replace(/\s+/g,' ').trim();
-    const caseExtent=propertyIdentity.extent || '';
-    const deedExtent=fields.propertySchedule?.extent?.rawText || '';
-    if (caseExtent && deedExtent) (normalizeExtent(caseExtent)===normalizeExtent(deedExtent)?confirmed:conflicts).push(`Extent: case ${caseExtent}, deed ${deedExtent}`);
-    if (missing(fields.propertySchedule?.subdivisionHissa)) conflicts.push(`Hissa/subdivision: not identified in deed (case ${propertyIdentity.subdivision && propertyIdentity.subdivision!=='*' ? propertyIdentity.subdivision : 'not specified'})`);
-    if (conflicts.length) return {status:'mismatch' as const,details:conflicts};
-    if (confirmed.length) return {status:'match' as const,details:confirmed};
-    return {status:'unknown' as const,details:['Survey/Hissa and village were not extracted, so this document cannot yet be linked confidently.']};
-  },[fields,propertyIdentity]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshResult = async () => {
+      try {
+        const response = await authFetch(`/api/properties/${propertyId}/documents/${doc.id}/ocr-result`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (cancelled || !data.result) return;
+        setOcrPages(Array.isArray(data.result.pages) ? data.result.pages : []);
+        setOcrSavedAt(data.result.createdAt || null);
+        setRawText(data.result.rawText || '');
+        setFields(data.result.extractedFields || null);
+      } catch { /* OCR results may not exist yet. */ }
+    };
+    void refreshResult();
+    return () => { cancelled = true; };
+  }, [propertyId, doc.id]);
   const mirrorRows = useMemo(() => {
     const clean=(value:unknown)=>String(value||'').normalize('NFKC').toLowerCase().replace(/guntas?/g,'gunta').replace(/[^\p{L}\p{N}]/gu,'');
-    const missing=(value:unknown)=>!value||['notrecorded','notspecified','none','unknown'].includes(clean(value));
-    const row=(label:string,applicationValue:unknown,documentValue:unknown,anchor?:any)=>({label,applicationValue:String(applicationValue||'Not entered'),documentValue:String(documentValue||'Not extracted'),status:missing(documentValue)?'missing':clean(applicationValue)===clean(documentValue)?'match':'mismatch',anchor});
+    const absent=(value:unknown)=>!value||['notrecorded','notspecified','none','unknown','notentered','notidentified'].includes(clean(value));
+    const differentScripts=(ownerValue:unknown,documentValue:unknown)=>{
+      const owner=String(ownerValue||''),document=String(documentValue||'');
+      const ownerLatin=/[A-Za-z]/.test(owner),documentLatin=/[A-Za-z]/.test(document);
+      const ownerKannada=/[\u0c80-\u0cff]/.test(owner),documentKannada=/[\u0c80-\u0cff]/.test(document);
+      return (ownerLatin&&documentKannada&&!documentLatin)||(documentLatin&&ownerKannada&&!ownerLatin);
+    };
+    const row=(label:string,ownerValue:unknown,documentValue:unknown,anchor?:any,path?:string,knownMatch?:boolean)=>{
+      const equivalent=knownMatch??(clean(ownerValue)===clean(documentValue));
+      const status=absent(documentValue)?'missing':absent(ownerValue)?'needs_review':equivalent?'match':knownMatch===undefined&&differentScripts(ownerValue,documentValue)?'needs_review':'mismatch';
+      return {label,applicationValue:String(ownerValue||'Not recorded on Owner Page'),documentValue:String(documentValue||'Not extracted'),status,anchor,path};
+    };
     const schedule=fields?.propertySchedule;
-    const appSurvey=`${propertyIdentity.survey_number||''}${propertyIdentity.subdivision&&propertyIdentity.subdivision!=='*'?`/${propertyIdentity.subdivision}`:''}`;
-    const documentSurveyBase=schedule?.surveyNumber&&!missing(schedule.surveyNumber)?schedule.surveyNumber:'';
-    const docSurvey=`${documentSurveyBase}${schedule?.subdivisionHissa&&!String(documentSurveyBase).includes('/')?`/${schedule.subdivisionHissa}`:''}`;
-    const rows = [
-      row('Survey No.',propertyIdentity.survey_number,documentSurveyBase,schedule?.evidenceAnchor),
-      row('Hissa / subdivision',propertyIdentity.subdivision&&propertyIdentity.subdivision!=='*'?propertyIdentity.subdivision:'Not specified',schedule?.subdivisionHissa,schedule?.evidenceAnchor),
-      row('Village',propertyIdentity.village,schedule?.village,schedule?.evidenceAnchor),
-      row('Extent',propertyIdentity.extent,schedule?.extent?.rawText,schedule?.evidenceAnchor),
-      row('North boundary',propertyIdentity.boundary_north,schedule?.boundaries?.north,schedule?.evidenceAnchor),
-      row('South boundary',propertyIdentity.boundary_south,schedule?.boundaries?.south,schedule?.evidenceAnchor),
-      row('East boundary',propertyIdentity.boundary_east,schedule?.boundaries?.east,schedule?.evidenceAnchor),
-      row('West boundary',propertyIdentity.boundary_west,schedule?.boundaries?.west,schedule?.evidenceAnchor),
+    const unitFactor:Record<string,number>={acre:43560,gunta:1089,guntas:1089,gutta:1089,guttha:1089,gts:1089,sq_ft:1,sq_m:10.7639104,cent:435.6,hectare:107639.104};
+    const ownerExtentSqFt=Number(propertyIdentity.extent_value||0)*(unitFactor[String(propertyIdentity.extent_unit||'').toLowerCase()]||0);
+    const deedExtentSqFt=Number(schedule?.extent?.normalizedSqFt||0);
+    const extentKnownMatch=ownerExtentSqFt>0&&deedExtentSqFt>0?Math.abs(ownerExtentSqFt-deedExtentSqFt)/Math.max(ownerExtentSqFt,deedExtentSqFt)<=0.01:undefined;
+    const verifiedTitle=[...titleHistory].reverse().find((event:any)=>event.status==='verified'&&event.toParties?.length);
+    const currentOwners=(verifiedTitle?.toParties||[]).map((party:any)=>party.name).filter(Boolean).join(', ');
+    const seller=fields?.parties?.filter(party=>['seller','executant'].includes(String(party.role).toLowerCase())).map(party=>party.name).filter(Boolean).join(', ');
+    const buyer=fields?.parties?.filter(party=>['buyer','claimant','donee'].includes(String(party.role).toLowerCase())).map(party=>party.name).filter(Boolean).join(', ');
+    const partyPath=(roles:string[])=>{const index=fields?.parties?.findIndex(party=>roles.includes(String(party.role).toLowerCase()))??-1;return index<0?undefined:`parties.${index}.name`;};
+    const anchors=fields?.fieldAnchors||{};
+    return [
+      row('Survey number',propertyIdentity.survey_number,schedule?.surveyNumber,anchors.surveyNumber,'propertySchedule.surveyNumber'),
+      row('Hissa / subdivision',propertyIdentity.subdivision&&propertyIdentity.subdivision!=='*'?propertyIdentity.subdivision:'',schedule?.subdivisionHissa,anchors.subdivisionHissa,'propertySchedule.subdivisionHissa'),
+      row('Village',propertyIdentity.village,schedule?.village,anchors.village,'propertySchedule.village'),
+      row('Hobli',propertyIdentity.hobli,schedule?.hobli,anchors.hobli,'propertySchedule.hobli'),
+      row('Taluk',propertyIdentity.taluk,schedule?.taluk,anchors.taluk,'propertySchedule.taluk'),
+      row('District',propertyIdentity.district,schedule?.district,anchors.district,'propertySchedule.district'),
+      row('Extent',propertyIdentity.extent,schedule?.extent?.rawText,anchors.extent,'propertySchedule.extent.rawText',extentKnownMatch),
+      row('Owner name',currentOwners,fields?.parties?.filter(party=>['owner','buyer','donee'].includes(String(party.role).toLowerCase())).map(party=>party.name).filter(Boolean).join(', '),fields?.parties?.find(party=>['owner','buyer','donee'].includes(String(party.role).toLowerCase()))?.evidenceAnchor,partyPath(['owner','buyer','donee'])),
+      row('Seller name','',seller,fields?.parties?.find(party=>['seller','executant'].includes(String(party.role).toLowerCase()))?.evidenceAnchor,partyPath(['seller','executant'])),
+      row('Buyer name','',buyer,fields?.parties?.find(party=>['buyer','claimant','donee'].includes(String(party.role).toLowerCase()))?.evidenceAnchor,partyPath(['buyer','claimant','donee'])),
+      row('Registration number','',fields?.registrationNumber||fields?.documentNumber,anchors.registrationNumber||anchors.documentNumber,'registrationNumber'),
+      row('Execution date','',fields?.executionDate,anchors.executionDate,'executionDate'),
+      row('Registration date','',fields?.registrationDate,anchors.registrationDate,'registrationDate'),
+      row('North boundary',propertyIdentity.boundary_north,schedule?.boundaries?.north,anchors['boundaries.north'],'propertySchedule.boundaries.north'),
+      row('South boundary',propertyIdentity.boundary_south,schedule?.boundaries?.south,anchors['boundaries.south'],'propertySchedule.boundaries.south'),
+      row('East boundary',propertyIdentity.boundary_east,schedule?.boundaries?.east,anchors['boundaries.east'],'propertySchedule.boundaries.east'),
+      row('West boundary',propertyIdentity.boundary_west,schedule?.boundaries?.west,anchors['boundaries.west'],'propertySchedule.boundaries.west'),
     ];
-    return rows;
-  },[fields,propertyIdentity]);
+  },[fields,propertyIdentity,titleHistory]);
+  const comparisonMismatchRows=mirrorRows.filter(item=>item.status==='mismatch');
+  const comparisonMissingRows=mirrorRows.filter(item=>item.status==='missing');
+  const comparisonNeedsReviewOnlyRows=mirrorRows.filter(item=>item.status==='needs_review');
+  const comparisonNeedsReviewRows=[...comparisonMissingRows,...comparisonNeedsReviewOnlyRows];
+  const comparisonCounts={total:mirrorRows.length,matched:mirrorRows.filter(item=>item.status==='match').length,mismatched:comparisonMismatchRows.length,missing:comparisonMissingRows.length,needsReview:comparisonNeedsReviewOnlyRows.length};
+  const filteredComparisonRows=mirrorRows.filter(item=>comparisonFilter==='all'||item.status===comparisonFilter);
+  const openComparisonReview=(item:any)=>{setSelectedComparisonField(item);if(item.anchor?.pageNumber){setCurrentPage(Math.max(1,Number(item.anchor.pageNumber)));setFocusedFieldId(item.path||item.label);}};
+  const exportComparison=()=>{
+    const quote=(value:unknown)=>`"${String(value??'').replace(/"/g,'""')}"`;
+    const csv=[['Field','Owner Page value','Uploaded document value','Status','Source page','Evidence snippet'],...mirrorRows.map(item=>[item.label,item.applicationValue,item.documentValue,item.status,item.anchor?.pageNumber||'',item.anchor?.extractedSnippet||''])].map(row=>row.map(quote).join(',')).join('\r\n');
+    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download=`owner-document-comparison-${doc.id}.csv`;link.click();URL.revokeObjectURL(url);
+  };
+  const criticalComparisonLabels=['Survey number','Hissa / subdivision','Village','Hobli','Taluk','District','Extent','Owner name','Seller name','Buyer name','North boundary','South boundary','East boundary','West boundary'];
+  const comparisonBlocked=comparisonMismatchRows.length>0||comparisonNeedsReviewRows.some(item=>criticalComparisonLabels.includes(item.label)&&item.applicationValue!=='Not recorded on Owner Page');
+  const identityAssessment=useMemo(()=>{
+    if(!fields)return{status:'unknown' as const,details:['OCR extraction has not completed.']};
+    const critical=mirrorRows.filter(item=>criticalComparisonLabels.includes(item.label));
+    const mismatches=critical.filter(item=>item.status==='mismatch');
+    if(mismatches.length)return{status:'mismatch' as const,details:mismatches.map(item=>`${item.label}: Owner Page ${item.applicationValue}; document ${item.documentValue}`)};
+    const needsReview=critical.filter(item=>item.status==='needs_review'||(item.status==='missing'&&item.applicationValue!=='Not recorded on Owner Page'));
+    if(needsReview.length)return{status:'unknown' as const,details:needsReview.map(item=>`${item.label} needs review`)};
+    return{status:'match' as const,details:['No critical mismatch found in fields with values on both sides.']};
+  },[fields,mirrorRows]);
 
   // Override dialog state
   const [overrideModal, setOverrideModal] = useState<{
@@ -206,6 +254,8 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
         const latest=data.items?.[0] || null;
         if (!cancelled) setJob(latest);
         if(!cancelled && latest?.status==='completed'){
+          const ocrResponse=await authFetch(`/api/properties/${propertyId}/documents/${doc.id}/ocr-result`);
+          if(ocrResponse.ok){const ocrData=await ocrResponse.json();if(ocrData.result){setOcrPages(Array.isArray(ocrData.result.pages)?ocrData.result.pages:[]);setOcrSavedAt(ocrData.result.createdAt||null);setRawText(ocrData.result.rawText||'');setFields(ocrData.result.extractedFields||null);}}
           const propertyResponse=await authFetch(`/api/properties/${propertyId}`);
           if(propertyResponse.ok){const propertyData=await propertyResponse.json();const fresh=(propertyData.documents||[]).find((item:any)=>item.id===doc.id);if(fresh){setFields(fresh.extracted_fields||null);setRawText(fresh.extracted_text||'');if(onDocumentUpdated)onDocumentUpdated(fresh);}}
         }
@@ -216,7 +266,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [doc.id, propertyId, currentRole]);
 
-  // OCR starts only through the shared provider queue. Original files remain immutable.
+  // OCR starts through the local Tesseract worker queue. Original files remain immutable.
   useEffect(() => {
     setFields(doc.extracted_fields || null);
     setRawText((doc as any).extracted_text || '');
@@ -256,8 +306,8 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
         throw new Error(err.error || 'Failed to extract document metadata');
       }
       const data = await res.json();
-      setJob({ id: data.jobId, status: data.status || 'queued', progress: 0 });
-      setSuccessNotice('OCR job queued with the shared Google Document AI service.');
+      setJob({ id: data.jobId, status: data.status || 'queued', processing_stage: 'queued', progress: 0 });
+      setSuccessNotice('OCR job queued with the local Tesseract service.');
       if (onDocumentUpdated) {
         onDocumentUpdated({ ...doc, processing_status: data.status || 'queued' });
       }
@@ -280,7 +330,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
       if (!res.ok) throw new Error(data.error || 'Could not rebuild fields from saved OCR text.');
       setFields(data.extractedFields);
       setJob((current:any) => current || { status:'completed', progress:100 });
-      setSuccessNotice('Fields rebuilt from preserved OCR text. Google OCR was not rerun; verify every value against the source.');
+      setSuccessNotice('Fields rebuilt from preserved OCR text. Tesseract was not rerun; verify every value against the source.');
       if (onDocumentUpdated) onDocumentUpdated({ ...doc, extracted_fields:data.extractedFields, extracted_text:rawText, processing_status:'manual_review', review_status:'pending' } as PropertyDoc);
     } catch (err:any) {
       setError(err.message || 'Could not rebuild fields from saved OCR text.');
@@ -290,10 +340,10 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
   };
 
   const handleSubmitForReview = async () => {
-    if (identityAssessment.status !== 'match') {
+    if (identityAssessment.status !== 'match'||comparisonBlocked) {
       setError(identityAssessment.status === 'mismatch'
         ? `Automatic property association is blocked: ${identityAssessment.details.join('; ')}. Route this deed for analyst review against the correct case.`
-        : 'Property identity is incomplete; confirm the village and survey before submitting this document for case approval.');
+        : comparisonMismatchRows.length?`Resolve Owner Page mismatches before review: ${comparisonMismatchRows.map(item=>item.label).join(', ')}.`:'Property identity is incomplete; confirm the Owner Page comparison before submitting this document for review.');
       return;
     }
     const comment=window.prompt('Add a note for the Lead Advocate:', 'Extraction complete; please review the highlighted evidence.');
@@ -325,7 +375,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     const boxes: ActiveBox[] = [];
 
     const documentNumberAnchor = fields.fieldAnchors?.documentNumber;
-    if (documentNumberAnchor) boxes.push({
+    if (documentNumberAnchor?.boundingBox) boxes.push({
       fieldId: 'documentNumber',
       label: 'Doc Number',
       pageNumber: documentNumberAnchor.pageNumber,
@@ -337,7 +387,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     // Parties
     fields.parties.forEach((party, idx) => {
       const anchor = party.evidenceAnchor;
-      if (anchor) boxes.push({
+      if (anchor?.boundingBox) boxes.push({
         fieldId: `party_${idx}`,
         label: `${prettyRole(party.role)}: ${party.name}`,
         pageNumber: anchor.pageNumber,
@@ -351,7 +401,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     if (fields.propertySchedule) {
       const sched = fields.propertySchedule;
       const anchor = sched.evidenceAnchor;
-      if (anchor) boxes.push({
+      if (anchor?.boundingBox) boxes.push({
         fieldId: 'surveyNumber',
         label: `Survey No. ${sched.surveyNumber}`,
         pageNumber: anchor.pageNumber,
@@ -364,7 +414,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     // Consideration
     if (fields.consideration) {
       const conAnchor = fields.consideration.evidenceAnchor;
-      if (conAnchor) boxes.push({
+      if (conAnchor?.boundingBox) boxes.push({
         fieldId: 'consideration',
         label: `Consideration: ₹ ${fields.consideration.amount.toLocaleString('en-IN')}`,
         pageNumber: conAnchor.pageNumber,
@@ -487,10 +537,26 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
     }
   };
 
+  const handleFieldReview = async (fieldPath: string, reviewAction: 'approve'|'reject'|'not_found'|'comment', rationale: string) => {
+    try {
+      const response = await authFetch(`/api/properties/${propertyId}/documents/${doc.id}/fields`, {
+        method: 'PATCH', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({fieldPath,reviewAction,rationale}),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not save field review.');
+      setFields(data.extractedFields);
+      setSuccessNotice(`Field review saved: ${reviewAction.replace('_',' ')}.`);
+      if (onDocumentUpdated) onDocumentUpdated(data.document);
+    } catch (error) {
+      setError((error as Error).message);
+    }
+  };
+
   // Quick verify toggle
   const handleToggleVerification = async () => {
-    if (!fields?.reviewState?.isVerified && (verificationIssues.length||identityAssessment.status!=='match')) {
-      setError(identityAssessment.status==='mismatch'?`This document may belong to another property: ${identityAssessment.details.join('; ')}.`:`Review required before verification: ${verificationIssues.join(', ')}.`);
+    if (!fields?.reviewState?.isVerified && (verificationIssues.length||identityAssessment.status!=='match'||comparisonBlocked)) {
+      setError(comparisonMismatchRows.length?`Resolve Owner Page mismatches before verification: ${comparisonMismatchRows.map(item=>item.label).join(', ')}.`:`Review required before verification: ${[...verificationIssues,...comparisonNeedsReviewRows.map(item=>item.label)].join(', ')}.`);
       return;
     }
     setBusy(true);
@@ -524,6 +590,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
 
   const isImage = doc.mime_type.startsWith('image/');
   const isPdf = doc.mime_type === 'application/pdf';
+  const jobStatusDescription=job?.status==='completed'?'OCR complete · extracted values await review':job?.status==='failed'?'OCR stopped · administrator action may be required':job?.status==='retry_wait'?'OCR retry scheduled':job?.status==='queued'?'Waiting for OCR worker':job?.status==='processing'?({loading_document:'Loading source document',tesseract_processing:'Running Kannada / English Tesseract OCR',persisting_results:'Saving OCR and extracted fields'} as Record<string,string>)[job.processing_stage]||'Processing OCR':'Preparing OCR';
 
   return (
     <div className={`side-by-side-overlay ${readOnly ? 'read-only' : ''}`}>
@@ -571,11 +638,11 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
             </div>
           )}
 
-          {((!readOnly&&currentRole==='analyst')||currentRole==='operations')&&<button className="secondary-btn" onClick={handleTriggerExtraction} disabled={busy || ['queued','processing'].includes(job?.status)}>
+          {(!readOnly&&['owner','admin','lawyer','analyst','operations'].includes(currentRole))&&<button className="secondary-btn" onClick={handleTriggerExtraction} disabled={busy || ['queued','processing'].includes(job?.status)}>
             <RefreshCw size={15} className={busy || job?.status==='processing' ? 'spin' : ''} /> {job?.status==='failed'||job?.status==='retry_wait'?'Retry OCR':'Process OCR'}
           </button>}
-          {!readOnly&&currentRole==='analyst'&&Boolean(rawText)&&<button className="secondary-btn" onClick={handleRebuildFromSavedOcr} disabled={busy} title="Re-extract candidate fields from the saved OCR text without calling Google Document AI">Rebuild fields from saved OCR</button>}
-          {!readOnly&&currentRole==='analyst'&&<button className="primary-btn" onClick={handleSubmitForReview} disabled={busy||!fields||Boolean(job&&job.status!=='completed')}>Submit for review</button>}
+          {!readOnly&&currentRole==='analyst'&&Boolean(rawText)&&<button className="secondary-btn" onClick={handleRebuildFromSavedOcr} disabled={busy} title="Re-extract candidate fields from the saved OCR text without rerunning Tesseract">Rebuild fields from saved OCR</button>}
+          {!readOnly&&currentRole==='analyst'&&<button className="primary-btn" onClick={handleSubmitForReview} disabled={busy||!fields||Boolean(job&&job.status!=='completed')||comparisonBlocked||identityAssessment.status!=='match'} title={comparisonBlocked?'Resolve critical comparison issues before submitting.':''}>Submit for review</button>}
           {currentRole==='lawyer'&&doc.review_status==='submitted'&&<><button className="secondary-btn" onClick={()=>void handleReviewDecision('dispute')} disabled={busy}>Dispute</button><button className="danger-btn" onClick={()=>void handleReviewDecision('reject')} disabled={busy}>Reject</button><button className="primary-btn" onClick={()=>void handleReviewDecision('approve')} disabled={busy}>Approve evidence</button></>}
 
           <button className="icon-btn close-btn" onClick={onClose}>
@@ -583,9 +650,10 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
           </button>
         </div>
       </header>
-      {job&&<div className="review-alert"><Activity size={15}/><span>OCR job: <strong>{job.status}</strong>{job.progress!=null?` · ${job.progress}%`:''}{job.error_message?` · ${job.error_message}`:''}</span></div>}
-      <nav className="review-tabs" aria-label="Document review sections">{([['document','Document View'],['extracted','Extracted Information'],['history','Transaction History'],['verification','Verification & Issues'],['audit','Audit Trail']] as [ReviewTab,string][]).map(([id,label])=><button key={id} className={activeTab===id?'active':''} onClick={()=>setActiveTab(id)}>{label}</button>)}<button className="ocr-toggle" onClick={()=>setShowRawText(v=>!v)}>{showRawText?'Hide':'Show'} Kannada OCR</button></nav>
+      {job&&<div className={`review-alert ocr-job-summary ${job.status==='failed'?'alert-error':job.status==='retry_wait'?'alert-warning':job.status==='completed'?'alert-success':''}`}><Activity size={15}/><span><strong>{jobStatusDescription}</strong> · {job.progress||0}%{job.pages_processed?` · ${job.pages_processed} page(s)`:''}{job.attempts!=null?` · attempt ${job.attempts}/${job.max_attempts}`:''}{job.updated_at?` · updated ${new Date(job.updated_at).toLocaleString()}`:''}{job.error_message?` · ${job.error_message}`:''}</span></div>}
+      <nav className="review-tabs" aria-label="Document review sections">{([['document','Document View'],['extracted','Extracted Information'],['verification','Property Comparison'],['history','Transaction History'],['audit','Audit Trail']] as [ReviewTab,string][]).map(([id,label])=><button key={id} className={activeTab===id?'active':''} onClick={()=>setActiveTab(id)}>{label}</button>)}<button className="ocr-toggle" onClick={()=>setShowRawText(v=>!v)}>{showRawText?'Hide':'Show'} Kannada OCR</button></nav>
       {showRawText&&<><pre className="review-raw-text">{redactSensitiveOcr(rawText)||'No OCR text has been saved yet.'}</pre><p className="ocr-preservation-note">Sensitive identifiers are masked in this view; the original OCR record remains preserved.</p></>}
+      {ocrPages.length>0&&<section className="ocr-page-results"><h3>Page OCR results {ocrSavedAt&&<small>Saved {new Date(ocrSavedAt).toLocaleString()}</small>}</h3>{ocrPages.map((page:any)=><article key={page.pageNumber}><header><strong>Page {page.pageNumber}</strong><span>{Math.round(Number(page.confidence||0)*100)}% confidence · {page.tokenCount||0} tokens</span></header><pre>{redactSensitiveOcr(page.text)||'No text detected on this page.'}</pre></article>)}</section>}
 
       {/* Notifications */}
       {error && (
@@ -596,7 +664,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
       )}
       {!fields?.reviewState?.isVerified&&verificationIssues.length>0&&<div className="review-alert alert-warning"><AlertTriangle size={15}/><span><strong>Verification blocked.</strong> Review or correct: {verificationIssues.join(', ')}.</span></div>}
       {fields?.extractionMetadata?.status==='manual_review'&&<div className="review-alert alert-warning"><AlertTriangle size={15}/><span><strong>Manual evidence review required.</strong> {fields.extractionMetadata.message||'Automatic extraction did not produce verified source facts.'}</span></div>}
-      <div className={`review-alert identity-assessment ${identityAssessment.status}`}><MapPin size={15}/><span><strong>{identityAssessment.status==='match'?'Document identity matches this application':identityAssessment.status==='mismatch'?'Property association blocked — analyst review required':'Document ownership cannot yet be confirmed'}</strong> {identityAssessment.details.join(' · ')}</span></div>
+      <div className={`review-alert identity-assessment comparison-summary ${comparisonMismatchRows.length?'mismatch':comparisonBlocked?'unknown':'match'}`}><MapPin size={16}/><span><strong>{comparisonMismatchRows.length?`${comparisonMismatchRows.length} mismatch${comparisonMismatchRows.length===1?'':'es'} need resolution`:comparisonBlocked?'Critical fields need review':'No critical mismatches found'}</strong><small>{mirrorRows.filter(item=>item.status==='match').length} match · {comparisonMismatchRows.length} mismatch · {comparisonNeedsReviewRows.length} missing or needs review</small></span><button className="comparison-jump" onClick={()=>setActiveTab('verification')}>Review comparison</button></div>
       {successNotice && (
         <div className="review-alert alert-success">
           <Check size={16} /> <span>{successNotice}</span>
@@ -691,7 +759,8 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
               {showBoxes &&
                 pageBoxes.map((box) => {
                   const isFocused = focusedFieldId === box.fieldId;
-                  const tone = getConfidenceTone(box.confidence);
+                  const tone = getConfidenceTone(box.confidence ?? 0);
+                  const confidenceLabel = box.confidence === undefined ? 'OCR confidence unavailable' : `${Math.round(box.confidence * 100)}% OCR confidence`;
                   return (
                     <div
                       key={box.fieldId}
@@ -706,10 +775,10 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
                         backgroundColor: isFocused ? 'rgba(59, 130, 246, 0.22)' : tone.bg,
                       }}
                       onClick={() => handleBoxClick(box.fieldId)}
-                      title={`${box.label} (${Math.round(box.confidence * 100)}% Confidence)`}
+                      title={`${box.label} (${confidenceLabel})`}
                     >
                       <span className="box-badge" style={{ backgroundColor: tone.color }}>
-                        {box.label.slice(0, 24)} • {Math.round(box.confidence * 100)}%
+                        {box.label.slice(0, 24)} • {box.confidence === undefined ? 'N/A' : `${Math.round(box.confidence * 100)}%`}
                       </span>
                     </div>
                   );
@@ -722,7 +791,8 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
         <div className={`review-pane right-pane ${activeTab==='document'?'document-summary':'visible-pane'}`} ref={formRef}>
           {activeTab==='extracted'&&<div className="form-header">
             <h3>Structured Document Evidence</h3>
-            <p>Verify extracted facts against document anchors. Corrections are audited.</p>
+            <p>Check each extracted value against its source page. Corrections are audited.</p>
+            <button className="secondary-btn compare-owner-page" onClick={()=>setActiveTab('verification')}>Compare with Owner Page <ChevronRight size={14}/></button>
           </div>}
 
           {activeTab==='document'&&<section className="review-section document-summary-card"><div className="section-title"><FileCheck size={16}/><span>Document summary</span></div><p><strong>{prettyDocType(fields?.documentType||doc.doc_type||'other')}</strong></p><p>Review the source PDF on the left. {fields?.documentNumber?`Registry reference ${fields.documentNumber}.`:'Registry reference not identified.'}</p><p>Case parcel association is {identityAssessment.status==='mismatch'?'blocked pending analyst review':identityAssessment.status==='match'?'consistent with extracted village and survey':'unconfirmed'}.</p><button className="secondary-btn" onClick={()=>setActiveTab('extracted')}>Open extracted information</button></section>}
@@ -733,7 +803,21 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
             {!titleHistory.length&&!fields?.ownershipEvents?.length ? <p className="muted-text">No ownership events are recorded for this case or identified in this deed. A deed document alone is not counted as a completed transfer until the case title chain records that event.</p> : <div className="history-timeline">{titleHistory.map((event:any)=><div className="history-event" key={event.id}><span>{event.eventDate || 'Date not recorded'}</span><strong>{String(event.deedType || 'Ownership event').replace(/_/g,' ')}</strong><small>{(event.fromParties||[]).map((p:any)=>p.name).join(', ') || 'Prior owner not identified'} → {(event.toParties||[]).map((p:any)=>p.name).join(', ') || 'Successor not identified'} · Registered title-chain event · {event.status}</small></div>)}{fields?.ownershipEvents?.map((event:any,index:number)=><div className="history-event mentioned" key={`mentioned-${index}`}><span>{event.eventDate||'Date not specified'}</span><strong>{event.eventType}</strong><small>{event.from||'From not identified'} → {event.to||'To not identified'} · {event.reference||'No reference'} · Mentioned in deed, not independently verified</small><EvidenceLink anchor={event.evidenceAnchor} onOpen={setCurrentPage}/></div>)}</div>}
           </section>}
 
-          {fields&&activeTab==='verification'&&<section className="mirror-comparison"><div className="mirror-heading"><div><strong>Key Verification & Alerts</strong><span>Case facts are read-only and are never overwritten by OCR.</span></div><span className={`mirror-overall ${identityAssessment.status}`}>{identityAssessment.status==='match'?'Identity match':identityAssessment.status==='mismatch'?'Review required':'Needs review'}</span></div><div className="mirror-table"><div className="mirror-table-head"><span>FIELD</span><span>CASE</span><span>SALE DEED</span><span>RESULT</span></div>{mirrorRows.map(item=><div className="mirror-row" key={item.label}><strong>{item.label}</strong><span>{item.applicationValue}</span><span>{item.documentValue} <EvidenceLink anchor={item.anchor} onOpen={setCurrentPage}/></span><em className={item.status}>{item.status==='match'?<><Check size={12}/>Match</>:item.status==='mismatch'?<><X size={12}/>Mismatch</>:<><AlertTriangle size={12}/>Not Identified</>}</em></div>)}</div><div className="verification-alerts">{identityAssessment.details.map((issue,i)=><div key={i} className="alert alert-warning"><AlertTriangle size={14}/><span>{issue}</span></div>)}</div></section>}
+          {activeTab==='verification'&&<section className="owner-comparison-workspace">
+            <div className="oc-title"><div><p>PROPERTY VERIFICATION</p><h2>Owner Page vs Document</h2><span>Compare recorded property facts against values extracted from this uploaded document.</span></div><strong className={`oc-overall ${comparisonBlocked?'blocked':comparisonCounts.needsReview||comparisonCounts.missing?'review':'clear'}`}>{!fields?'OCR pending':comparisonBlocked?'Blocked':comparisonCounts.needsReview||comparisonCounts.missing?'Review required':'No critical mismatch'}</strong></div>
+            <div className="oc-summary" aria-label="Verification summary">
+              {[['Total fields',comparisonCounts.total,'total'],['Matched',comparisonCounts.matched,'match'],['Mismatched',comparisonCounts.mismatched,'mismatch'],['Missing',comparisonCounts.missing,'missing'],['Needs review',comparisonCounts.needsReview,'needs_review']].map(([label,count,key]:any)=><div className={`oc-stat ${key}`} key={key}><span>{label}</span><strong>{count}</strong></div>)}
+            </div>
+            <nav className="oc-tabs" aria-label="Comparison sections">{([['comparison','Field Comparison'],['missing','Missing Information'],['findings','Findings & Recommendations']] as [ComparisonSection,string][]).map(([key,label])=><button key={key} className={comparisonSection===key?'active':''} onClick={()=>setComparisonSection(key)}>{label}{key==='missing'&&<small>{comparisonCounts.missing}</small>}</button>)}</nav>
+            {comparisonSection==='comparison'&&<>
+              <div className="oc-filter-row"><span>Verification status</span>{([['all','All',comparisonCounts.total],['match','Match',comparisonCounts.matched],['mismatch','Mismatch',comparisonCounts.mismatched],['missing','Missing',comparisonCounts.missing],['needs_review','Needs review',comparisonCounts.needsReview]] as [ComparisonFilter,string,number][]).map(([key,label,count])=><button key={key} className={comparisonFilter===key?'active':''} onClick={()=>setComparisonFilter(key)}>{label}<b>{count}</b></button>)}</div>
+              <div className="oc-table-scroll"><table className="oc-table"><thead><tr><th>Field name</th><th>Existing Owner Page value</th><th>Uploaded document value</th><th>Status</th><th>Review</th></tr></thead><tbody>{filteredComparisonRows.map(item=><tr key={item.label} className={`oc-row-${item.status}`}><th scope="row">{item.label}</th><td>{item.applicationValue}</td><td><span>{item.documentValue}</span>{item.anchor&&<small className="oc-evidence-line">Page {item.anchor.pageNumber}{item.anchor.extractedSnippet?` · “${item.anchor.extractedSnippet}”`:''}</small>}</td><td><span className={`oc-status ${item.status}`}>{item.status==='needs_review'?'Needs review':item.status==='match'?'Match':item.status==='mismatch'?'Mismatch':'Missing'}</span></td><td><button className="oc-review-button" onClick={()=>openComparisonReview(item)}>Review</button></td></tr>)}{!filteredComparisonRows.length&&<tr><td colSpan={5} className="oc-empty">No fields in this status.</td></tr>}</tbody></table></div>
+            </>}
+            {comparisonSection==='missing'&&<div className="oc-missing-list">{comparisonMissingRows.length?comparisonMissingRows.map(item=><article key={item.label}><div><strong>{item.label}</strong><span>Owner Page: {item.applicationValue} · Uploaded document: Not extracted</span></div><button className="oc-review-button" onClick={()=>openComparisonReview(item)}>Review source</button></article>):<p className="oc-empty">No missing OCR values in the current comparison.</p>}<small>Missing OCR values remain Missing. They are not treated as mismatches.</small></div>}
+            {comparisonSection==='findings'&&<div className="oc-findings">{comparisonMismatchRows.map(item=><article className="mismatch" key={item.label}><strong>{item.label}: values differ</strong><p>Owner Page: {item.applicationValue}. Uploaded document: {item.documentValue}.</p><button className="oc-review-button" onClick={()=>openComparisonReview(item)}>Review evidence</button></article>)}{comparisonNeedsReviewOnlyRows.map(item=><article className="review" key={item.label}><strong>{item.label}: comparison needs review</strong><p>{item.applicationValue==='Not recorded on Owner Page'?'No Owner Page baseline is recorded for this field.':'The values cannot be safely compared from the available text or evidence.'}</p><button className="oc-review-button" onClick={()=>openComparisonReview(item)}>Review evidence</button></article>)}{comparisonMissingRows.map(item=><article className="missing" key={item.label}><strong>{item.label}: not extracted</strong><p>Check the original document page. No mismatch is inferred from an absent OCR value.</p><button className="oc-review-button" onClick={()=>openComparisonReview(item)}>Review evidence</button></article>)}{!comparisonMismatchRows.length&&!comparisonNeedsReviewRows.length&&<p className="oc-empty">No comparison findings are currently recorded.</p>}</div>}
+            <p className="oc-integrity-note">Values come from the property record and saved OCR extraction. OCR never updates Owner Page data. Corrections to extracted fields are recorded in the reviewer audit history.</p>
+          </section>}
+          {selectedComparisonField&&activeTab==='verification'&&<div className="oc-detail-backdrop" role="presentation" onClick={()=>setSelectedComparisonField(null)}><aside className="oc-detail-panel" role="dialog" aria-modal="true" aria-label={`${selectedComparisonField.label} evidence review`} onClick={event=>event.stopPropagation()}><header><div><small>FIELD EVIDENCE REVIEW</small><h3>{selectedComparisonField.label}</h3></div><button aria-label="Close field review" onClick={()=>setSelectedComparisonField(null)}><X size={18}/></button></header><span className={`oc-status ${selectedComparisonField.status}`}>{selectedComparisonField.status==='needs_review'?'Needs review':selectedComparisonField.status==='missing'?'Missing':selectedComparisonField.status==='mismatch'?'Mismatch':'Match'}</span><dl><div><dt>Existing Owner Page value</dt><dd>{selectedComparisonField.applicationValue}</dd></div><div><dt>Uploaded document value</dt><dd>{selectedComparisonField.documentValue}</dd></div></dl><div className="oc-source-evidence"><strong>Original document evidence</strong>{selectedComparisonField.anchor?<><span>Page {selectedComparisonField.anchor.pageNumber}{selectedComparisonField.anchor.confidenceScore!=null?` · ${Math.round(selectedComparisonField.anchor.confidenceScore*100)}% OCR confidence`:''}</span><blockquote>{selectedComparisonField.anchor.extractedSnippet||'No text snippet was saved for this field.'}</blockquote><small>{selectedComparisonField.anchor.boundingBox?`Evidence region: x ${Math.round(selectedComparisonField.anchor.boundingBox.xmin*100)}–${Math.round(selectedComparisonField.anchor.boundingBox.xmax*100)}%, y ${Math.round(selectedComparisonField.anchor.boundingBox.ymin*100)}–${Math.round(selectedComparisonField.anchor.boundingBox.ymax*100)}% of page.`:'Location coordinates were not saved for this extracted value.'}</small></>:<span>No OCR evidence anchor is available for this field. Use the page controls to inspect the source document.</span>}</div><footer><button className="secondary-btn" onClick={()=>{if(selectedComparisonField.anchor?.pageNumber)setCurrentPage(Math.max(1,Number(selectedComparisonField.anchor.pageNumber)));setFocusedFieldId(selectedComparisonField.path||selectedComparisonField.label);}}>Open page {selectedComparisonField.anchor?.pageNumber||'1'} in viewer</button>{currentRole==='analyst'&&!readOnly&&selectedComparisonField.path&&selectedComparisonField.status!=='match'&&<button className="primary-btn" onClick={()=>openOverrideDialog(selectedComparisonField.path,selectedComparisonField.label,selectedComparisonField.documentValue)}>Correct extracted value</button>}</footer></aside></div>}
 
           {activeTab==='extracted' && (!fields ? (
             <div className="empty-extraction"><Sparkles size={24} className="spin" /><p>Extracting metadata, entities and evidence coordinates…</p></div>
@@ -743,11 +827,14 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
               readOnly={readOnly || currentRole !== 'analyst'}
               onEdit={openOverrideDialog}
               onOpenPage={setCurrentPage}
+              onReview={handleFieldReview}
             />
           ))}
           {activeTab==='audit'&&<section className="review-section"><div className="section-title"><ShieldCheck size={16}/><span>Audit Trail</span></div><h4>Field changes</h4>{fieldHistory.length?<div className="admin-table-wrap"><table className="data-table review-data-table"><thead><tr><th>Time</th><th>Field</th><th>Previous → New</th><th>Reviewer</th><th>Rationale</th></tr></thead><tbody>{fieldHistory.map((item:any)=><tr key={item.id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{item.field_path}</td><td>{String(item.previous_value??'—')} → {String(item.new_value??'—')}</td><td>{item.actor_uid} · {item.actor_role}</td><td>{item.rationale}</td></tr>)}</tbody></table></div>:<p className="muted-text">No field corrections recorded.</p>}<h4>Review decisions</h4>{reviewHistory.length?<div className="admin-table-wrap"><table className="data-table review-data-table"><thead><tr><th>Time</th><th>Decision</th><th>Status</th><th>Reviewer</th><th>Rationale</th></tr></thead><tbody>{reviewHistory.map((item:any)=><tr key={item.id}><td>{new Date(item.created_at).toLocaleString()}</td><td>{item.decision}</td><td>{item.from_status} → {item.to_status}</td><td>{item.actor_uid} · {item.actor_role}</td><td>{item.rationale}</td></tr>)}</tbody></table></div>:<p className="muted-text">No review decisions recorded.</p>}</section>}
         </div>
       </div>
+
+      {activeTab==='verification'&&<div className="oc-action-bar"><div className="oc-action-status"><strong>{comparisonBlocked?'Resolve critical comparison findings':comparisonCounts.missing||comparisonCounts.needsReview?'Review remaining evidence':'Comparison ready'}</strong><span>{comparisonCounts.matched} of {comparisonCounts.total} fields matched · {comparisonCounts.mismatched+comparisonCounts.missing+comparisonCounts.needsReview} require attention</span></div><div className="oc-action-buttons"><button className="secondary-btn" onClick={exportComparison}><Download size={15}/>Export Comparison</button><button className="secondary-btn" onClick={handleTriggerExtraction} disabled={busy||readOnly||!['analyst','owner','admin','lawyer','operations'].includes(currentRole)||['queued','processing'].includes(job?.status)}><RefreshCw size={15} className={busy||job?.status==='processing'?'spin':''}/>Re-run OCR</button><button className="primary-btn" onClick={handleSubmitForReview} disabled={busy||readOnly||currentRole!=='analyst'||!fields||Boolean(job&&job.status!=='completed')||comparisonBlocked||identityAssessment.status!=='match'} title={comparisonBlocked?'Resolve critical mismatches before legal submission.':identityAssessment.status!=='match'?'Confirm property identity before legal submission.':''}>Resolve &amp; Continue</button></div></div>}
 
       {/* Override Dialog Modal */}
       {overrideModal.isOpen && (
@@ -892,7 +979,7 @@ const ConfidenceBadge: React.FC<{ conf: number }> = ({ conf }) => {
   );
 };
 
-const EvidenceLink: React.FC<{anchor?:any;onOpen:(page:number)=>void}> = ({anchor,onOpen}) => anchor ? <button className="evidence-link" onClick={()=>onOpen(Number(anchor.pageNumber)||1)} title={anchor.extractedSnippet||'Open source page'}>PDF p. {anchor.pageNumber||1} ↗</button> : <span className="no-evidence">No page anchor</span>;
+const EvidenceLink: React.FC<{anchor?:any;onOpen:(page:number)=>void;detailed?:boolean}> = ({anchor,onOpen,detailed=false}) => {if(!anchor)return <span className="no-evidence">No page anchor</span>;const box=anchor.boundingBox;const location=detailed&&box?` · x ${Math.round(Number(box.xmin||0)*100)}%, y ${Math.round(Number(box.ymin||0)*100)}%`:'';return <button className="evidence-link" onClick={()=>onOpen(Number(anchor.pageNumber)||1)} title={`${anchor.extractedSnippet||'Open source page'}${location}`}>PDF p. {anchor.pageNumber||1}{location} ↗</button>;};
 
 const PartyEvidenceTable: React.FC<{parties:ExtractedParty[];allParties:ExtractedParty[];confidence:number;editable:boolean;onEdit:(path:string,label:string,value:any)=>void;onOpenPage:(page:number)=>void}> = ({parties,allParties,confidence,editable,onEdit,onOpenPage}) => <div className="admin-table-wrap party-table-wrap"><table className="data-table review-data-table"><thead><tr><th>Party / role</th><th>Relationship</th><th>Age</th><th>Address</th><th>Ownership share</th><th>Confidence / evidence</th></tr></thead><tbody>{parties.length?parties.map(party=>{const index=allParties.indexOf(party);return <tr key={`${party.role}-${index}`}><td>{party.name}<small>{prettyRole(party.role)}</small>{editable&&<button className="text-edit-btn" onClick={()=>onEdit(`parties.${index}.name`,'Party name',party.name)}><Edit3 size={11}/> Edit</button>}</td><td>{party.relationship||'Not identified'}{editable&&<button className="text-edit-btn" onClick={()=>onEdit(`parties.${index}.relationship`,'Relationship',party.relationship)}><Edit3 size={11}/></button>}</td><td>{party.age??'Not identified'}{editable&&<button className="text-edit-btn" onClick={()=>onEdit(`parties.${index}.age`,'Age',party.age)}><Edit3 size={11}/></button>}</td><td>{party.address||'Not identified'}{editable&&<button className="text-edit-btn" onClick={()=>onEdit(`parties.${index}.address`,'Address',party.address)}><Edit3 size={11}/></button>}</td><td>{party.ownershipShare||'Not identified'}{editable&&<button className="text-edit-btn" onClick={()=>onEdit(`parties.${index}.ownershipShare`,'Ownership share',party.ownershipShare)}><Edit3 size={11}/></button>}</td><td><ConfidenceBadge conf={party.evidenceAnchor?.confidenceScore??confidence}/><EvidenceLink anchor={party.evidenceAnchor} onOpen={onOpenPage}/></td></tr>}):<tr><td colSpan={6}>No parties in this role were identified in OCR.</td></tr>}</tbody></table></div>;
 

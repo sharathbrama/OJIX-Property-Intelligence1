@@ -52,8 +52,8 @@ export function validateSuperAdminBootstrapEnvironment(env: NodeJS.ProcessEnv = 
 /**
  * Idempotently provisions the configured platform identity. Existing passwords
  * are never replaced during a restart. Only the explicitly configured email
- * receives the platform role; authGuard maps that role to Owner's workspace
- * permissions while keeping Super Admin authorization as a separate claim.
+ * receives the isolated platform role. Workspace access requires a separate,
+ * explicit workspace membership and the role is never mapped to Owner.
  */
 export async function bootstrapSuperAdmin(
   pool: BootstrapPool,
@@ -93,14 +93,21 @@ export async function bootstrapSuperAdmin(
     if (user.status !== 'active') throw new Error('The configured Super Admin account already exists but is disabled. Re-enable it through an authorized account recovery process.');
     if (!user.email_verified) throw new Error('The configured Super Admin account already exists but its email is not verified. Verify the account before bootstrapping it.');
 
-    await connection.query(
-      `INSERT INTO org_memberships (id,organization_id,user_uid,email,role,status)
-       VALUES (?,?,?,?,'super_admin','active')
-       ON DUPLICATE KEY UPDATE email=VALUES(email),role='super_admin',status='active',updated_at=NOW(6)`,
-      [(dependencies.newId || crypto.randomUUID)(), PLATFORM_ORGANIZATION_ID, user.id, credentials.email],
-    );
+    const existingMembership=await connection.query('SELECT id,role,status FROM org_memberships WHERE organization_id=? AND user_uid=? LIMIT 1 FOR UPDATE',[PLATFORM_ORGANIZATION_ID,user.id]);
+    if(existingMembership.rowCount&&existingMembership.rows[0].role!=='super_admin')throw new Error('The configured Super Admin identity already has a different platform role; resolve the membership through controlled database governance.');
+    if(!existingMembership.rowCount){
+      const membershipId=(dependencies.newId || crypto.randomUUID)();
+      await connection.query(
+        `INSERT IGNORE INTO org_memberships (id,organization_id,user_uid,email,role,status)
+         VALUES (?,?,?,?,'super_admin','active')`,
+        [membershipId, PLATFORM_ORGANIZATION_ID, user.id, credentials.email],
+      );
+      await connection.query('INSERT INTO audit_events (id,actor_uid,tenant_id,action,entity_type,entity_id,details) VALUES (?,?,?,?,?,?,?)',[
+        (dependencies.newId || crypto.randomUUID)(),user.id,PLATFORM_ORGANIZATION_ID,'super_admin.bootstrap_provisioned','org_membership',membershipId,JSON.stringify({email:credentials.email,reason:'Configured first-time platform bootstrap'})
+      ]);
+    }
     await connection.commit();
-    return { configured: true, created, userId: String(user.id), email: credentials.email };
+    return { configured: true, created, userId: String(user.id), email: credentials.email, membershipStatus: existingMembership.rows[0]?.status || 'active' };
   } catch (error) {
     await connection.rollback();
     throw error;

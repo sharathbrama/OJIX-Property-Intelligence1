@@ -20,14 +20,99 @@ export type SmtpTransportFactory = (settings: {
   host: string;
   port: number;
   secure: boolean;
+  requireTLS: boolean;
   auth: { user: string; pass: string };
-}) => { sendMail(message: Record<string, unknown>): Promise<unknown> };
+}) => {
+  verify(): Promise<unknown>;
+  sendMail(message: Record<string, unknown>): Promise<unknown>;
+};
+
+export function readSmtpSettings(env: NodeJS.ProcessEnv = process.env): SmtpSettings {
+  const user = env.SMTP_USER?.trim() || '';
+  const host = env.SMTP_HOST?.trim() || (user.toLowerCase().endsWith('@gmail.com') ? 'smtp.gmail.com' : '');
+  const portText = env.SMTP_PORT?.trim();
+  const port = portText ? Number(portText) : host === 'smtp.gmail.com' ? 465 : 587;
+  const secureText = env.SMTP_SECURE?.trim().toLowerCase();
+  if (secureText && !['true', 'false'].includes(secureText)) throw new Error('SMTP_SECURE must be true or false.');
+  const secure = secureText ? secureText === 'true' : port === 465;
+  let pass = env.SMTP_PASS?.trim() || '';
+  // Google displays App Passwords in four-character groups. Spaces are presentation only.
+  if (host.toLowerCase() === 'smtp.gmail.com' || user.toLowerCase().endsWith('@gmail.com')) pass = pass.replace(/\s+/g, '');
+  if (!user || !pass) throw new Error('SMTP_USER and SMTP_PASS must be configured.');
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SMTP_HOST and SMTP_PORT are invalid.');
+  if (host.toLowerCase() === 'smtp.gmail.com' && !((port === 465 && secure) || (port === 587 && !secure))) {
+    throw new Error('Gmail SMTP requires port 465 with implicit TLS or port 587 with STARTTLS.');
+  }
+  return { host, port, secure, user, pass };
+}
+
+const EMAIL_ADDRESS = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
+
+function validMailbox(value: string) {
+  const angleAddress = value.match(/<([^<>]+)>/);
+  return EMAIL_ADDRESS.test((angleAddress?.[1] || value).trim());
+}
+
+export function getSmtpConfigurationIssues(env: NodeJS.ProcessEnv = process.env): string[] {
+  const user = env.SMTP_USER?.trim() || '';
+  const host = env.SMTP_HOST?.trim() || (user.toLowerCase().endsWith('@gmail.com') ? 'smtp.gmail.com' : '');
+  const portText = env.SMTP_PORT?.trim() || '';
+  const port = portText ? Number(portText) : host === 'smtp.gmail.com' ? 465 : 587;
+  const secureText = env.SMTP_SECURE?.trim().toLowerCase() || '';
+  const secure = secureText ? secureText === 'true' : port === 465;
+  const issues: string[] = [];
+  if (!user) issues.push('SMTP_USER');
+  if (!env.SMTP_PASS?.trim()) issues.push('SMTP_PASS');
+  if (!host) issues.push('SMTP_HOST');
+  if (portText && (!Number.isInteger(port) || port < 1 || port > 65535)) issues.push('SMTP_PORT');
+  if (secureText && !['true', 'false'].includes(secureText)) issues.push('SMTP_SECURE');
+  if (host.toLowerCase() === 'smtp.gmail.com' && !((port === 465 && secure) || (port === 587 && !secure))) {
+    issues.push('SMTP_PORT', 'SMTP_SECURE');
+  }
+  if (user && !validMailbox(user)) issues.push('SMTP_USER');
+  const from = env.SMTP_FROM?.trim() || user;
+  if (from && !validMailbox(from)) issues.push('SMTP_FROM');
+  return [...new Set(issues)];
+}
+
+export type SmtpFailureCode = 'SMTP_NOT_CONFIGURED' | 'SMTP_CONFIG_INVALID' | 'SMTP_AUTH_FAILED' | 'SMTP_SERVER_UNAVAILABLE' | 'SMTP_RECIPIENT_REJECTED' | 'SMTP_DELIVERY_FAILED';
+
+export function classifySmtpFailure(error: unknown): SmtpFailureCode {
+  const detail = error as { message?: unknown; code?: unknown; responseCode?: unknown };
+  const code = typeof detail?.code === 'string' ? detail.code.toUpperCase() : '';
+  const responseCode = Number(detail?.responseCode || 0);
+  const message = typeof detail?.message === 'string' ? detail.message.toLowerCase() : '';
+  if (/not configured|must be configured/.test(message)) return 'SMTP_NOT_CONFIGURED';
+  if (code === 'EAUTH' || [530, 534, 535].includes(responseCode) || /authentication failed|invalid credentials/.test(message)) return 'SMTP_AUTH_FAILED';
+  if (/invalid|requires port|host or port/.test(message)) return 'SMTP_CONFIG_INVALID';
+  if (/recipient address is invalid/.test(message) || code === 'EENVELOPE' || [550, 551, 552, 553].includes(responseCode)) return 'SMTP_RECIPIENT_REJECTED';
+  if (/^(ECONNECTION|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ESOCKET|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|ETLS)$/.test(code) || [421, 450, 451, 452].includes(responseCode)) return 'SMTP_SERVER_UNAVAILABLE';
+  return 'SMTP_DELIVERY_FAILED';
+}
+
+export function smtpPublicError(code: SmtpFailureCode): string {
+  switch (code) {
+    case 'SMTP_NOT_CONFIGURED': return 'Email delivery is not configured. Ask an administrator to set SMTP_HOST (unless using Gmail), SMTP_USER, and SMTP_PASS.';
+    case 'SMTP_CONFIG_INVALID': return 'Email delivery settings are invalid. Ask an administrator to check SMTP_HOST, SMTP_PORT, SMTP_SECURE, and SMTP_FROM.';
+    case 'SMTP_AUTH_FAILED': return 'SMTP authentication failed. Ask an administrator to verify the provider username and app password.';
+    case 'SMTP_SERVER_UNAVAILABLE': return 'The SMTP server is unavailable. Check the host, port, TLS settings, and network, then try again.';
+    case 'SMTP_RECIPIENT_REJECTED': return 'The email provider rejected delivery. Check the recipient address and allowed sender address.';
+    default: return 'Email delivery failed; no verification code was sent. Try again later or contact support.';
+  }
+}
 
 export async function sendOtpEmailWithSmtp(
   settings: SmtpSettings,
   message: OtpEmailInput,
   transportFactory: SmtpTransportFactory = nodemailer.createTransport as unknown as SmtpTransportFactory,
 ) {
+  if (!validMailbox(message.to)) throw new Error('SMTP recipient address is invalid.');
+  if (!validMailbox(message.from)) throw new Error('SMTP sender address is invalid.');
+  if (!settings.host.trim() || !Number.isInteger(settings.port) || settings.port < 1 || settings.port > 65535) {
+    throw new Error('SMTP host or port is invalid.');
+  }
+  if (!settings.user.trim() || !settings.pass.trim()) throw new Error('SMTP authentication is not configured.');
+  if (!validMailbox(settings.user)) throw new Error('SMTP authentication username must be an email address.');
   const safeName = message.name.replace(/[<>&"']/g, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[char] || '');
   const isRegistration = message.purpose === 'registration';
   const isPasswordReset = message.purpose === 'password_reset';
@@ -48,7 +133,21 @@ export async function sendOtpEmailWithSmtp(
     host: settings.host,
     port: settings.port,
     secure: settings.secure,
+    requireTLS: !settings.secure,
     auth: { user: settings.user, pass: settings.pass },
   });
-  await transporter.sendMail({ from: message.from, to: message.to, subject, html, text });
+  try {
+    await transporter.verify();
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error('SMTP connection verification failed.');
+    Object.assign(failure, { smtpStage: 'verify' });
+    throw failure;
+  }
+  try {
+    await transporter.sendMail({ from: message.from, to: message.to, subject, html, text });
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error('SMTP email submission failed.');
+    Object.assign(failure, { smtpStage: 'sendMail' });
+    throw failure;
+  }
 }

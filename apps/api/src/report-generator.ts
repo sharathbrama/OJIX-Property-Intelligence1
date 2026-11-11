@@ -31,6 +31,7 @@ export interface DueDiligenceReportSnapshot {
   riskSummary: RiskScoreResult;
   evidenceAppendix: EvidenceAnchor[];
   statutoryNotice: string;
+  reportTemplate?: { version: number; name: string; configuration: Record<string, unknown> } | null;
 }
 
 export interface GeneratedReportOutput {
@@ -169,9 +170,10 @@ export function generateDueDiligenceReport(snapshot: DueDiligenceReportSnapshot)
     <p>Comprehensive Legal & Geospatial Due-Diligence Report | Report ID: ${snapshot.reportId}</p>
     <p>Tenant: <strong>${escapeHtml(snapshot.tenant.organizationName)}</strong> | Generated: ${escapeHtml(snapshot.snapshotTimestamp)} (UTC)</p>
   </header>
+  ${snapshot.reportTemplate ? `<p class="template-version">Report template: ${escapeHtml(snapshot.reportTemplate.name)} · v${snapshot.reportTemplate.version}</p>` : ''}
 
   <section id="executive-summary">
-    <h2>Executive Summary</h2>
+    <h2>${escapeHtml((snapshot.reportTemplate?.configuration as any)?.executiveSummaryTitle || 'Executive Summary')}</h2>
     <div class="score-badge ${scoreClass}">${escapeHtml(scoreLabel)}</div>
     ${reviewIncomplete ? '<p><strong>Review status: INCOMPLETE — NOT CLEARED.</strong> Missing or unverified evidence prevents a complete assessment. A low or zero risk score does not mean the property is safe or legally clear.</p>' : ''}
     <p><strong>Property Name:</strong> ${escapeHtml(snapshot.property.name || 'Not recorded')}</p>

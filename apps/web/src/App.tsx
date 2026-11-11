@@ -73,6 +73,8 @@ import ApiConsole from "./components/ApiConsole";
 import { AdminModule, type AdminSection } from "./components/AdminModule";
 import { SuperAdminPage } from "./components/SuperAdminPage";
 import { WorkflowGuide } from "./components/WorkflowGuide";
+import { LawyerWorkbench } from "./components/LawyerWorkbench";
+import { ConsultantWorkspace, SharedConsultantReport } from "./components/ConsultantWorkspace";
 import { OwnerAnalytics, OwnerPortfolioMap } from "./components/OwnerDashboardVisuals";
 import OwnerInactivityGuard from "./components/OwnerInactivityGuard";
 import { authFetch } from "./authFetch";
@@ -127,6 +129,7 @@ type Property = {
   updated_at: string;
   document_count?: number;
 };
+type WorkspaceChoice={id:string;name:string;slug:string;role:UserRole;status:string};
 type Finding = {
   id?: string;
   code: string;
@@ -239,6 +242,11 @@ type AppPage =
   | "api-console"
   | "super-admin"
   | "workflow-guide"
+  | "lawyer-workbench"
+  | "consultant-issues"
+  | "consultant-reports"
+  | "consultant-exports"
+  | "consultant-shared"
   | AdminSection;
 const PAGE_PATHS: Record<Exclude<AppPage, "property">, string> = {
   overview: "/dashboard",
@@ -252,6 +260,11 @@ const PAGE_PATHS: Record<Exclude<AppPage, "property">, string> = {
   "api-console": "/api-console",
   "super-admin": "/super-admin",
   "workflow-guide": "/workflows",
+  "lawyer-workbench": "/lawyer-workbench",
+  "consultant-issues": "/consultant/issues",
+  "consultant-reports": "/consultant/reports",
+  "consultant-exports": "/consultant/exports",
+  "consultant-shared": "/consultant/shared",
   "admin-overview": "/admin",
   "admin-members": "/admin/members",
   "admin-roles": "/admin/roles",
@@ -261,6 +274,12 @@ const PAGE_PATHS: Record<Exclude<AppPage, "property">, string> = {
   "admin-security": "/admin/security",
   "admin-retention": "/admin/retention",
   "admin-audit": "/admin/audit",
+  "admin-sources": "/admin/sources",
+  "admin-gis-rules": "/admin/gis-rules",
+  "admin-discrepancy-rules": "/admin/discrepancy-rules",
+  "admin-models": "/admin/models",
+  "admin-templates": "/admin/templates",
+  "admin-exports": "/admin/exports",
 };
 const ADMIN_PAGES: AdminSection[] = [
   "admin-overview",
@@ -272,8 +291,15 @@ const ADMIN_PAGES: AdminSection[] = [
   "admin-security",
   "admin-retention",
   "admin-audit",
+  "admin-sources",
+  "admin-gis-rules",
+  "admin-discrepancy-rules",
+  "admin-models",
+  "admin-templates",
+  "admin-exports",
 ];
 const ROLE_PAGES: Record<UserRole, AppPage[]> = {
+  super_admin: ["overview", "super-admin"],
   owner: [
     "overview",
     "properties",
@@ -284,10 +310,14 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "legal-research",
     "source-registry",
     "settings",
+    "consultant-reports",
+    "workflow-guide",
     "api-console",
     "super-admin",
+    "lawyer-workbench",
+    ...ADMIN_PAGES,
   ],
-  admin: ["overview", "settings", ...ADMIN_PAGES],
+  admin: ["overview", "settings", "lawyer-workbench", ...ADMIN_PAGES],
   lawyer: [
     "overview",
     "properties",
@@ -295,6 +325,8 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "all-documents",
     "all-findings",
     "legal-research",
+    "lawyer-workbench",
+    "consultant-issues",
   ],
   analyst: [
     "overview",
@@ -303,6 +335,7 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "all-documents",
     "all-findings",
     "all-maps",
+    "lawyer-workbench",
   ],
   operations: ["overview", "properties", "property", "all-documents"],
   consultant: [
@@ -312,6 +345,10 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "all-documents",
     "all-findings",
     "all-maps",
+    "consultant-issues",
+    "consultant-reports",
+    "consultant-exports",
+    "consultant-shared",
   ],
   support: ["overview"],
   data_steward: [
@@ -324,11 +361,25 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
   ],
   viewer: ["overview", "properties", "property"],
 };
-const canAccessPage = (user: UserAccount, page: AppPage) =>
-  (page === "workflow-guide" && user.role !== "owner") ||
-  (page === "super-admin"
-    ? Boolean(user.isSuperAdmin)
-    : ROLE_PAGES[user.role].includes(page));
+const PAGE_PERMISSIONS: Partial<Record<AppPage,string>> = {
+  overview:"dashboard.view",properties:"properties.view",property:"properties.view",
+  "all-documents":"documents.view","all-findings":"findings.view","all-maps":"maps.view",
+  "legal-research":"legal.view","source-registry":"sources.view",settings:"settings.view",
+  "api-console":"admin.view","lawyer-workbench":"workbench.view","consultant-issues":"findings.view",
+  "consultant-reports":"reports.view","consultant-exports":"reports.export","consultant-shared":"reports.export",
+  "admin-overview":"admin.view","admin-members":"members.view","admin-roles":"permissions.view",
+  "admin-applications":"properties.manage","admin-documents":"documents.view","admin-integrations":"admin.view",
+  "admin-security":"sessions.view","admin-retention":"retention.view","admin-audit":"audit.view",
+  "admin-sources":"sources.view","admin-gis-rules":"maps.configure","admin-discrepancy-rules":"admin.manage",
+  "admin-models":"admin.manage","admin-templates":"admin.manage","admin-exports":"admin.view",
+};
+const canAccessPage = (user: UserAccount, page: AppPage) => {
+  if(page==="super-admin")return Boolean(user.isSuperAdmin);
+  if(page==="workflow-guide")return user.role!=="owner";
+  const required=PAGE_PERMISSIONS[page];
+  if(user.permissions?.length&&required)return user.permissions.includes(required);
+  return ROLE_PAGES[user.role]?.includes(page)??false;
+};
 function routeFromPath(pathname: string): {
   page: AppPage;
   propertyId?: string;
@@ -380,7 +431,7 @@ function dashboardRoleFromPath(pathname: string) {
 function dashboardPathForUser(user: UserAccount, useSuperAdminPortal = false) {
   if (useSuperAdminPortal && user.isSuperAdmin)
     return "/super-admin/dashboard";
-  const role = user.role === "data_steward" ? "data-steward" : user.role;
+  const role = user.role === "super_admin" ? "super-admin" : user.role === "data_steward" ? "data-steward" : user.role;
   return `/${role}/dashboard`;
 }
 function updateBrowserUrl(page: AppPage, propertyId?: string, replace = false) {
@@ -430,6 +481,8 @@ export default function App() {
     confirmPassword: "",
   });
   const [availableAccounts, setAvailableAccounts] = useState<UserAccount[]>([]);
+  const [workspaces,setWorkspaces]=useState<WorkspaceChoice[]>([]);
+  const [activeWorkspaceId,setActiveWorkspaceId]=useState(()=>localStorage.getItem('ojix_workspace_id')||'');
   const [sessionExpiredMessage, setSessionExpiredMessage] = useState(() =>
     sessionStorage.getItem("ojix_session_expired_message") || "",
   );
@@ -443,6 +496,7 @@ export default function App() {
   });
   const [ownerDashboardData, setOwnerDashboardData] = useState<any>(null);
   const [ownerDashboardError, setOwnerDashboardError] = useState("");
+  const [ownerDashboardActionFilter, setOwnerDashboardActionFilter] = useState("");
   const [selected, setSelected] = useState<Property | null>(null);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -481,6 +535,7 @@ export default function App() {
         if (!active) return;
         localStorage.setItem("ojix_user", JSON.stringify(data.user));
         setCurrentUser(data.user);
+        if(data.user.tenantId){localStorage.setItem('ojix_workspace_id',data.user.tenantId);setActiveWorkspaceId(data.user.tenantId);}
       })
       .catch((sessionError) => {
         if (!active) return;
@@ -503,8 +558,25 @@ export default function App() {
     };
   }, [authToken]);
 
+  useEffect(()=>{
+    if(!authToken||!currentUser||authChecking)return;
+    let active=true;
+    authFetch(`${API}/api/auth/workspaces`).then(async response=>{
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.error||'Could not load authorized workspaces.');
+      if(!active)return;
+      const choices:WorkspaceChoice[]=data.items||[];
+      setWorkspaces(choices);
+      const saved=localStorage.getItem('ojix_workspace_id')||currentUser.tenantId||data.activeWorkspaceId||'';
+      const selected=choices.some(item=>item.id===saved)?saved:(choices[0]?.id||'');
+      if(selected){localStorage.setItem('ojix_workspace_id',selected);setActiveWorkspaceId(selected);}
+    }).catch(()=>{if(active)setWorkspaces([]);});
+    return()=>{active=false;};
+  },[authToken,currentUser?.uid,currentUser?.tenantId,authChecking]);
+
   const refresh = useCallback(async () => {
     if (!authToken || !currentUser || authChecking) return;
+    if (portalMode === "super-admin" || currentUser.role === "super_admin") return;
     setLoading(true);
     setError("");
     try {
@@ -542,17 +614,35 @@ export default function App() {
         setFindings(d.findings);
       }
     } catch (e) {
-      setError((e as Error).message);
+      if (selected) setError((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [selected?.id, authToken, currentUser, authChecking]);
+  }, [selected?.id, authToken, currentUser, authChecking, portalMode, activeWorkspaceId]);
 
   useEffect(() => {
     if (authToken && currentUser && !authChecking) {
       refresh();
     }
-  }, [authToken, currentUser, authChecking]);
+  }, [authToken, currentUser, authChecking, activeWorkspaceId, page]);
+
+  const switchWorkspace=async(workspaceId:string)=>{
+    const target=workspaces.find(item=>item.id===workspaceId&&item.status==='active');
+    if(!target||workspaceId===activeWorkspaceId)return;
+    const previous=activeWorkspaceId;
+    localStorage.setItem('ojix_workspace_id',workspaceId);setActiveWorkspaceId(workspaceId);
+    setSelected(null);setDocs([]);setFindings([]);setProperties([]);setOwnerDashboardData(null);setError('');setAuthChecking(true);
+    try{
+      const response=await authFetch(`${API}/api/auth/me`),data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.error||'Workspace membership could not be verified.');
+      localStorage.setItem('ojix_user',JSON.stringify(data.user));setCurrentUser(data.user);
+      const platform=Boolean(data.user.isSuperAdmin&&data.user.role==='super_admin');
+      setPortalMode(platform?'super-admin':'workspace');localStorage.setItem('ojix_portal_mode',platform?'super-admin':'workspace');
+      const nextPage:AppPage=platform?'super-admin':'overview';setPage(nextPage);updateBrowserUrl(nextPage,undefined,true);
+      setNotice(`Switched to ${target.name} as ${target.role.replace(/_/g,' ')}.`);
+    }catch(error){localStorage.setItem('ojix_workspace_id',previous);setActiveWorkspaceId(previous);setError((error as Error).message);}
+    finally{setAuthChecking(false);}
+  };
 
   const switchRole = async (targetUid: string) => {
     if (!import.meta.env.DEV) return;
@@ -561,6 +651,7 @@ export default function App() {
     try {
       setShowRoleSwitcher(false);
       localStorage.removeItem("ojix_auth_token");
+      localStorage.removeItem("ojix_workspace_id");setActiveWorkspaceId("");
       localStorage.removeItem("ojix_user");
       setAuthToken("");
       setCurrentUser(null);
@@ -586,6 +677,8 @@ export default function App() {
       localStorage.setItem("ojix_session_event", JSON.stringify({ type: "logout", reason, at: Date.now() }));
     }
     localStorage.removeItem("ojix_auth_token");
+    localStorage.removeItem("ojix_workspace_id");setActiveWorkspaceId("");setWorkspaces([]);
+    localStorage.removeItem("ojix_workspace_id");
     localStorage.removeItem("ojix_user");
     localStorage.removeItem("ojix_portal_mode");
     setAuthToken(null);
@@ -847,6 +940,7 @@ export default function App() {
         ),
       );
       setShowEdit(false);
+      await refresh();
       setNotice(
         `Application ${result.item.application_number} updated successfully.`,
       );
@@ -1084,6 +1178,16 @@ export default function App() {
         return "Super Admin";
       case "workflow-guide":
         return "Workflow Guide";
+      case "lawyer-workbench":
+        return "Lawyer Workspace – Pending Work";
+      case "consultant-issues":
+        return "Consultant · Property Issue List";
+      case "consultant-reports":
+        return "Consultant · Report Preparation";
+      case "consultant-exports":
+        return "Consultant · Approved Report Exports";
+      case "consultant-shared":
+        return "Consultant · Shared Client Reports";
       case "admin-members":
         return "Admin · Members";
       case "admin-roles":
@@ -1100,6 +1204,12 @@ export default function App() {
         return "Admin · Retention";
       case "admin-audit":
         return "Admin · Audit";
+      case "admin-sources": return "Admin · Source Health";
+      case "admin-gis-rules": return "Admin · GIS Rules";
+      case "admin-discrepancy-rules": return "Admin · Discrepancy Rules";
+      case "admin-models": return "Admin · AI Models";
+      case "admin-templates": return "Admin · Report Templates";
+      case "admin-exports": return "Admin · Export History";
       case "property":
         return selected?.name || "Property workspace";
       default:
@@ -1107,6 +1217,8 @@ export default function App() {
     }
   };
 
+  const sharedReportMatch = window.location.pathname.match(/^\/shared\/reports\/([a-f0-9]{64})\/?$/i);
+  if (sharedReportMatch) return <SharedConsultantReport apiUrl={API} token={sharedReportMatch[1]} />;
   if (authChecking) {
     return (
       <div className="login-loading">
@@ -1128,6 +1240,8 @@ export default function App() {
           const openSuperAdmin = requestedPortal === "super-admin";
           localStorage.setItem("ojix_auth_token", token);
           localStorage.setItem("ojix_user", JSON.stringify(user));
+          if(user.tenantId){localStorage.setItem("ojix_workspace_id",user.tenantId);setActiveWorkspaceId(user.tenantId);}
+          else{localStorage.removeItem("ojix_workspace_id");setActiveWorkspaceId("");}
           localStorage.setItem("ojix_portal_mode", openSuperAdmin ? "super-admin" : "workspace");
           setAuthChecking(true);
           setAuthToken(token);
@@ -1146,6 +1260,8 @@ export default function App() {
 
   const getRoleStyle = (role?: UserRole) => {
     switch (role) {
+      case "super_admin":
+        return { bg: "#f5f3ff", text: "#6d28d9", border: "#ddd6fe", label: "SUPER ADMIN" };
       case "owner":
         return {
           bg: "#eef2ff",
@@ -1305,7 +1421,7 @@ export default function App() {
                             ? "Data Quality Overview"
                             : currentUser.role === "viewer"
                               ? "Released Reports"
-                              : "Overview"}
+                              : currentUser.role === "owner" ? "Dashboard" : "Overview"}
             </span>
           </button>
           {!["admin", "support"].includes(currentUser.role) && (
@@ -1317,6 +1433,8 @@ export default function App() {
               <span>
                 {currentUser.role === "viewer"
                   ? "Approved matters"
+                  : currentUser.role === "owner"
+                    ? "Portfolio & Matters"
                   : currentUser.role === "consultant"
                     ? "Client Matters"
                     : currentUser.role === "data_steward"
@@ -1358,7 +1476,7 @@ export default function App() {
                         ? "Evidence Register"
                         : currentUser.role === "data_steward"
                           ? "Ingestion Register"
-                          : "Document Vault"}
+                          : currentUser.role === "owner" ? "Documents" : "Document Vault"}
               </span>
             </button>
           )}
@@ -1381,9 +1499,31 @@ export default function App() {
                     ? "Preliminary Findings"
                     : currentUser.role === "consultant"
                       ? "Issue Register"
-                      : "Risk reviews"}
+                      : currentUser.role === "owner" ? "Risk & Compliance" : "Risk reviews"}
               </span>
             </button>
+          )}
+          {["owner", "admin", "lawyer", "analyst"].includes(currentUser.role) && (
+            <button className={`nav-item ${page === "lawyer-workbench" ? "active" : ""}`} onClick={() => navigate("lawyer-workbench")}>
+              <ClipboardCheck size={18} />
+              <span>{currentUser.role === "owner" ? "Matters & Case Files" : "Lawyer Workbench"}</span>
+            </button>
+          )}
+          {currentUser.role === "owner" && (
+            <button className={`nav-item ${page === "consultant-reports" ? "active" : ""}`} onClick={() => navigate("consultant-reports")}>
+              <FileCheck2 size={18}/><span>Reports</span>
+            </button>
+          )}
+          {currentUser.role === "consultant" && (
+            <>
+              <button className={`nav-item ${page === "consultant-issues" ? "active" : ""}`} onClick={() => navigate("consultant-issues")}><ShieldAlert size={18}/><span>Property Issue List</span></button>
+              <button className={`nav-item ${page === "consultant-reports" ? "active" : ""}`} onClick={() => navigate("consultant-reports")}><FileCheck2 size={18}/><span>Report Preparation</span></button>
+              <button className={`nav-item ${page === "consultant-exports" ? "active" : ""}`} onClick={() => navigate("consultant-exports")}><Download size={18}/><span>Report Exports</span></button>
+              <button className={`nav-item ${page === "consultant-shared" ? "active" : ""}`} onClick={() => navigate("consultant-shared")}><ExternalLink size={18}/><span>Shared Client Reports</span></button>
+            </>
+          )}
+          {currentUser.role === "lawyer" && (
+            <button className={`nav-item ${page === "consultant-issues" ? "active" : ""}`} onClick={() => navigate("consultant-issues")}><ShieldCheck size={18}/><span>Finding Review</span></button>
           )}
           {!["admin", "lawyer", "operations", "viewer", "support"].includes(
             currentUser.role,
@@ -1433,15 +1573,13 @@ export default function App() {
           </>
         )}
         <div className="sidebar-bottom">
-          {currentUser.role !== "owner" && (
-            <button
-              className={`nav-item ${page === "workflow-guide" ? "active" : ""}`}
-              onClick={() => navigate("workflow-guide")}
-            >
-              <CircleHelp size={18} />
-              <span>Workflow Guide</span>
-            </button>
-          )}
+          <button
+            className={`nav-item ${page === "workflow-guide" ? "active" : ""}`}
+            onClick={() => navigate("workflow-guide")}
+          >
+            <CircleHelp size={18} />
+            <span>Workflow Guide</span>
+          </button>
           {currentUser.role !== "admin" && (
             <div className="secure-note">
               <ShieldCheck size={16} />
@@ -1451,13 +1589,13 @@ export default function App() {
               </div>
             </div>
           )}
-          {currentUser.role === "admin" && (
+          {["owner", "admin"].includes(currentUser.role) && (
             <button
               className={`nav-item ${ADMIN_PAGES.includes(page as AdminSection) ? "active" : ""}`}
               onClick={() => navigate("admin-overview")}
             >
               <Key size={18} />
-              <span>Admin Console</span>
+              <span>{currentUser.role === "owner" ? "Team & Access" : "Admin Console"}</span>
             </button>
           )}
           {currentUser.isSuperAdmin && portalMode === "super-admin" && (
@@ -1475,7 +1613,7 @@ export default function App() {
               onClick={() => navigate("settings")}
             >
               <Settings2 size={18} />
-              <span>Settings</span>
+              <span>{currentUser.role === "owner" ? "Workspace Settings" : "Settings"}</span>
             </button>
           )}
           <div
@@ -1524,6 +1662,7 @@ export default function App() {
             </div>
           </div>
           <div className="topbar-actions">
+            {workspaces.length>1&&<label className="workspace-picker"><span>Workspace</span><select aria-label="Select authorized workspace" value={activeWorkspaceId} onChange={event=>void switchWorkspace(event.target.value)}>{workspaces.map(workspace=><option key={workspace.id} value={workspace.id}>{workspace.name} · {workspace.role.replace(/_/g,' ')}</option>)}</select></label>}
             <div
               style={{
                 display: "flex",
@@ -1706,6 +1845,7 @@ export default function App() {
                 properties={properties}
                 loading={loading}
                 currentUser={currentUser}
+                apiUrl={API}
                 onOpen={openProperty}
                 onNavigate={navigate}
               />
@@ -1730,6 +1870,12 @@ export default function App() {
                 currentUser={currentUser}
                 onOpen={openProperty}
                 onNavigate={navigate}
+                pendingActionFilter={ownerDashboardActionFilter}
+                onPendingAction={(action) => {
+                  setOwnerDashboardActionFilter(action.id);
+                  navigate(action.target);
+                }}
+                onRefresh={() => void refresh()}
                 onPropertyUpdated={(item) => setProperties((current) => current.map((property) => property.id === item.id ? { ...property, ...item } : property))}
               />
             ) : (
@@ -1754,6 +1900,12 @@ export default function App() {
               currentUser={currentUser}
             />
           )}
+          {page === "lawyer-workbench" && (
+            <LawyerWorkbench apiUrl={API} properties={properties} currentUser={currentUser} onOpenProperty={(id) => void openPropertyById(id)} initialFilter={ownerDashboardActionFilter === "overdue" ? "overdue" : undefined} />
+          )}
+          {["consultant-issues","consultant-reports","consultant-exports","consultant-shared"].includes(page) && (
+            <ConsultantWorkspace apiUrl={API} properties={properties} currentUser={currentUser} mode={page === "consultant-issues" ? "issues" : page === "consultant-exports" ? "exports" : page === "consultant-shared" ? "shared" : "reports"} onOpenProperty={(id) => void openPropertyById(id)} onNavigate={navigate} initialApprovalStatus={ownerDashboardActionFilter === "legal" ? "submitted" : undefined} />
+          )}
           {page === "property" && selected && (
             <PropertyPage
               property={selected}
@@ -1766,7 +1918,7 @@ export default function App() {
               onReport={downloadReport}
               onPrint={printReport}
               onEdit={() => setShowEdit(true)}
-              onWorkflowUpdated={(item) => {
+              onWorkflowUpdated={async (item) => {
                 setSelected(item);
                 setProperties((current) =>
                   current.map((property) =>
@@ -1775,14 +1927,16 @@ export default function App() {
                       : property,
                   ),
                 );
+                await refresh();
                 setNotice(`Workflow for ${item.application_number} updated.`);
               }}
               onBack={() => navigate("properties")}
-              onDocUpdated={(updatedDoc) =>
+              onDocUpdated={async (updatedDoc) => {
                 setDocs((prev) =>
                   prev.map((d) => (d.id === updatedDoc.id ? updatedDoc : d)),
-                )
-              }
+                );
+                await refresh();
+              }}
               currentUser={currentUser}
             />
           )}
@@ -1790,6 +1944,7 @@ export default function App() {
             <GlobalDocumentsView
               apiUrl={API}
               onOpenProperty={openPropertyById}
+              initialReviewOnly={ownerDashboardActionFilter === "documents"}
             />
           )}
           {page === "all-findings" && (
@@ -2609,6 +2764,7 @@ function ConsultantDashboard({
   properties,
   loading,
   currentUser,
+  apiUrl,
   onOpen,
   onNavigate,
 }: {
@@ -2616,9 +2772,18 @@ function ConsultantDashboard({
   properties: Property[];
   loading: boolean;
   currentUser: UserAccount;
+  apiUrl: string;
   onOpen: (property: Property) => void;
   onNavigate: (page: "properties" | "all-findings" | "all-maps") => void;
 }) {
+  const [assignedIssueCount, setAssignedIssueCount] = useState<number | null>(null);
+  useEffect(() => {
+    let active = true;
+    void authFetch(`${apiUrl}/api/consultant/issues`).then((response) => response.json()).then((data) => {
+      if (active) setAssignedIssueCount(Number(data.openCount || 0));
+    }).catch(() => { if (active) setAssignedIssueCount(null); });
+    return () => { active = false; };
+  }, [apiUrl]);
   const dossierRows = [...properties].sort((a, b) => {
     const aReady = (a.document_count || 0) > 0 && a.latitude !== null ? 1 : 0;
     const bReady = (b.document_count || 0) > 0 && b.latitude !== null ? 1 : 0;
@@ -2673,7 +2838,7 @@ function ConsultantDashboard({
             <ShieldAlert />
           </span>
           <small>Open issue items</small>
-          <strong>{loading ? "—" : overview.findings || 0}</strong>
+          <strong>{loading || assignedIssueCount === null ? "—" : assignedIssueCount}</strong>
           <p>For reviewer-controlled disclosure</p>
         </div>
         <div>
@@ -2681,7 +2846,7 @@ function ConsultantDashboard({
             <BadgeCheck />
           </span>
           <small>Ready for review</small>
-          <strong>{loading ? "—" : overview.ready_for_review || 0}</strong>
+          <strong>{loading ? "—" : properties.filter((property) => property.status === "ready_for_review").length}</strong>
           <p>Awaiting legal approval</p>
         </div>
       </div>
@@ -2884,6 +3049,9 @@ function OwnerDashboard({
   onOpen,
   onNavigate,
   onPropertyUpdated,
+  pendingActionFilter,
+  onPendingAction,
+  onRefresh,
 }: {
   overview: any;
   dashboardData: any;
@@ -2894,22 +3062,77 @@ function OwnerDashboard({
   currentUser: UserAccount;
   onOpen: (property: Property) => void;
   onPropertyUpdated: (property: Property) => void;
+  pendingActionFilter: string;
+  onPendingAction: (action: any) => void;
+  onRefresh: () => void;
   onNavigate: (
     page:
       | "properties"
       | "settings"
       | "source-registry"
       | "all-documents"
-      | "all-findings",
+      | "all-findings"
+      | "lawyer-workbench"
+      | "consultant-reports"
+      | "admin-overview"
+      | "workflow-guide",
   ) => void;
 }) {
   const [workflowProperty, setWorkflowProperty] = useState<Property | null>(null);
   const [workflowSearch, setWorkflowSearch] = useState("");
   const [workflowFilter, setWorkflowFilter] = useState("all");
+  const [workflowPriorityFilter, setWorkflowPriorityFilter] = useState("all");
+  const [workflowSort, setWorkflowSort] = useState("priority");
+  const [workflowPage, setWorkflowPage] = useState(1);
+  const [workloadRole, setWorkloadRole] = useState("all");
+  const [workloadStatus, setWorkloadStatus] = useState("all");
+  const [portfolioTaluk, setPortfolioTaluk] = useState("all");
   const [analyticsData, setAnalyticsData] = useState<any>(dashboardData?.analytics || null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState("");
+  const [findingsPage,setFindingsPage]=useState(1);
+  const [activityPage,setActivityPage]=useState(1);
+  const [pagedFeed,setPagedFeed]=useState<any>(null);
+  const [feedError,setFeedError]=useState("");
+  const [globalSearch,setGlobalSearch]=useState("");
+  const [globalSearchResults,setGlobalSearchResults]=useState<any[]>([]);
+  const [globalSearchLoading,setGlobalSearchLoading]=useState(false);
+  const [showSearchResults,setShowSearchResults]=useState(false);
+  const globalSearchInput=useRef<HTMLInputElement>(null);
   useEffect(() => { if (dashboardData?.analytics) setAnalyticsData(dashboardData.analytics); }, [dashboardData?.analytics]);
+  useEffect(() => {
+    if (!pendingActionFilter) return;
+    setWorkflowFilter(pendingActionFilter === "evidence" ? "missing_evidence" : pendingActionFilter === "approval" ? "ready_for_review" : "all");
+    if (pendingActionFilter === "evidence" || pendingActionFilter === "approval") {
+      window.setTimeout(() => document.getElementById("owner-workflow-register")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    }
+  }, [pendingActionFilter]);
+  useEffect(()=>{
+    if(findingsPage===1&&activityPage===1){setPagedFeed(null);setFeedError("");return;}
+    let active=true;
+    setFeedError("");
+    api<any>(`/api/owner/dashboard?findingsPage=${findingsPage}&activityPage=${activityPage}`)
+      .then(result=>{if(active)setPagedFeed(result);})
+      .catch(error=>{if(active)setFeedError((error as Error).message||"Dashboard feeds could not be loaded.");});
+    return()=>{active=false;};
+  },[findingsPage,activityPage]);
+  useEffect(()=>{
+    const term=globalSearch.trim();
+    if(term.length<2){setGlobalSearchResults([]);setGlobalSearchLoading(false);return;}
+    let active=true;
+    setGlobalSearchLoading(true);
+    const timer=window.setTimeout(()=>{
+      api<{items:any[]}>(`/api/owner/dashboard/search?q=${encodeURIComponent(term)}`)
+        .then(result=>{if(active)setGlobalSearchResults(result.items||[]);})
+        .catch(()=>{if(active)setGlobalSearchResults([]);})
+        .finally(()=>{if(active)setGlobalSearchLoading(false);});
+    },250);
+    return()=>{active=false;window.clearTimeout(timer);};
+  },[globalSearch]);
+  useEffect(()=>{
+    const handleShortcut=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();globalSearchInput.current?.focus();setShowSearchResults(true);}};
+    window.addEventListener('keydown',handleShortcut);return()=>window.removeEventListener('keydown',handleShortcut);
+  },[]);
   const updateAnalyticsRange = async (from:string,to:string) => {
     setAnalyticsLoading(true);
     setAnalyticsError("");
@@ -2917,13 +3140,6 @@ function OwnerDashboard({
     catch (rangeError) { setAnalyticsError((rangeError as Error).message || "Analytics could not be updated."); }
     finally { setAnalyticsLoading(false); }
   };
-  const districts = Object.entries(
-    properties.reduce<Record<string, number>>((result, property) => {
-      const district = property.district || "Not recorded";
-      result[district] = (result[district] || 0) + 1;
-      return result;
-    }, {}),
-  ).sort((a, b) => b[1] - a[1]);
   const memberName = (uid?: string) =>
     accounts.find((account) => account.uid === uid)?.name || "Unassigned";
   const today = new Date();
@@ -2944,7 +3160,7 @@ function OwnerDashboard({
   };
   const dashboardWorkflow = Array.isArray(dashboardData?.workflow)
     ? dashboardData.workflow
-    : properties;
+    : [];
   const workflowRows = [...dashboardWorkflow].sort(
     (a, b) =>
       Number(isOverdue(b)) -
@@ -2955,38 +3171,73 @@ function OwnerDashboard({
   );
   const filteredWorkflowRows = workflowRows.filter((property: any) => {
     const term = workflowSearch.trim().toLowerCase();
-    const matchesSearch = !term || [property.name, property.application_number, property.village, property.district, property.review_stage, property.next_action]
+    const matchesSearch = !term || [property.name, property.application_number, property.village, property.taluk, property.district, property.review_stage, property.next_action]
       .some((value) => String(value || "").toLowerCase().includes(term));
     const matchesFilter = workflowFilter === "all" ||
-      (workflowFilter === "overdue" ? isOverdue(property) : property.status === workflowFilter);
-    return matchesSearch && matchesFilter;
+      (workflowFilter === "overdue" ? isOverdue(property) :
+        workflowFilter === "missing_evidence" ? Number(property.missing_evidence) > 0 :
+        workflowFilter === "document_review" ? Number(property.pending_document_reviews) > 0 :
+        property.status === workflowFilter);
+    const matchesPriority = workflowPriorityFilter === "all" || property.workflow_priority === workflowPriorityFilter;
+    return matchesSearch && matchesFilter && matchesPriority;
+  }).sort((a: any, b: any) => {
+    if (workflowSort === "due") return String(a.due_date || "9999").localeCompare(String(b.due_date || "9999"));
+    if (workflowSort === "name") return String(a.name || "").localeCompare(String(b.name || ""));
+    if (workflowSort === "status") return String(a.status || "").localeCompare(String(b.status || ""));
+    return workflowRows.indexOf(a) - workflowRows.indexOf(b);
   });
+  const workflowPageSize = 10;
+  const workflowPageCount = Math.max(1, Math.ceil(filteredWorkflowRows.length / workflowPageSize));
+  const visibleWorkflowRows = filteredWorkflowRows.slice((Math.min(workflowPage, workflowPageCount) - 1) * workflowPageSize, Math.min(workflowPage, workflowPageCount) * workflowPageSize);
   const metrics = dashboardData?.metrics || {};
-  const overdueCount = Number(metrics.overdue_tasks) || properties.filter(isOverdue).length;
-  const readyCount = Number(metrics.ready_for_legal_review ?? overview.ready_for_review) || 0;
+  const dashboardAvailable = Boolean(dashboardData);
+  const overdueCount = Number(metrics.overdue_tasks ?? 0) || 0;
+  const readyCount = Number(metrics.ready_for_legal_review ?? 0) || 0;
   const documentReviewCount = Number(metrics.documents_requiring_review) || 0;
   const pendingActions = Array.isArray(dashboardData?.pendingActions) ? dashboardData.pendingActions : [];
-  const recentFindings = Array.isArray(dashboardData?.recentFindings) ? dashboardData.recentFindings : (overview.recentFindings || []);
+  const recentFindings = Array.isArray(pagedFeed?.recentFindings) ? pagedFeed.recentFindings : (Array.isArray(dashboardData?.recentFindings) ? dashboardData.recentFindings : (overview.recentFindings || []));
   const teamWorkload = Array.isArray(dashboardData?.teamWorkload) ? dashboardData.teamWorkload : [];
   const reports = Array.isArray(dashboardData?.reports) ? dashboardData.reports : [];
-  const recentActivity = Array.isArray(dashboardData?.recentActivity) ? dashboardData.recentActivity : [];
-  const evidenceSources = dashboardData?.evidenceSources || {};
-  const openPropertyById = (id?: string) => {
+  const recentActivity = Array.isArray(pagedFeed?.recentActivity) ? pagedFeed.recentActivity : (Array.isArray(dashboardData?.recentActivity) ? dashboardData.recentActivity : []);
+  const readiness=dashboardData?.readiness||{};
+  const distributions=dashboardData?.distributions||{};
+  const districtDistribution=Array.isArray(distributions.districts)?distributions.districts:[];
+  const talukDistribution=Array.isArray(distributions.taluks)?distributions.taluks:[];
+  const riskOverview=Array.isArray(dashboardData?.riskOverview)?dashboardData.riskOverview:[];
+  const documentCategories=dashboardData?.documentCategories||{};
+  const sourceStatus=Array.isArray(dashboardData?.evidenceSourceStatus)?dashboardData.evidenceSourceStatus:[];
+  const pagination=pagedFeed?.pagination||dashboardData?.pagination||{};
+  const findingsPagination=pagination.findings||{page:findingsPage,pageSize:6,total:recentFindings.length,totalPages:1};
+  const activityPagination=pagination.activity||{page:activityPage,pageSize:8,total:recentActivity.length,totalPages:1};
+  const unreadActionCount=pendingActions.filter((item:any)=>Number(item.count||0)>0).length;
+  const openPropertyById = async (id?: string) => {
     const property = properties.find((item) => item.id === id) || dashboardWorkflow.find((item: Property) => item.id === id);
     if (property) onOpen(property);
+    else if(id){try{const result=await api<{item:Property}>(`/api/properties/${encodeURIComponent(id)}`);if(result.item)onOpen(result.item);}catch{}}
   };
+  if (!dashboardAvailable) {
+    return <div className="owner-dashboard owner-command-center">
+      {loading ? <div className="panel owner-dashboard-loading" role="status">Loading Owner Dashboard data…</div> :
+        <div className="owner-dashboard-error" role="alert"><AlertTriangle size={17}/><span>Owner Dashboard data is unavailable. {dashboardError || "The workspace dashboard request failed."}</span><button type="button" onClick={onRefresh}>Retry</button></div>}
+    </div>;
+  }
   return (
-    <div className="owner-dashboard">
+    <div className="owner-dashboard owner-command-center">
       <div className="owner-welcome">
         <div>
-          <div className="eyebrow">MANAGING PARTNER / WORKSPACE OWNER</div>
-          <h1>Property Operations Overview</h1>
+          <div className="owner-eyebrow"><span className="owner-live-dot"/> OWNER WORKSPACE · LIVE OPERATIONS</div>
+          <h1>Owner Command Center</h1>
           <p>
-            Welcome, {currentUser.name}. Monitor matters, assignments, evidence
-            readiness and legal review progress across your workspace.
+            Prioritise the work that needs attention, then track portfolio health and team delivery.
           </p>
+          <div className="owner-global-search-wrap">
+            <label className="owner-global-search"><Search size={17}/><input ref={globalSearchInput} value={globalSearch} onChange={event=>setGlobalSearch(event.target.value)} onFocus={()=>setShowSearchResults(true)} onKeyDown={event=>{if(event.key==='Escape')setShowSearchResults(false);}} placeholder="Search properties, matters or documents" aria-label="Search properties, matters or documents"/><kbd>⌘ K</kbd></label>
+            {showSearchResults&&globalSearch.trim().length>=2&&<div className="owner-search-results" role="listbox" aria-label="Search results">{globalSearchLoading?<div className="owner-search-empty"><LoaderCircle className="spin" size={15}/> Searching workspace…</div>:globalSearchResults.length?globalSearchResults.map((result:any)=><button type="button" key={`${result.type}:${result.id}`} onClick={()=>{setShowSearchResults(false);setGlobalSearch("");void openPropertyById(result.property_id||result.id);}}><span className={`owner-search-type ${result.type}`}>{result.type==='document'?<FileText size={14}/>:<Building2 size={14}/>}</span><span><strong>{result.title}</strong><small>{result.type==='document'?'Document':'Matter'}{result.reference?` · ${result.reference}`:''}{result.subtitle?` · ${result.subtitle}`:''}</small></span><ArrowUpRight size={14}/></button>):<div className="owner-search-empty">No matching properties, matters, or documents were found.</div>}</div>}
+          </div>
         </div>
         <div className="owner-actions">
+          <button className="owner-notification-button" onClick={() => document.getElementById("owner-pending-actions")?.scrollIntoView({ behavior: "smooth" })} aria-label={`${unreadActionCount} outstanding action items`} title="Open pending actions"><Bell size={17}/>{unreadActionCount>0&&<span>{unreadActionCount>99?'99+':unreadActionCount}</span>}</button>
+          <button className="secondary-btn" onClick={()=>onNavigate("workflow-guide")}><CircleHelp size={15}/> Help</button>
           <button
             className="secondary-btn"
             onClick={() => document.getElementById("owner-pending-actions")?.scrollIntoView({ behavior: "smooth" })}
@@ -3003,56 +3254,21 @@ function OwnerDashboard({
       </div>
       {dashboardError && <div className="owner-dashboard-error" role="alert"><AlertTriangle size={16}/><span>Owner dashboard details could not be loaded: {dashboardError}</span></div>}
       <div className="owner-kpis">
-        <div>
-          <span>
-            <Building2 />
-          </span>
-          <small>Total matters</small>
-          <strong>{loading ? "—" : Number(metrics.total_matters ?? overview.total) || 0}</strong>
-          <p>All property matters</p>
-        </div>
-        <div>
-          <span>
-            <Clock3 />
-          </span>
-          <small>Active reviews</small>
-          <strong>{loading ? "—" : Number(metrics.active_reviews ?? overview.in_review) || 0}</strong>
-          <p>Open review workflows</p>
-        </div>
-        <div>
-          <span>
-            <BadgeCheck />
-          </span>
-          <small>Ready for legal review</small>
-          <strong>{loading ? "—" : readyCount}</strong>
-          <p>Awaiting professional decision</p>
-        </div>
-        <div>
-          <span>
-            <FileSearch />
-          </span>
-          <small>Documents requiring review</small>
-          <strong>{loading ? "—" : documentReviewCount}</strong>
-          <p>Pending evidence checks</p>
-        </div>
-        <div>
-          <span>
-            <AlertTriangle />
-          </span>
-          <small>Overdue tasks</small>
-          <strong>{loading ? "—" : overdueCount}</strong>
-          <p>Require immediate attention</p>
-        </div>
+        <button type="button" onClick={() => onNavigate("properties")}><span><Building2 /></span><small>Total Matters</small><strong>{loading || !dashboardAvailable ? "—" : Number(metrics.total_matters) || 0}</strong><p>Recorded in this workspace</p><i className="owner-kpi-state neutral">Portfolio</i></button>
+        <button type="button" onClick={() => onNavigate("properties")}><span><Clock3 /></span><small>Active Reviews</small><strong>{loading || !dashboardAvailable ? "—" : Number(metrics.active_reviews) || 0}</strong><p>Evidence review or clarification</p><i className="owner-kpi-state">Live queue</i></button>
+        <button type="button" onClick={() => onNavigate("lawyer-workbench")}><span><BadgeCheck /></span><small>Ready for Legal Review</small><strong>{loading || !dashboardAvailable ? "—" : readyCount}</strong><p>Awaiting assigned reviewer</p><i className={`owner-kpi-state ${readyCount?'attention':'success'}`}>{readyCount?'Action needed':'Clear'}</i></button>
+        <button type="button" onClick={() => onNavigate("all-documents")}><span><FileSearch /></span><small>Documents Requiring Review</small><strong>{loading || !dashboardAvailable ? "—" : documentReviewCount}</strong><p>Pending field or processing review</p><i className={`owner-kpi-state ${documentReviewCount?'attention':'success'}`}>{documentReviewCount?'Review queue':'Clear'}</i></button>
+        <button type="button" onClick={() => onNavigate("lawyer-workbench")}><span><AlertTriangle /></span><small>Overdue Tasks</small><strong>{loading || !dashboardAvailable ? "—" : overdueCount}</strong><p>Incomplete tasks past due date</p><i className={`owner-kpi-state ${overdueCount?'urgent':'success'}`}>{overdueCount?'Overdue':'On track'}</i></button>
       </div>
       <div className="owner-command-grid">
         <section className="panel owner-readiness">
           <div className="panel-head">
             <div>
               <h3>Portfolio readiness</h3>
-              <p>Evidence completeness, not a legal-risk score.</p>
+              <p>Existing five-part completeness measure; it is not a legal-risk score.</p>
             </div>
             <span className="owner-readiness-score">
-              {Number(overview.readiness_pct) || 0}%
+              {dashboardAvailable ? `${Number(readiness.readiness_pct) || 0}%` : "—"}
             </span>
           </div>
           <div className="owner-readiness-body">
@@ -3060,31 +3276,31 @@ function OwnerDashboard({
               className="readiness-donut"
               style={
                 {
-                  "--readiness": `${Math.max(0, Math.min(100, Number(overview.readiness_pct) || 0)) * 3.6}deg`,
+                  "--readiness": `${Math.max(0, Math.min(100, dashboardAvailable ? Number(readiness.readiness_pct) || 0 : 0)) * 3.6}deg`,
                 } as React.CSSProperties
               }
             >
               <div>
-                <strong>{Number(overview.readiness_pct) || 0}%</strong>
+                <strong>{dashboardAvailable ? `${Number(readiness.readiness_pct) || 0}%` : "—"}</strong>
                 <span>complete</span>
               </div>
             </div>
             <div>
               <div>
-                <span>Documents recorded</span>
-                <strong>{overview.documents || 0}</strong>
+                <span>Ready for legal review</span>
+                <strong>{dashboardAvailable ? Number(readiness.ready_for_legal_review) || 0 : "—"}</strong>
               </div>
               <div>
-                <span>Properties missing evidence</span>
-                <strong>{overview.missing_documents || 0}</strong>
+                <span>Under review</span>
+                <strong>{dashboardAvailable ? Number(readiness.under_review) || 0 : "—"}</strong>
               </div>
               <div>
-                <span>Properties missing coordinates</span>
-                <strong>{overview.missing_coordinates || 0}</strong>
+                <span>Matters missing evidence</span>
+                <strong>{dashboardAvailable ? Number(readiness.missing_evidence_matters) || 0 : "—"}</strong>
               </div>
               <div>
-                <span>Ready for reviewer</span>
-                <strong>{readyCount}</strong>
+                <span>Not started</span>
+                <strong>{dashboardAvailable ? Number(readiness.not_started) || 0 : "—"}</strong>
               </div>
             </div>
           </div>
@@ -3093,29 +3309,38 @@ function OwnerDashboard({
           <div className="panel-head">
             <div>
               <h3>Portfolio distribution</h3>
-              <p>Property applications by recorded district</p>
+            <p>Workspace matters grouped by recorded location</p>
             </div>
             <MapIcon size={18} className="panel-head-icon" />
           </div>
           <div className="owner-district-list">
-            {districts.length ? (
-              districts.slice(0, 6).map(([district, count]) => (
-                <div key={district}>
-                  <span>{district}</span>
+            {districtDistribution.length ? (
+              districtDistribution.slice(0, 6).map((item:any) => (
+                <div key={item.label}>
+                  <span>{item.label}</span>
                   <div>
                     <i
                       style={{
-                        width: `${Math.max(8, (count / Math.max(properties.length, 1)) * 100)}%`,
+                        width: `${Math.max(3, (Number(item.value) / Math.max(...districtDistribution.map((value:any)=>Number(value.value)||0), 1)) * 100)}%`,
                       }}
                     />
                   </div>
-                  <strong>{count}</strong>
+                  <strong>{Number(item.value)||0}</strong>
                 </div>
               ))
             ) : (
               <p>No property locations recorded.</p>
             )}
           </div>
+          <div className="owner-distribution-subhead"><strong>Properties by taluk</strong><select value={portfolioTaluk} onChange={(event) => setPortfolioTaluk(event.target.value)} aria-label="Filter portfolio by taluk"><option value="all">All taluks</option>{talukDistribution.map((item:any) => <option key={item.label} value={item.label}>{item.label}</option>)}</select></div>
+          <div className="owner-district-list">
+            {talukDistribution.filter((item:any) => portfolioTaluk === "all" || portfolioTaluk === item.label).slice(0, 5).map((item:any) => <button key={item.label} type="button" onClick={() => onNavigate("properties")}><span>{item.label}</span><div><i style={{ width: `${Math.max(3, (Number(item.value) / Math.max(...talukDistribution.map((value:any)=>Number(value.value)||0), 1)) * 100)}%` }} /></div><strong>{Number(item.value)||0}</strong></button>)}
+          </div>
+          <div className="owner-distribution-subhead"><strong>Properties by village</strong></div>
+          <div className="owner-district-list">
+            {(Array.isArray(distributions.villages) ? distributions.villages : []).slice(0, 5).map((item:any) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${Math.max(3, (Number(item.value) / Math.max(...(distributions.villages||[]).map((value:any)=>Number(value.value)||0), 1)) * 100)}%` }} /></div><strong>{Number(item.value)||0}</strong></div>)}
+          </div>
+          <p className="owner-distribution-caption">Matter status distribution is available in Operational analytics.</p>
         </section>
         <section className="panel owner-governance" id="owner-pending-actions">
           <div className="panel-head">
@@ -3126,16 +3351,36 @@ function OwnerDashboard({
             <ClipboardCheck size={18} className="panel-head-icon" />
           </div>
           <div className="owner-governance-list">
-            {pendingActions.length ? pendingActions.map((action: any) => <button key={action.id} className={Number(action.count)>0?'attention':''} onClick={()=>onNavigate(action.target)}>
+            {pendingActions.length ? pendingActions.map((action: any) => <button key={action.id} className={Number(action.count)>0?'attention':''} onClick={()=>onPendingAction(action)}>
               {Number(action.count)>0?<AlertTriangle size={14}/>:<Check size={14}/>}<span><strong>{action.label}</strong><small>{action.status} · {action.priority} priority · {action.nextAction}</small></span><b>{action.count}</b><ArrowUpRight size={13}/>
-            </button>) : <div className="owner-empty-inline"><Check size={14}/><span><strong>No pending actions</strong><small>The workspace action queue is clear.</small></span></div>}
+            </button>) : dashboardAvailable ? <div className="owner-empty-inline"><Check size={14}/><span><strong>No pending actions</strong><small>The workspace action queue is clear.</small></span></div> : <div className="owner-empty-inline"><AlertTriangle size={14}/><span><strong>Action counts unavailable</strong><small>Retry dashboard loading to verify workspace actions.</small></span></div>}
           </div>
+        </section>
+      </div>
+      <div className="owner-detail-grid">
+        <section className="panel owner-detail-card">
+          <div className="panel-head"><div><h3>Risk overview</h3><p>Properties grouped by their highest recorded finding severity.</p></div><ShieldAlert size={18} className="panel-head-icon"/></div>
+          <div className="owner-risk-list">{riskOverview.length?[
+            {label:'High risk',value:riskOverview.filter((item:any)=>['critical','high'].includes(item.label)).reduce((sum:number,item:any)=>sum+Number(item.value||0),0),tone:'high'},
+            {label:'Medium risk',value:riskOverview.filter((item:any)=>item.label==='medium').reduce((sum:number,item:any)=>sum+Number(item.value||0),0),tone:'medium'},
+            {label:'Low risk',value:riskOverview.filter((item:any)=>item.label==='low').reduce((sum:number,item:any)=>sum+Number(item.value||0),0),tone:'low'},
+            {label:'Not assessed',value:riskOverview.filter((item:any)=>item.label==='not_assessed').reduce((sum:number,item:any)=>sum+Number(item.value||0),0),tone:'unknown'}
+          ].map((item:any)=><div key={item.label}><span className={`owner-risk-indicator ${item.tone}`}/><span>{item.label}</span><strong>{item.value}</strong></div>):<OwnerEmpty message="No risk assessment data is available."/>}</div>
+          <p className="owner-detail-footnote">Severity comes from recorded risk findings. “Not assessed” means no finding is recorded for the matter.</p>
+        </section>
+        <section className="panel owner-detail-card">
+          <div className="panel-head"><div><h3>Documents by category</h3><p>Active workspace documents from database records.</p></div><FolderOpen size={18} className="panel-head-icon"/></div>
+          <div className="owner-document-categories"><button onClick={()=>onNavigate("all-documents")}><span>Total documents</span><strong>{Number(documentCategories.total_documents)||0}</strong></button><button onClick={()=>onNavigate("all-documents")}><span>Title deeds</span><strong>{Number(documentCategories.title_deeds)||0}</strong></button><button onClick={()=>onNavigate("all-documents")}><span>Encumbrance certificates</span><strong>{Number(documentCategories.encumbrance_certificates)||0}</strong></button><button onClick={()=>onNavigate("all-documents")}><span>Survey and revenue records</span><strong>{Number(documentCategories.survey_revenue_records)||0}</strong></button><button onClick={()=>onNavigate("all-documents")}><span>Other categories</span><strong>{Number(documentCategories.other_documents)||0}</strong></button></div>
+        </section>
+        <section className="panel owner-detail-card">
+          <div className="panel-head"><div><h3>Evidence source status</h3><p>Latest recorded verification state; portal reachability is not verification.</p></div><Activity size={18} className="panel-head-icon"/></div>
+          <div className="owner-source-checks">{sourceStatus.length?sourceStatus.map((item:any)=><div key={item.source}><span className={`owner-source-dot ${/matched|verified_data_available/i.test(item.status)?'verified':/mismatch|failed/i.test(item.status)?'failed':'unknown'}`}/><span><strong>{item.source}</strong><small>{item.status==='not_verified'?'No verified result recorded':pretty(item.status)}{item.lastChecked?` · ${dateLabel(item.lastChecked)}`:item.latestSourceDate?` · source date ${dateLabel(item.latestSourceDate)}`:''}</small></span>{item.verifiedLayers!==undefined&&<b>{Number(item.verifiedLayers)||0} layers</b>}</div>):<OwnerEmpty message="No source status is available."/>}</div>
         </section>
       </div>
       {analyticsError && <div className="owner-dashboard-error" role="alert"><AlertTriangle size={16}/><span>{analyticsError}</span></div>}
       <OwnerAnalytics data={analyticsData || {}} team={teamWorkload} onRangeChange={updateAnalyticsRange} loading={analyticsLoading}/>
       <OwnerPortfolioMap properties={dashboardWorkflow} onOpen={onOpen}/>
-      <section className="panel owner-workflow-register">
+      <section className="panel owner-workflow-register" id="owner-workflow-register">
         <div className="panel-head">
           <div>
             <h3>Application workflow register</h3>
@@ -3157,8 +3402,10 @@ function OwnerDashboard({
           </div>
         </div>
         <div className="owner-workflow-tools">
-          <label><Search size={14}/><input value={workflowSearch} onChange={(event)=>setWorkflowSearch(event.target.value)} placeholder="Search matter, location or next action" aria-label="Search workflow register"/></label>
-          <select value={workflowFilter} onChange={(event)=>setWorkflowFilter(event.target.value)} aria-label="Filter workflow register"><option value="all">All stages</option><option value="overdue">Overdue</option><option value="documents_pending">Documents pending</option><option value="in_review">Evidence review</option><option value="clarification_required">Clarification required</option><option value="ready_for_review">Ready for legal review</option><option value="approved">Approved</option><option value="complete">Completed</option></select>
+          <label><Search size={14}/><input value={workflowSearch} onChange={(event)=>{setWorkflowSearch(event.target.value);setWorkflowPage(1);}} placeholder="Search matter, location or next action" aria-label="Search workflow register"/></label>
+          <select value={workflowFilter} onChange={(event)=>{setWorkflowFilter(event.target.value);setWorkflowPage(1);}} aria-label="Filter workflow register"><option value="all">All stages</option><option value="overdue">Overdue</option><option value="missing_evidence">Missing evidence</option><option value="document_review">Pending document review</option><option value="documents_pending">Documents pending</option><option value="in_review">Evidence review</option><option value="clarification_required">Clarification required</option><option value="ready_for_review">Ready for legal review</option><option value="approved">Approved</option><option value="complete">Completed</option></select>
+          <select value={workflowPriorityFilter} onChange={(event)=>{setWorkflowPriorityFilter(event.target.value);setWorkflowPage(1);}} aria-label="Filter by priority"><option value="all">All priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select>
+          <select value={workflowSort} onChange={(event)=>{setWorkflowSort(event.target.value);setWorkflowPage(1);}} aria-label="Sort workflow register"><option value="priority">Sort: priority</option><option value="due">Sort: due date</option><option value="name">Sort: property</option><option value="status">Sort: status</option></select>
         </div>
         {loading ? (
           <div className="loading-state">
@@ -3169,7 +3416,8 @@ function OwnerDashboard({
             <table className="owner-workflow-table">
               <thead>
                 <tr>
-                  <th>MATTER / PROPERTY</th>
+                  <th>APPLICATION</th>
+                  <th>PROPERTY / LOCATION</th>
                   <th>CURRENT STAGE</th>
                   <th>REVIEW STAGE</th>
                   <th>MISSING EVIDENCE</th>
@@ -3180,18 +3428,18 @@ function OwnerDashboard({
                 </tr>
               </thead>
               <tbody>
-                {filteredWorkflowRows.slice(0, 20).map((property: any) => (
+                {visibleWorkflowRows.map((property: any) => (
                   <tr
                     key={property.id}
                     className={isOverdue(property) ? "overdue" : ""}
                   >
                     <td className="owner-matter-cell" onClick={()=>onOpen(property)}>
-                      <strong>{property.name}</strong>
-                      <small>{propertyIdentityLabel(property)}</small>
+                      <strong>{property.application_number || "Application pending"}</strong>
                       <small className="mono">
                         {property.application_number}
                       </small>
                     </td>
+                    <td className="owner-matter-cell" onClick={()=>onOpen(property)}><strong>{property.name}</strong><small>{[property.village, property.taluk, property.district].filter(Boolean).join(" · ") || propertyIdentityLabel(property)}</small></td>
                     <td>
                       <span className={`owner-priority ${property.workflow_priority || "normal"}`}>{pretty(property.status)}</span>
                     </td>
@@ -3244,6 +3492,7 @@ function OwnerDashboard({
             <span>No property applications are currently recorded.</span>
           </div>
         )}
+        {!loading && filteredWorkflowRows.length > 0 && <div className="owner-workflow-pagination"><span>Showing {Math.min(filteredWorkflowRows.length, (workflowPage - 1) * workflowPageSize + 1)}–{Math.min(filteredWorkflowRows.length, workflowPage * workflowPageSize)} of {filteredWorkflowRows.length}</span><button disabled={workflowPage <= 1} onClick={() => setWorkflowPage((page) => Math.max(1, page - 1))}>Previous</button><span>Page {Math.min(workflowPage, workflowPageCount)} of {workflowPageCount}</span><button disabled={workflowPage >= workflowPageCount} onClick={() => setWorkflowPage((page) => Math.min(workflowPageCount, page + 1))}>Next</button></div>}
       </section>
       {workflowProperty && <PropertyWorkflowModal
         property={workflowProperty}
@@ -3258,26 +3507,30 @@ function OwnerDashboard({
           <div className="panel-head">
             <div><h3>Recent findings</h3><p>Latest evidence-backed property intelligence findings</p></div><ShieldAlert size={18} className="panel-head-icon"/>
           </div>
-          <div className="owner-insight-list">{recentFindings.length?recentFindings.map((finding:any)=><button key={finding.id} onClick={()=>openPropertyById(finding.property_id)}><span className={`owner-severity ${finding.severity}`}>{pretty(finding.severity)}</span><span><strong>{finding.title}</strong><small>{finding.property_name} · {dateLabel(finding.created_at)}</small></span><ArrowUpRight size={13}/></button>):<OwnerEmpty message="No findings have been recorded."/>}</div>
+          <div className="owner-insight-list">{recentFindings.length?recentFindings.map((finding:any)=><button key={finding.id} onClick={()=>openPropertyById(finding.property_id)}><span className={`owner-severity ${finding.severity}`}>{pretty(finding.severity)}</span><span><strong>{String(finding.id).slice(0,8)} · {finding.title}</strong><small>{finding.property_name} · {finding.district||'District not recorded'} · {pretty(finding.code)} · {pretty(finding.reviewer_state)} · {finding.evidence_available?'Evidence available':'No linked approved evidence'} · {dateLabel(finding.created_at)}</small></span><ArrowUpRight size={13}/></button>):<OwnerEmpty message="No findings have been recorded."/>}</div>
+          {Number(findingsPagination.total)>Number(findingsPagination.pageSize)&&<div className="owner-feed-pagination"><span>{findingsPagination.total} findings · page {findingsPage} of {findingsPagination.totalPages}</span><button disabled={findingsPage<=1} onClick={()=>setFindingsPage(page=>Math.max(1,page-1))}>Previous</button><button disabled={findingsPage>=findingsPagination.totalPages} onClick={()=>setFindingsPage(page=>Math.min(findingsPagination.totalPages,page+1))}>Next</button></div>}
         </section>
         <section className="panel owner-insight-card">
           <div className="panel-head">
             <div><h3>Team workload</h3><p>Assignments and review load by active team member</p></div><UserCheck size={18} className="panel-head-icon"/>
           </div>
-          <div className="owner-workload-list">{teamWorkload.length?teamWorkload.map((member:any)=>{const assigned=Number(member.assigned_matters||0);const pending=Number(member.pending_reviews||0);const completed=Number(member.completed_tasks||0);const total=Math.max(assigned+completed,1);return <div key={member.user_uid}><span className="owner-workload-avatar">{String(member.name||member.email).slice(0,1).toUpperCase()}</span><span><strong>{member.name||member.email}</strong><small>{pretty(member.role)} · {assigned} assigned · {pending} pending · {completed} completed</small><i><b style={{width:`${Math.min(100,(assigned/Math.max(total,1))*100)}%`}}/></i></span></div>}):<OwnerEmpty message="No review-team assignments are available."/>}</div>
+          <div className="owner-workload-filters"><select value={workloadRole} onChange={event=>setWorkloadRole(event.target.value)} aria-label="Filter workload by role"><option value="all">All roles</option>{[...new Set(teamWorkload.map((m:any)=>m.role))].map((role:any)=><option key={role} value={role}>{pretty(role)}</option>)}</select><select value={workloadStatus} onChange={event=>setWorkloadStatus(event.target.value)} aria-label="Filter workload by status"><option value="all">All workload</option><option value="overdue">Has overdue tasks</option><option value="tasks">Has open tasks</option><option value="review">Awaiting review</option></select></div>
+          <div className="owner-workload-list">{teamWorkload.filter((m:any)=>(workloadRole==='all'||m.role===workloadRole)&&(workloadStatus==='all'||(workloadStatus==='overdue'?Number(m.overdue_task_count)>0:workloadStatus==='tasks'?Number(m.open_tasks)>0:Number(m.tasks_awaiting_review)>0))).length?teamWorkload.filter((m:any)=>(workloadRole==='all'||m.role===workloadRole)&&(workloadStatus==='all'||(workloadStatus==='overdue'?Number(m.overdue_task_count)>0:workloadStatus==='tasks'?Number(m.open_tasks)>0:Number(m.tasks_awaiting_review)>0))).map((member:any)=>{const assigned=Number(member.assigned_matters||0);const open=Number(member.open_tasks||0);const overdue=Number(member.overdue_task_count||0);const awaiting=Number(member.tasks_awaiting_review||0);const completed=Number(member.completed_task_count||0);const completion=Number(member.completion_pct||0);return <div key={member.user_uid}><span className="owner-workload-avatar">{String(member.name||member.email).slice(0,1).toUpperCase()}</span><span><strong>{member.name||member.email}</strong><small>{pretty(member.role)} · {assigned} assigned · {completed} completed · {open} pending · {overdue} overdue · {awaiting} awaiting review · {completion}% task completion</small><i><b style={{width:`${completion}%`}}/></i></span></div>}):<OwnerEmpty message="No team members match these workload filters."/>}</div>
         </section>
         <section className="panel owner-insight-card">
           <div className="panel-head"><div><h3>Reports awaiting action</h3><p>Review and submission queue</p></div><FileText size={18} className="panel-head-icon"/></div>
           <div className="owner-insight-list">{reports.length?reports.map((report:any)=><button key={report.property_id} onClick={()=>openPropertyById(report.property_id)}><span className="owner-report-icon"><FileCheck2 size={14}/></span><span><strong>{report.property_name}</strong><small>{report.action} · {memberName(report.assigned_owner)} · {report.due_date?dateLabel(report.due_date):'No due date'}</small></span><ArrowUpRight size={13}/></button>):<OwnerEmpty message="No reports are awaiting action."/>}</div>
         </section>
-        <section className="panel owner-insight-card">
-          <div className="panel-head"><div><h3>Evidence source status</h3><p>Verification state for recorded workspace evidence</p></div><Activity size={18} className="panel-head-icon"/></div>
-          <div className="owner-source-status"><div><span>Connected sources</span><strong>{Number(evidenceSources.connected_sources||0)}</strong></div><div><span>Verification completed</span><strong className="success">{Number(evidenceSources.verification_completed||0)}</strong></div><div><span>Verification pending</span><strong className="warning">{Number(evidenceSources.verification_pending||0)}</strong></div><div><span>Failed verification</span><strong className="danger">{Number(evidenceSources.failed_verification||0)}</strong></div><p>Last synchronization: {evidenceSources.last_synchronization?dateLabel(evidenceSources.last_synchronization):'No synchronized source recorded'}</p></div>
+        <section className="panel owner-insight-card owner-document-review-card">
+          <div className="panel-head"><div><h3>Documents requiring review</h3><p>Uploaded evidence awaiting processing or human review</p></div><FileSearch size={18} className="panel-head-icon"/></div>
+          <button className="owner-review-total" onClick={()=>onNavigate("all-documents")}><span>Pending review</span><strong>{Number(documentCategories.pending_review)||0}</strong><ArrowUpRight size={15}/></button>
+          <div className="owner-review-category-list"><button onClick={()=>onNavigate("all-documents")}><span>Title deeds</span><strong>{Number(documentCategories.pending_title_deeds)||0}</strong></button><button onClick={()=>onNavigate("all-documents")}><span>Encumbrance certificates</span><strong>{Number(documentCategories.pending_encumbrance_certificates)||0}</strong></button><button onClick={()=>onNavigate("all-documents")}><span>Survey / revenue records</span><strong>{Number(documentCategories.pending_survey_revenue_records)||0}</strong></button><button onClick={()=>onNavigate("all-documents")}><span>Other documents</span><strong>{Number(documentCategories.pending_other_documents)||0}</strong></button></div>
         </section>
       </div>
       <section className="panel owner-activity-panel">
         <div className="panel-head"><div><h3>Recent workspace activity</h3><p>Matter, evidence, review and report events</p></div><Activity size={18} className="panel-head-icon"/></div>
-        <div className="owner-activity-list">{recentActivity.length?recentActivity.map((event:any)=><button key={event.id} onClick={()=>event.entity_type==='property'&&openPropertyById(event.entity_id)}><span className="owner-activity-dot"/><time>{dateLabel(event.created_at)}</time><span><strong>{pretty(event.action)}</strong><small>{event.actor_name||event.actor_uid}</small></span>{event.entity_type==='property'&&<ArrowUpRight size={13}/>}</button>):<OwnerEmpty message="No recent workspace activity is available."/>}</div>
+        <div className="owner-activity-list">{recentActivity.length?recentActivity.map((event:any)=><button key={event.id} onClick={()=>event.property_id&&openPropertyById(event.property_id)}><span className="owner-activity-dot"/><time>{dateLabel(event.created_at)}</time><span><strong>{pretty(event.action)}</strong><small>{event.actor_name||event.actor_uid}{event.property_name?` · ${event.property_name}`:''}{event.district?` · ${event.district}`:''}</small></span>{event.property_id&&<ArrowUpRight size={13}/>}</button>):<OwnerEmpty message="No recent workspace activity is available."/>}</div>
+        {Number(activityPagination.total)>Number(activityPagination.pageSize)&&<div className="owner-feed-pagination"><span>{activityPagination.total} events · page {activityPage} of {activityPagination.totalPages}</span><button disabled={activityPage<=1} onClick={()=>setActivityPage(page=>Math.max(1,page-1))}>Previous</button><button disabled={activityPage>=activityPagination.totalPages} onClick={()=>setActivityPage(page=>Math.min(activityPagination.totalPages,page+1))}>Next</button></div>}
       </section>
       <div className="owner-boundary"><Scale size={17}/><div><strong>Operational oversight and legal responsibility remain separate</strong><p>The Workspace Owner coordinates delivery. Final legal conclusions remain the responsibility of the assigned qualified Legal Reviewer.</p></div></div>
     </div>
