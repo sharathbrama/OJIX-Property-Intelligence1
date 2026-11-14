@@ -9,6 +9,7 @@ Updated 14 November 2026. This checklist reflects repository inspection and the 
 - [x] Migration runner refuses implicit baselining, checksum drift, ordering gaps, and unsafe automatic replay of historical migrations 026/034.
 - [x] Forward correction 035 is present to repair only the reserved Super Admin membership and reconcile the Viewer assignment column/index.
 - [x] Migration 036 adds registration onboarding state idempotently for existing schemas; canonical schema includes the same column.
+- [x] Migrations 037–038 add workspace branding and explicit legal sign-off metadata; both were applied to the isolated test database after canonical baseline `canonical-v1`.
 - [ ] Verify final tables, columns, indexes, constraints, and roles against the selected staging database; a full catalog comparison is still pending.
 - [ ] Run a backup restore rehearsal against an isolated target.
 - [ ] Reconcile the actual target schema/history before applying migrations; no staging DB was available in this work.
@@ -70,8 +71,8 @@ Updated 14 November 2026. This checklist reflects repository inspection and the 
 - `npm run typecheck`: passed.
 - `npm run build`: passed. Vite emitted a non-blocking large JavaScript chunk warning (about 1.87 MB before gzip).
 - Focused tests: 31/31 passed across migration, RBAC, storage and organization onboarding test files.
-- Managed full API suite: **499 passed, 0 failed** via `npm test -w apps/api` with explicit `TEST_DATABASE_URL` pointing to the isolated loopback MariaDB test database. The managed runner starts the API, checks readiness, runs all test files serially, and tears it down; it cannot fall back to a developer database.
-- Canonical schema and synthetic fixtures loaded successfully. Migration runner reported canonical baseline `canonical-v1`, IDs 004–036 recorded applied. This did not replay all historical migration SQL. Migration 036 upgrade from a prior-version schema and restore rehearsal remain unchecked.
+- Managed full API suite: **522 passed, 0 failed** via `npm test -w apps/api` with explicit `TEST_DATABASE_URL` pointing to the isolated loopback MariaDB test database. The managed runner starts the API, checks readiness, runs all test files serially, and tears it down; it cannot fall back to a developer database.
+- Canonical schema and synthetic fixtures loaded successfully. Migration runner reported canonical baseline `canonical-v1`, then migrations 037–038 were applied to the isolated database. This did not replay all historical migration SQL. Prior-version upgrade rehearsal, full catalog comparison, and restore rehearsal remain unchecked.
 - Local Chromium renderer produced readable PDF text. No staging deployment, external SMTP OTP, OCR worker sample, or full browser workflow was verified.
 - Python worker unit tests could not start in the local Python environment because the declared `mysql-connector-python` dependency is not installed (`ModuleNotFoundError: mysql`). No OCR sample was run.
 - Earlier Docker/MySQL initialization attempts failed, but an isolated MariaDB 10.4 instance was subsequently initialized in `/tmp`; no existing XAMPP/OJIX database was used.

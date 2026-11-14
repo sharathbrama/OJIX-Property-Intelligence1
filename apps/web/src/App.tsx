@@ -375,7 +375,6 @@ const PAGE_PERMISSIONS: Partial<Record<AppPage,string>> = {
 };
 const canAccessPage = (user: UserAccount, page: AppPage) => {
   if(page==="super-admin")return Boolean(user.isSuperAdmin);
-  if(page==="workflow-guide")return user.role!=="owner";
   const required=PAGE_PERMISSIONS[page];
   if(user.permissions?.length&&required)return user.permissions.includes(required);
   return ROLE_PAGES[user.role]?.includes(page)??false;

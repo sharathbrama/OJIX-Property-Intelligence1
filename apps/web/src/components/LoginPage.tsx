@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, X, RotateCcw, Crown, Settings2, Scale, SearchCheck, Files, BriefcaseBusiness, Headphones, Database, Mail, Smartphone } from 'lucide-react';
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
 import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
-import { SampleDemoWorkspace } from './SampleDemoWorkspace';
 import type { UserAccount, UserRole } from '../types';
 
 interface LoginPageProps {
@@ -49,9 +48,9 @@ const sanitizePersonNameInput=(value:string)=>value.replace(/[^\p{L} '\-]/gu,'')
 const formatRegistrationPhone=(countryCode:string,value:string)=>{const digits=value.replace(/\D/g,'').slice(0,countryCode==='+91'||countryCode==='+1'?10:15);if(countryCode==='+91')return digits.replace(/(\d{5})(?=\d)/,'$1 ');if(countryCode==='+1')return digits.replace(/(\d{3})(\d{0,3})(\d{0,4})/,(_,a,b,c)=>[a,b,c].filter(Boolean).join(' '));return digits.replace(/(\d{3})(?=\d)/g,'$1 ').trim();};
 
 export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
-  const [mode, setMode] = useState<'landing'|'demo'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
+  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
     const path = window.location.pathname.replace(/\/$/, '');
-    return path === '/demo' ? 'demo' : path === '/register' ? 'register' : expectedRole ? 'login' : 'landing';
+    return path === '/register' ? 'register' : expectedRole ? 'login' : 'landing';
   });
   const [loginCardOpen, setLoginCardOpen] = useState(() => Boolean(expectedRole) || window.location.pathname.startsWith('/login'));
   const [loginModalClosing, setLoginModalClosing] = useState(false);
@@ -205,7 +204,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       const path = window.location.pathname.replace(/\/$/, '');
       const isRoleLogin = Boolean(expectedRole) && (/^\/login\/(super-admin|owner|admin|lawyer|analyst|operations|consultant|support|data-steward|viewer)$/.test(path)
         || /^\/(super-admin|owner|admin|lawyer|analyst|operations|consultant|support|data-steward|viewer)\/dashboard$/.test(path));
-      const next = path === '/demo' ? 'demo' : path === '/register' ? 'register' : isRoleLogin ? 'login' : 'landing';
+      const next = path === '/register' ? 'register' : isRoleLogin ? 'login' : 'landing';
       setLoginCardOpen(Boolean(path.startsWith('/login/')) || isRoleLogin);
       setMode(current => current === 'login-otp' || current === 'otp' || current === 'verified' ? current : next);
     };
@@ -496,7 +495,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     <p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p>
   </section></main>;
 
-  if (mode !== 'login' && mode !== 'landing' && mode !== 'demo') {
+  if (mode !== 'login' && mode !== 'landing') {
     const isOtp = mode === 'otp';
     const isVerified = mode === 'verified';
     return (
@@ -537,10 +536,8 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const isOwner = currentAccount?.role === 'owner';
   const SelectedLoginRoleIcon = loginRoleIcons[selectedRole as keyof typeof loginRoleIcons] || UserCheck;
 
-  if (mode === 'demo') return <SampleDemoWorkspace onBack={()=>navigateAuth('landing')} onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')}/>;
-
   if (mode === 'landing') return <>
-    <PropertyIntelligenceLanding onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')} onTryDemo={()=>{setLoginCardOpen(false);setMode('demo');setError('');setOtp('');if(window.location.pathname!=='/demo')window.history.pushState({auth:'demo'},'','/demo');}}/>
+    <PropertyIntelligenceLanding onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')}/>
     {loginCardOpen&&<div className={`landing-login-backdrop${loginModalClosing?' is-closing':''}`} onMouseDown={event=>{if(event.target===event.currentTarget)closeLandingLogin();}}>
       <section className="landing-login-modal" role="dialog" aria-modal="true" aria-labelledby="landing-login-title">
         <header className="landing-login-header"><span>Secure OJIX workspace access</span><button ref={loginModalCloseRef} type="button" aria-label="Close login" onClick={closeLandingLogin}><X size={20}/></button></header>
