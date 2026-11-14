@@ -1,0 +1,71 @@
+# Preparation template only. Replace every REPLACE_* placeholder after approval.
+# Cloud Run worker pools are persistent background compute; applying this YAML
+# creates a paid resource and has intentionally not been done.
+apiVersion: run.googleapis.com/v1
+kind: WorkerPool
+metadata:
+  name: ojix-ocr-worker
+  labels:
+    cloud.googleapis.com/location: asia-south1
+  annotations:
+    run.googleapis.com/description: OJIX persistent Tesseract OCR queue worker
+    run.googleapis.com/manualInstanceCount: "1"
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/network-interfaces: '[{"network":"REPLACE_WITH_VPC_NETWORK_NAME","subnetwork":"REPLACE_WITH_VPC_SUBNET_NAME"}]'
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+    spec:
+      serviceAccountName: REPLACE_WITH_OCR_WORKER_RUNTIME_SERVICE_ACCOUNT
+      containers:
+        - name: ocr-worker
+          image: REPLACE_WITH_REGION_DOCKER_PKG_DEV_PROJECT_REPOSITORY_OJIX_OCR_WORKER_TAG
+          resources:
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ojix-staging-database-url
+                  key: latest
+            - name: DATABASE_SSL
+              value: "true"
+            - name: DATABASE_SSL_CA
+              value: /var/run/secrets/mysql/server-ca.pem
+            - name: OCR_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ojix-staging-ocr-worker-token
+                  key: latest
+            - name: OCR_API_INTERNAL_URL
+              value: REPLACE_WITH_CLOUD_RUN_API_HTTPS_URL
+            - name: OCR_WORKER_POLL_SECONDS
+              value: "3"
+            - name: OCR_RETRY_DELAY_SECONDS
+              value: "30"
+            - name: OCR_RETRY_MAX_DELAY_SECONDS
+              value: "3600"
+            - name: OCR_JOB_LEASE_SECONDS
+              value: "1800"
+            - name: OCR_HEARTBEAT_SECONDS
+              value: "30"
+            - name: OCR_LANGUAGES
+              value: kan+eng
+            - name: OCR_MAX_PAGES
+              value: "5"
+            - name: OCR_TIMEOUT_MS
+              value: "120000"
+          volumeMounts:
+            - name: mysql-ca
+              mountPath: /var/run/secrets/mysql
+              readOnly: true
+      volumes:
+        - name: mysql-ca
+          secret:
+            secretName: REPLACE_WITH_CLOUD_SQL_CA_SECRET_NAME
+            items:
+              - key: latest
+                path: server-ca.pem

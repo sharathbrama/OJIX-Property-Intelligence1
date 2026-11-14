@@ -1,2 +1,2 @@
-// Local app routes use the same origin. Vite and Nginx proxy API requests.
-export const API_BASE_URL = '';
+// Same-origin requests are routed to Express by local proxies or Firebase Hosting.
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || '';

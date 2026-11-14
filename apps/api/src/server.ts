@@ -52,7 +52,11 @@ import {
 import { legalResearchEngine, type StatutoryProvision } from './legal-research-engine.js';
 import { sourceRegistryEngine, type RegistryName, type RegistryVerificationResult, type DirectRegistryQueryParams } from './source-registry-engine.js';
 import { retrieveRtc, rtcSearchSchema } from './rtc-retrieval-service.js';
-import { buildTenantObjectKey, createDocumentStorage } from './document-storage.js';
+import { buildTenantObjectKey, createDocumentStorage, isRemoteStorageKey, storageProviderForKey } from './document-storage.js';
+import { documentFileAccess } from './document-access.js';
+import { provisionOrganizationOwner } from './organization-onboarding.js';
+import { renderReportPdf } from './report-pdf.js';
+import { isCorsOriginAllowed } from './cors-policy.js';
 import { ocrAccess, type OcrRole } from './ocr-access.js';
 import { DEFAULT_ROLE_PERMISSIONS, hasPermission, permissionForRequest, RBAC_ACTIONS, RBAC_ROLES } from './rbac.js';
 
@@ -141,7 +145,10 @@ const mysqlPool = process.env.DATABASE_URL
           }
         : undefined,
       waitForConnections: true,
-      connectionLimit: 10,
+      connectionLimit: (() => {
+        const configured = Number(process.env.DB_POOL_LIMIT || 10);
+        return Number.isInteger(configured) && configured >= 1 && configured <= 10 ? configured : 10;
+      })(),
       queueLimit: 0,
       connectTimeout: 5000,
     })
@@ -205,7 +212,7 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentS
 const allowedCorsOrigins = corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedCorsOrigins.includes(origin)) return callback(null, true);
+    if (isCorsOriginAllowed(origin, allowedCorsOrigins)) return callback(null, true);
     return callback(new Error('Origin is not allowed by CORS policy.'));
   },
   credentials: true,
@@ -648,7 +655,7 @@ function clientSafeReport(row:any) {
     (original.titleTimeline||[]).filter((event:any)=>event.status!=='verified').length;
   const common={...original,findings:verifiedFindings,titleTimeline,pendingReviewCount,approvalStatus:'approved'};
   const clientSnapshot={...common,documents:(original.documents||[]).filter((d:any)=>d.review_status==='approved'),gisFindings:(original.gisFindings||[]).filter((f:any)=>f.reviewer_state==='approved'),reportSections:consultantReportSections(common,row.report_type)};
-  return {reportId:row.id,version:row.version_number,reportType:row.report_type,title:row.title,approvalStatus:row.approval_status,reviewDecision:row.review_decision,reviewRationale:row.review_rationale,dataCheckedAt:row.data_checked_at,createdAt:row.created_at,snapshotSha256:row.snapshot_sha256,snapshot:clientSnapshot};
+  return {reportId:row.id,version:row.version_number,reportType:row.report_type,title:row.title,approvalStatus:row.approval_status,reviewDecision:row.review_decision,reviewRationale:row.review_rationale,reviewerName:row.reviewer_name||'Authorized reviewer',reviewedAt:row.reviewed_at,dataCheckedAt:row.data_checked_at,createdAt:row.created_at,snapshotSha256:row.snapshot_sha256,snapshot:clientSnapshot};
 }
 function consultantReportSections(snapshot:any,type:string) {
   const approvedFindings=(snapshot.findings||[]).filter((f:any)=>f.reviewer_state==='approved');
@@ -686,7 +693,7 @@ function consultantWordHtml(report:any) {
   const snapshot=report.snapshot;const findings=snapshot.findings||[];
   const rows=findings.map((f:any)=>`<tr><td>${escapeReportHtml(f.id||f.code)}</td><td>${escapeReportHtml(f.title)}</td><td>${escapeReportHtml(f.severity)}</td><td>${escapeReportHtml(f.reviewer_state)}</td><td>${escapeReportHtml(f.next_action)}</td><td>${(f.evidence_references||[]).map((e:any)=>escapeReportHtml(e.filename)).join(', ')}</td></tr>`).join('');
   const sections=Object.entries(snapshot.reportSections||{}).map(([name,value])=>`<h2>${escapeReportHtml(name.replace(/_/g,' '))}</h2><pre>${escapeReportHtml(JSON.stringify(value,null,2))}</pre>`).join('');
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeReportHtml(report.title)}</title><style>body{font:11pt Calibri,Arial;color:#182036;margin:34px;line-height:1.45}h1{font-size:22pt;color:#352267}h2{font-size:14pt;border-bottom:1px solid #d9d5e7;padding-bottom:5px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cfd3dd;padding:6px;text-align:left;vertical-align:top}th{background:#f0edf8}.notice{background:#f8f5ff;padding:12px;border-left:3px solid #6848c6}pre{font:9pt Calibri,Arial;white-space:pre-wrap;overflow-wrap:anywhere;background:#faf9fd;padding:9px;border:1px solid #eeedf4}</style></head><body><h1>${escapeReportHtml(report.title)}</h1><p>Version ${report.version} · Data checked ${escapeReportHtml(report.dataCheckedAt)} · Approval: Approved</p><h2>Property profile</h2><p>${escapeReportHtml(snapshot.property?.name)} · ${escapeReportHtml(snapshot.property?.application_number)} · ${escapeReportHtml(snapshot.property?.village)} · Survey ${escapeReportHtml(snapshot.property?.survey_number)}</p>${sections}<h2>Approved issue list</h2><table><thead><tr><th>Issue ID</th><th>Issue</th><th>Severity</th><th>Review state</th><th>Next action</th><th>Evidence references</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No reviewer-approved findings in this snapshot.</td></tr>'}</tbody></table><h2>Questions and limitations</h2><div class="notice"><p>Items awaiting reviewer confirmation: ${Number(snapshot.pendingReviewCount||0)}</p>${(snapshot.questions||[]).map((q:string)=>`<p>${escapeReportHtml(q)}</p>`).join('')}${(snapshot.limitations||[]).map((q:string)=>`<p>${escapeReportHtml(q)}</p>`).join('')}</div><p>Snapshot SHA-256: ${escapeReportHtml(report.snapshotSha256)}</p></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeReportHtml(report.title)}</title><style>@page{size:A4;margin:18mm 16mm 20mm}body{font:11pt Calibri,Arial,sans-serif;color:#182036;margin:0;line-height:1.45}h1{font-size:22pt;color:#352267;break-after:avoid}h2{font-size:14pt;border-bottom:1px solid #d9d5e7;padding-bottom:5px;break-after:avoid}table{width:100%;border-collapse:collapse;page-break-inside:auto}tr{page-break-inside:avoid}th,td{border:1px solid #cfd3dd;padding:6px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#f0edf8}.notice{background:#f8f5ff;padding:12px;border-left:3px solid #6848c6}pre{font:9pt Calibri,Arial,sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;background:#faf9fd;padding:9px;border:1px solid #eeedf4;page-break-inside:auto}</style></head><body><h1>${escapeReportHtml(report.title)}</h1><p>Version ${report.version} · Data checked ${escapeReportHtml(report.dataCheckedAt)} · Approval: Approved</p><p>Reviewed by ${escapeReportHtml(report.reviewerName)} on ${escapeReportHtml(report.reviewedAt)}. Decision: ${escapeReportHtml(report.reviewDecision)}. ${escapeReportHtml(report.reviewRationale)}</p><h2>Property profile</h2><p>${escapeReportHtml(snapshot.property?.name)} · ${escapeReportHtml(snapshot.property?.application_number)} · ${escapeReportHtml(snapshot.property?.village)} · Survey ${escapeReportHtml(snapshot.property?.survey_number)}</p>${sections}<h2>Approved issue list</h2><table><thead><tr><th>Issue ID</th><th>Issue</th><th>Severity</th><th>Review state</th><th>Next action</th><th>Evidence references</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No reviewer-approved findings in this snapshot.</td></tr>'}</tbody></table><h2>Questions and limitations</h2><div class="notice"><p>Items awaiting reviewer confirmation: ${Number(snapshot.pendingReviewCount||0)}</p>${(snapshot.questions||[]).map((q:string)=>`<p>${escapeReportHtml(q)}</p>`).join('')}${(snapshot.limitations||[]).map((q:string)=>`<p>${escapeReportHtml(q)}</p>`).join('')}</div><p>Snapshot SHA-256: ${escapeReportHtml(report.snapshotSha256)}</p></body></html>`;
 }
 app.get('/api/shared-reports/:token',asyncRoute(async(req,res)=>{
   if(!pool)return res.status(503).json({error:'Report storage is unavailable.'});
@@ -738,7 +745,24 @@ app.post('/api/consultant/reports/:id/review',authGuard,legalReviewerGuard,async
   const parsed=z.object({decision:z.enum(['approve','reject']),rationale:z.string().trim().min(5).max(2000)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Choose a review decision and provide a rationale.'});const scope=consultantReportScope(req.user);const report=await pool!.query(`SELECT r.* FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!report.rowCount)return res.status(404).json({error:'Report not found.'});if(report.rows[0].approval_status!=='submitted')return res.status(409).json({error:'Only submitted reports can be reviewed.'});const decision=parsed.data.decision,status=decision==='approve'?'approved':'rejected';await pool!.query('UPDATE consultant_report_versions SET approval_status=?,review_decision=?,review_rationale=?,reviewed_by_uid=?,reviewed_at=NOW(6) WHERE id=? AND tenant_id=?',[status,decision,parsed.data.rationale,req.user?.uid,req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'legal.report_review_decision','consultant_report',req.params.id,{decision,rationale:parsed.data.rationale,version:report.rows[0].version_number});res.json({success:true,approvalStatus:status});
 }));
 app.get('/api/consultant/reports/:id/export',authGuard,asyncRoute(async(req,res)=>{
-  const scope=consultantReportScope(req.user);const rows=await pool!.query(`SELECT r.* FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!rows.rowCount)return res.status(404).json({error:'Report not found.'});const report=rows.rows[0];if(report.approval_status!=='approved')return res.status(409).json({error:'Only reviewer-approved report versions can be exported.'});if(req.query.format==='pdf')return res.status(501).json({error:'PDF export is not configured. Word-editable and JSON exports are available.'});const actual=crypto.createHash('sha256').update(JSON.stringify(typeof report.snapshot==='string'?JSON.parse(report.snapshot):report.snapshot)).digest('hex');if(actual!==report.snapshot_sha256)return res.status(409).json({error:'Report snapshot integrity check failed.'});const safe=clientSafeReport(report),format=req.query.format==='word'?'word':'json';await pool!.query("INSERT INTO workspace_export_events (id,tenant_id,actor_uid,resource_type,resource_id,export_format,result,details) VALUES (?,?,?,?,?,?,'success',?)",[crypto.randomUUID(),req.user?.tenantId,req.user?.uid||'unknown','consultant_report',report.id,format,JSON.stringify({version:report.version_number,sha256:report.snapshot_sha256})]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_exported','consultant_report',report.id,{version:report.version_number,format,sha256:report.snapshot_sha256});if(format==='word'){res.setHeader('Content-Type','application/msword; charset=utf-8');res.setHeader('Content-Disposition',`attachment; filename="ojix-report-v${report.version_number}.doc"`);return res.send(consultantWordHtml(safe));}res.setHeader('Content-Disposition',`attachment; filename="ojix-report-v${report.version_number}.json"`);res.json(safe);
+  const scope=consultantReportScope(req.user);const rows=await pool!.query(`SELECT r.*,COALESCE(u.full_name,m.email,r.reviewed_by_uid) AS reviewer_name FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id LEFT JOIN org_memberships m ON m.organization_id=r.tenant_id AND m.user_uid=r.reviewed_by_uid LEFT JOIN user_accounts u ON u.id=r.reviewed_by_uid WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);
+  if(!rows.rowCount)return res.status(404).json({error:'Report not found.'});
+  const report=rows.rows[0];
+  if(report.approval_status!=='approved')return res.status(409).json({error:'Only reviewer-approved report versions can be exported.'});
+  const rawSnapshot=typeof report.snapshot==='string'?JSON.parse(report.snapshot):report.snapshot;
+  const actual=crypto.createHash('sha256').update(JSON.stringify(rawSnapshot)).digest('hex');
+  if(actual!==report.snapshot_sha256)return res.status(409).json({error:'Report snapshot integrity check failed.'});
+  const safe=clientSafeReport(report),format=req.query.format==='pdf'?'pdf':req.query.format==='word'?'word':'json';
+  let pdf:Buffer|undefined;
+  if(format==='pdf') {
+    try { pdf=await renderReportPdf(consultantWordHtml(safe)); }
+    catch(error) { console.error('Report PDF rendering failed.',error); return res.status(503).json({error:'PDF rendering is temporarily unavailable. No export was recorded.'}); }
+  }
+  await pool!.query("INSERT INTO workspace_export_events (id,tenant_id,actor_uid,resource_type,resource_id,export_format,result,details) VALUES (?,?,?,?,?,?,'success',?)",[crypto.randomUUID(),req.user?.tenantId,req.user?.uid||'unknown','consultant_report',report.id,format,JSON.stringify({version:report.version_number,sha256:report.snapshot_sha256})]);
+  await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_exported','consultant_report',report.id,{version:report.version_number,format,sha256:report.snapshot_sha256});
+  if(format==='pdf'){res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Length',String(pdf!.length));res.setHeader('Cache-Control','private, no-store');res.setHeader('Content-Disposition',`attachment; filename="ojix-report-v${report.version_number}.pdf"`);return res.send(pdf);}
+  if(format==='word'){res.setHeader('Content-Type','application/msword; charset=utf-8');res.setHeader('Content-Disposition',`attachment; filename="ojix-report-v${report.version_number}.doc"`);return res.send(consultantWordHtml(safe));}
+  res.setHeader('Content-Disposition',`attachment; filename="ojix-report-v${report.version_number}.json"`);res.json(safe);
 }));
 app.post('/api/consultant/reports/:id/share',authGuard,asyncRoute(async(req,res)=>{
   if(!['consultant','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Read-only report sharing is not available for this role.'});const scope=consultantReportScope(req.user);const rows=await pool!.query(`SELECT r.* FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!rows.rowCount)return res.status(404).json({error:'Report not found.'});if(rows.rows[0].approval_status!=='approved')return res.status(409).json({error:'Only approved reports can be shared.'});const token=crypto.randomBytes(32).toString('hex'),tokenHash=crypto.createHash('sha256').update(token).digest('hex'),id=crypto.randomUUID();const expiry=Number(req.body?.expiresInDays||30);if(!Number.isInteger(expiry)||expiry<1||expiry>365)return res.status(400).json({error:'Share expiry must be from 1 to 365 days.'});await pool!.query('INSERT INTO consultant_report_shares (id,tenant_id,report_id,token_hash,expires_at,created_by_uid) VALUES (?,?,?,?,DATE_ADD(NOW(6),INTERVAL ? DAY),?)',[id,req.user?.tenantId,req.params.id,tokenHash,expiry,req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_shared','consultant_report',req.params.id,{shareId:id,version:rows.rows[0].version_number,expiresInDays:expiry});res.status(201).json({id,url:`/shared/reports/${token}`,expiresInDays:expiry});
@@ -1016,6 +1040,7 @@ app.get('/api/auth/dummy-accounts', (_req, res) => {
 
 const registrationNameSchema=z.string().trim().min(2,'Name must contain at least 2 characters.').max(50,'Name must be 50 characters or fewer.').regex(/^[\p{L}]+(?:[ '\-][\p{L}]+)*$/u,'Use letters, spaces, hyphens or apostrophes only.');
 const registrationSchema = z.object({
+  organizationName: z.string().trim().min(2, 'Organization name must contain at least 2 characters.').max(160, 'Organization name must be 160 characters or fewer.'),
   firstName: registrationNameSchema,
   middleName: z.union([z.literal(''),registrationNameSchema]).optional().default(''),
   lastName: registrationNameSchema,
@@ -1036,7 +1061,7 @@ app.post('/api/auth/register/request-otp', loginOtpRequestRateLimit, asyncRoute(
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed = registrationSchema.safeParse(req.body);
   if (!parsed.success) {const fieldErrors=parsed.error.issues.reduce<Record<string,string>>((errors,issue)=>{const field=String(issue.path[0]||'form');if(!errors[field])errors[field]=issue.message;return errors;},{});return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration details.',fieldErrors });}
-  const { firstName, middleName, lastName, gender, countryCode, mobileNumber, securityQuestion, securityAnswer, email, password } = parsed.data;
+  const { organizationName, firstName, middleName, lastName, gender, countryCode, mobileNumber, securityQuestion, securityAnswer, email, password } = parsed.data;
   const phoneFormats: Record<string, RegExp> = {
     '+91': /^[6-9]\d{9}$/,
     '+1': /^[2-9]\d{2}[2-9]\d{6}$/,
@@ -1063,9 +1088,9 @@ app.post('/api/auth/register/request-otp', loginOtpRequestRateLimit, asyncRoute(
   const passwordHash = hashPassword(password);
   const securityAnswerHash = hashPassword(securityAnswer.trim().toLocaleLowerCase('en'));
   if (existing.rowCount) {
-    await pool.query('UPDATE user_accounts SET full_name=?, middle_name=?, gender=?, phone_e164=?, security_question=?, security_answer_hash=?, password_hash=?, status=\'pending\' WHERE id=?', [name, middleName || null, gender, phoneE164, securityQuestion, securityAnswerHash, passwordHash, userId]);
+    await pool.query('UPDATE user_accounts SET full_name=?, onboarding_organization_name=?, middle_name=?, gender=?, phone_e164=?, security_question=?, security_answer_hash=?, password_hash=?, status=\'pending\' WHERE id=?', [name, organizationName, middleName || null, gender, phoneE164, securityQuestion, securityAnswerHash, passwordHash, userId]);
   } else {
-    await pool.query('INSERT INTO user_accounts (id,email,full_name,middle_name,gender,phone_e164,security_question,security_answer_hash,password_hash,email_verified,status) VALUES (?,?,?,?,?,?,?,?,?,FALSE,\'pending\')', [userId, email, name, middleName || null, gender, phoneE164, securityQuestion, securityAnswerHash, passwordHash]);
+    await pool.query('INSERT INTO user_accounts (id,email,full_name,onboarding_organization_name,middle_name,gender,phone_e164,security_question,security_answer_hash,password_hash,email_verified,status) VALUES (?,?,?,?,?,?,?,?,?,?,FALSE,\'pending\')', [userId, email, name, organizationName, middleName || null, gender, phoneE164, securityQuestion, securityAnswerHash, passwordHash]);
   }
   await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE email=? AND purpose=\'registration\' AND consumed_at IS NULL', [email]);
   const otp = generateOtp();
@@ -1081,7 +1106,7 @@ app.post('/api/auth/register/request-otp', loginOtpRequestRateLimit, asyncRoute(
     await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?',[challengeId]);
     throw error;
   }
-  await audit(userId, DEFAULT_ORGANIZATION_ID, 'auth.registration_otp_requested', 'user_account', userId, { email });
+  await audit(userId, undefined, 'auth.registration_otp_requested', 'user_account', userId, { email });
   res.status(201).json({
     challengeId,
     email,
@@ -1109,14 +1134,27 @@ app.post('/api/auth/register/verify-otp', asyncRoute(async (req, res) => {
     await pool.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=? AND attempts<5 AND consumed_at IS NULL AND expires_at>NOW(6)', [challengeId]);
     return res.status(400).json({ error: 'Incorrect OTP. Please check the six-digit code.' });
   }
-  const account = await pool.query('SELECT id, full_name FROM user_accounts WHERE email=? LIMIT 1', [email]);
+  const account = await pool.query('SELECT id, full_name, onboarding_organization_name FROM user_accounts WHERE email=? LIMIT 1', [email]);
   if (!account.rowCount) return res.status(400).json({ error: 'Registration account was not found.' });
-  const consumed=await pool.query("UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=? AND email=? AND purpose='registration' AND consumed_at IS NULL AND attempts<5 AND expires_at>NOW(6)",[challengeId,email]);
-  if(!consumed.rowCount)return res.status(400).json({error:'This verification request is no longer valid.'});
-  await pool.query('UPDATE user_accounts SET email_verified=TRUE,status=\'active\' WHERE id=?', [account.rows[0].id]);
-  await pool.query('INSERT IGNORE INTO org_memberships (id,organization_id,user_uid,email,role) VALUES (?,?,?,?,\'viewer\')', [crypto.randomUUID(), DEFAULT_ORGANIZATION_ID, account.rows[0].id, email]);
-  await audit(account.rows[0].id, DEFAULT_ORGANIZATION_ID, 'auth.registration_verified', 'user_account', account.rows[0].id, { email, assignedRole: 'viewer' });
-  res.json({ success: true, message: 'Email verified. Your read-only workspace account is ready; please sign in.' });
+  const organizationName=String(account.rows[0].onboarding_organization_name||'').trim();
+  if(organizationName.length<2)return res.status(409).json({error:'Organization name is missing. Restart registration with an organization name.'});
+  const connection=await pool.getConnection();
+  let organizationId='';
+  try {
+    await connection.beginTransaction();
+    const consumed=await connection.query("UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=? AND email=? AND purpose='registration' AND consumed_at IS NULL AND attempts<5 AND expires_at>NOW(6)",[challengeId,email]);
+    if(!consumed.rowCount){await connection.rollback();return res.status(400).json({error:'This verification request is no longer valid.'});}
+    const alreadyMember=await connection.query("SELECT organization_id FROM org_memberships WHERE user_uid=? AND status='active' LIMIT 1",[account.rows[0].id]);
+    if(alreadyMember.rowCount){await connection.rollback();return res.status(409).json({error:'This account already belongs to a workspace. Please sign in or accept an invitation.'});}
+    organizationId=await provisionOrganizationOwner(connection,{name:organizationName,email,userUid:String(account.rows[0].id)});
+    await connection.query("UPDATE user_accounts SET email_verified=TRUE,status='active' WHERE id=?",[account.rows[0].id]);
+    await connection.query('INSERT INTO audit_events (id,actor_uid,tenant_id,action,entity_type,entity_id,details) VALUES (?,?,?,?,?,?,?)',[crypto.randomUUID(),account.rows[0].id,organizationId,'auth.registration_verified','user_account',account.rows[0].id,JSON.stringify({email,assignedRole:'owner'})]);
+    await connection.commit();
+  } catch(error) {
+    await connection.rollback();
+    throw error;
+  } finally { connection.release(); }
+  res.json({ success: true, organizationId, role:'owner', message: 'Email verified. Your organization workspace is ready; please sign in.' });
 }));
 
 const passwordResetRoleSchema = z.enum(['super-admin','owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']);
@@ -1466,7 +1504,7 @@ app.patch('/api/rtc/:id/confirmation', authGuard, rtcLookupGuard, asyncRoute(asy
 
 app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured. Start MariaDB and set DATABASE_URL.' });
-  if (_req.user?.role === 'support') { const configured=await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[_req.user.tenantId]);return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:documentStorage.provider==='supabase'?'supabase_private':'local_development', ocr:configured.rowCount&&process.env.OCR_WORKER_TOKEN?'google_document_ai_configured':'not_configured', gisLayers:'unavailable' }, supportScope:'diagnostics_only' }); }
+  if (_req.user?.role === 'support') { const configured=await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[_req.user.tenantId]);return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:documentStorage.provider==='gcs'?'gcs_private':documentStorage.provider==='supabase'?'supabase_private':'local_development', ocr:configured.rowCount&&process.env.OCR_WORKER_TOKEN?'google_document_ai_configured':'not_configured', gisLayers:'unavailable' }, supportScope:'diagnostics_only' }); }
   const assignmentColumn:Record<string,string>={lawyer:'assigned_lawyer_uid',analyst:'assigned_analyst_uid',operations:'assigned_operations_uid',consultant:'assigned_consultant_uid',viewer:'assigned_viewer_uid'};
   const assignment=assignmentColumn[_req.user?.role||''];
   const matterScope=assignment?` AND p.${assignment}=?${_req.user?.role==='viewer'?" AND p.status IN ('approved','complete')":''}`:'';
@@ -2315,20 +2353,27 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
     const initialExtracted = pendingDocumentFields(documentId, selectedType || 'other', classificationConfidence);
     const needsManualReview = true;
     const processingStatus = 'manual_review';
-    const storedDocument = await documentStorage.put({
-      localPath: file.path,
-      objectKey: buildTenantObjectKey({
-        tenantId: req.user?.tenantId || 'unknown-tenant',
-        propertyId: req.params.id,
-        documentId,
-        originalFilename: file.originalname,
-      }),
-      mimeType: file.mimetype,
-    });
+    let storedDocument;
+    try {
+      storedDocument = await documentStorage.put({
+        localPath: file.path,
+        objectKey: buildTenantObjectKey({
+          tenantId: req.user?.tenantId || 'unknown-tenant',
+          propertyId: req.params.id,
+          documentId,
+          originalFilename: file.originalname,
+        }),
+        mimeType: file.mimetype,
+      });
+    } catch (error) {
+      await fs.promises.unlink(file.path).catch(() => {});
+      throw error;
+    }
     if (storedDocument.provider !== 'local') await fs.promises.unlink(file.path).catch(() => {});
 
-    await pool.query(
-      `INSERT INTO documents
+    try {
+      await pool.query(
+        `INSERT INTO documents
        (id, tenant_id, property_id, doc_type, doc_type_custom, classification_confidence, classification_source, manual_review_status, original_filename, storage_key,
         mime_type, size_bytes, sha256, processing_status, extracted_text,
         extracted_fields, uploaded_by_uid)
@@ -2351,8 +2396,12 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
         '',
         JSON.stringify(initialExtracted),
         req.user?.uid || 'unknown',
-      ]
-    );
+        ]
+      );
+    } catch (error) {
+      if (storedDocument.provider !== 'local') await documentStorage.delete?.(storedDocument.storageKey).catch(() => {});
+      throw error;
+    }
 
     const result = await pool.query(
       `SELECT id, original_filename, mime_type, size_bytes, sha256,
@@ -2480,14 +2529,12 @@ app.get('/internal/ocr/jobs/:jobId/document', asyncRoute(async (req, res) => {
   if (!row.rowCount) return res.status(404).json({ error: 'OCR document job not found.' });
   if (row.rows[0].status !== 'processing') return res.status(409).json({ error: 'OCR document job is not processing.' });
   const storageKey = String(row.rows[0].storage_key || '');
-  if (storageKey.startsWith('supabase:')) {
-    const signedUrl = await documentStorage.createSignedUrl(storageKey, 120);
-    if (!signedUrl) return res.status(503).json({ error: 'Private document storage is not configured.' });
-    const response = await fetch(signedUrl, { signal: AbortSignal.timeout(120_000) });
-    if (!response.ok) return res.status(502).json({ error: 'Private storage could not provide the OCR source document.' });
+  if (isRemoteStorageKey(storageKey)) {
+    const content = await documentStorage.getObject?.(storageKey);
+    if (!content) return res.status(503).json({ error: 'Private document storage is not configured.' });
     res.setHeader('Content-Type', String(row.rows[0].mime_type || 'application/octet-stream'));
     res.setHeader('Cache-Control', 'private, no-store');
-    return res.send(Buffer.from(await response.arrayBuffer()));
+    return res.send(content);
   }
   const { safePath, isTraversal } = resolveSafeUploadPath(storageKey);
   if (isTraversal || !safePath) return res.status(403).json({ error: 'Invalid OCR storage path.' });
@@ -2542,12 +2589,16 @@ app.get('/api/properties/:id/documents/:docId/file', authGuard, asyncRoute(async
   );
   if (!docResult.rowCount) return res.status(404).json({ error: 'Document not found.' });
   const doc = docResult.rows[0];
+  let propertyStatus: string | null = null;
   if (['consultant','viewer'].includes(req.user?.role || '')) {
     const released = await pool.query("SELECT status FROM properties WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);
-    if (!released.rowCount || !['approved','complete'].includes(String(released.rows[0].status)) || doc.review_status !== 'approved') return res.status(404).json({error:'Approved evidence not found.'});
-  } else if (['data_steward','support'].includes(req.user?.role || '')) return res.status(403).json({error:'This role cannot access confidential document files.'});
+    propertyStatus = released.rowCount ? String(released.rows[0].status) : null;
+  }
+  const access = documentFileAccess({ role: req.user?.role, propertyStatus, reviewStatus: doc.review_status });
+  if (access === 'not_found') return res.status(404).json({error:'Approved evidence not found.'});
+  if (access === 'forbidden') return res.status(403).json({error:'This role cannot access confidential document files.'});
 
-  if (String(doc.storage_key).startsWith('supabase:')) {
+  if (isRemoteStorageKey(String(doc.storage_key))) {
     const signedUrl = await documentStorage.createSignedUrl(String(doc.storage_key), 60);
     if (!signedUrl) return res.status(503).json({ error: 'Cloud document storage is not configured.' });
     res.setHeader('Cache-Control', 'private, no-store');
@@ -2581,22 +2632,26 @@ app.post('/api/properties/:id/documents/:docId/signed-url', authGuard, asyncRout
     [req.params.docId, req.params.id, req.user?.tenantId]
   );
   if (!docResult.rowCount) return res.status(404).json({ error: 'Document not found.' });
+  let propertyStatus: string | null = null;
   if (['consultant','viewer'].includes(req.user?.role || '')) {
     const released = await pool.query("SELECT status FROM properties WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);
-    if (!released.rowCount || !['approved','complete'].includes(String(released.rows[0].status)) || docResult.rows[0].review_status !== 'approved') return res.status(404).json({error:'Approved evidence not found.'});
-  } else if (['data_steward','support'].includes(req.user?.role || '')) return res.status(403).json({error:'This role cannot access confidential document files.'});
+    propertyStatus = released.rowCount ? String(released.rows[0].status) : null;
+  }
+  const access = documentFileAccess({ role: req.user?.role, propertyStatus, reviewStatus: docResult.rows[0].review_status });
+  if (access === 'not_found') return res.status(404).json({error:'Approved evidence not found.'});
+  if (access === 'forbidden') return res.status(403).json({error:'This role cannot access confidential document files.'});
 
   const configuredTtl = Number(process.env.SIGNED_URL_TTL_SECONDS || 300);
   const requestedTtl = Number(req.body?.expiresInSeconds || configuredTtl);
   const expiresInSeconds = Math.max(30, Math.min(Number.isFinite(requestedTtl) ? requestedTtl : configuredTtl, 900));
   const storageKey = String(docResult.rows[0].storage_key || '');
 
-  if (!storageKey.startsWith('supabase:')) {
+  if (!isRemoteStorageKey(storageKey)) {
     return res.json({
       url: `/api/properties/${encodeURIComponent(req.params.id)}/documents/${encodeURIComponent(req.params.docId)}/file`,
       expiresInSeconds: null,
       provider: 'local',
-      note: 'Local sandbox files use the authenticated API route. Expiring links are enabled when Supabase storage is configured.',
+      note: 'Local sandbox files use the authenticated API route. Expiring links require private object storage.',
     });
   }
 
@@ -2607,7 +2662,7 @@ app.post('/api/properties/:id/documents/:docId/signed-url', authGuard, asyncRout
     expiresInSeconds,
   });
   res.setHeader('Cache-Control', 'private, no-store');
-  res.json({ url, expiresInSeconds, expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(), provider: 'supabase' });
+  res.json({ url, expiresInSeconds, expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(), provider: storageProviderForKey(storageKey) });
 }));
 
 app.post('/api/properties/:id/documents/:docId/extract', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
@@ -2615,7 +2670,7 @@ app.post('/api/properties/:id/documents/:docId/extract', authGuard, documentInta
   const doc=await pool.query('SELECT id,storage_key FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[req.params.docId,req.params.id,req.user?.tenantId]);
   if(!doc.rowCount)return res.status(404).json({error:'Document not found.'});
   const storageKey=String(doc.rows[0].storage_key||'');
-  if(!storageKey.startsWith('supabase:') && resolveSafeUploadPath(storageKey).isTraversal) return res.status(403).json({error:'Access denied: unsafe document storage path.'});
+  if(!isRemoteStorageKey(storageKey) && resolveSafeUploadPath(storageKey).isTraversal) return res.status(403).json({error:'Access denied: unsafe document storage path.'});
   if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker authentication is not configured on the server.',code:'OCR_WORKER_NOT_CONFIGURED'});
   const active=await pool.query("SELECT id FROM document_processing_jobs WHERE tenant_id=? AND document_id=? AND status IN ('queued','processing') LIMIT 1",[req.user?.tenantId,req.params.docId]);
   if(active.rowCount)return res.status(202).json({jobId:active.rows[0].id,status:'already_queued'});
@@ -3515,12 +3570,25 @@ app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(a
 
 app.get('/api/properties/:id/due-diligence-report/pdf', authGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
-  if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
-  return res.status(501).json({
-    error: 'PDF report generation is not configured. Use the HTML evidence report until a validated PDF renderer is installed.',
-    code: 'PDF_RENDERER_NOT_CONFIGURED',
-  });
+  const role=req.user?.role||'';
+  if(!['owner','admin','lawyer','consultant','viewer'].includes(role))return res.status(403).json({error:'PDF report access is not available for this role.'});
+  const conditions=['r.property_id=?','r.tenant_id=?',"r.approval_status='approved'"];
+  const params:any[]=[req.params.id,req.user?.tenantId];
+  if(role==='lawyer'){conditions.push('p.assigned_lawyer_uid=?');params.push(req.user?.uid);}
+  if(role==='consultant'){conditions.push('p.assigned_consultant_uid=?');params.push(req.user?.uid);}
+  if(role==='viewer'){conditions.push("p.assigned_viewer_uid=? AND p.status IN ('approved','complete')");params.push(req.user?.uid);}
+  const rows=await pool.query(`SELECT r.*,COALESCE(u.full_name,m.email,r.reviewed_by_uid) AS reviewer_name FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id LEFT JOIN org_memberships m ON m.organization_id=r.tenant_id AND m.user_uid=r.reviewed_by_uid LEFT JOIN user_accounts u ON u.id=r.reviewed_by_uid WHERE ${conditions.join(' AND ')} ORDER BY r.version_number DESC LIMIT 1`,params);
+  if(!rows.rowCount)return res.status(404).json({error:'No reviewer-approved report was found for this property.'});
+  const report=rows.rows[0];
+  const snapshot=typeof report.snapshot==='string'?JSON.parse(report.snapshot):report.snapshot;
+  const checksum=crypto.createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+  if(checksum!==report.snapshot_sha256)return res.status(409).json({error:'Report snapshot integrity check failed.'});
+  let pdf:Buffer;
+  try { pdf=await renderReportPdf(consultantWordHtml(clientSafeReport(report))); }
+  catch(error) { console.error('Report PDF rendering failed.',error);return res.status(503).json({error:'PDF rendering is temporarily unavailable.'}); }
+  await pool.query("INSERT INTO workspace_export_events (id,tenant_id,actor_uid,resource_type,resource_id,export_format,result,details) VALUES (?,?,?,?,?,'pdf','success',?)",[crypto.randomUUID(),req.user?.tenantId,req.user?.uid||'unknown','consultant_report',report.id,JSON.stringify({version:report.version_number,sha256:report.snapshot_sha256})]);
+  await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_exported','consultant_report',report.id,{version:report.version_number,format:'pdf',sha256:report.snapshot_sha256});
+  res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Length',String(pdf.length));res.setHeader('Cache-Control','private, no-store');res.setHeader('Content-Disposition',`attachment; filename="ojix-report-v${report.version_number}.pdf"`);res.send(pdf);
 }));
 
 /* ==========================================================================
@@ -4037,16 +4105,16 @@ app.get('/api/admin/source-health',authGuard,adminGuard,asyncRoute(async(req,res
 app.get('/api/admin/governance/:type',authGuard,adminGuard,asyncRoute(async(req,res)=>{const type=req.params.type;if(!['gis_rules','discrepancy_rules','models','report_templates'].includes(type))return res.status(400).json({error:'Unknown configuration type.'});const result=await pool!.query('SELECT id,config_type,version_number,status,name,configuration,created_by_uid,created_at FROM owner_configuration_versions WHERE tenant_id=? AND config_type=? ORDER BY version_number DESC LIMIT 200',[req.user?.tenantId,type]);res.json({items:result.rows});}));
 app.post('/api/admin/governance/:type',authGuard,adminGuard,asyncRoute(async(req,res)=>{const type=req.params.type;if(!['gis_rules','discrepancy_rules','models','report_templates'].includes(type))return res.status(400).json({error:'Unknown configuration type.'});const parsed=z.object({name:z.string().trim().min(2).max(160),configuration:z.record(z.unknown()),status:z.enum(['draft','active','disabled']).default('draft'),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Provide a configuration name, object, status, and change reason.'});const c:any=parsed.data.configuration;if(type==='gis_rules'){const valid=z.object({buffers:z.record(z.number().min(0).max(100000)).optional(),proximityMeters:z.record(z.number().min(0).max(100000)).optional(),severityByLayer:z.record(z.enum(['critical','high','medium','low'])).optional()}).safeParse(c);if(!valid.success)return res.status(400).json({error:'GIS configuration may contain valid buffer distances, proximity thresholds, and severity mappings only.'});}if(type==='discrepancy_rules'){const valid=z.object({tolerancePct:z.number().min(0).max(1).optional(),highPct:z.number().min(0).max(1).optional(),criticalPct:z.number().min(0).max(1).optional(),severityByBand:z.record(z.enum(['critical','high','medium','low'])).optional()}).safeParse(c);if(!valid.success)return res.status(400).json({error:'Discrepancy configuration contains invalid percentage thresholds or severity mappings.'});const v=valid.data;if((v.highPct??0.05)>=(v.criticalPct??0.10)||(v.tolerancePct??0.01)>=(v.highPct??0.05))return res.status(400).json({error:'Thresholds must satisfy tolerancePct < highPct < criticalPct.'});}if(type==='report_templates'){const valid=z.object({executiveSummaryTitle:z.string().max(120).optional(),disclaimerVersion:z.string().max(80).optional(),layout:z.string().max(120).optional()}).safeParse(c);if(!valid.success)return res.status(400).json({error:'Report template contains unsupported fields.'});}if(type==='models'){const valid=z.object({provider:z.enum(['google_document_ai','vertex_ai']),modelName:z.string().min(1).max(160),promptVersion:z.string().min(1).max(80),schemaVersion:z.string().min(1).max(80),safetySettings:z.record(z.unknown()).default({})}).safeParse(c);if(!valid.success)return res.status(400).json({error:'Model configuration requires provider, model, prompt version, schema version, and safety settings.'});if(parsed.data.status==='active'&&valid.data.provider==='vertex_ai')return res.status(409).json({error:'Vertex AI activation is unavailable; the application has no Vertex provider adapter.'});if(parsed.data.status==='active'&&valid.data.provider==='google_document_ai'&&!(process.env.OCR_WORKER_TOKEN&&process.env.GOOGLE_APPLICATION_CREDENTIALS||process.env.OCR_WORKER_TOKEN&&process.env.GOOGLE_CLOUD_PROJECT))return res.status(409).json({error:'Document AI cannot be activated until worker authentication and server-side Google credentials or workload identity are configured.'});}const tenant=req.user?.tenantId||'';const result=await pool!.query('SELECT COALESCE(MAX(version_number),0)+1 version FROM owner_configuration_versions WHERE tenant_id=? AND config_type=?',[tenant,type]);const version=Number(result.rows[0]?.version||1),id=crypto.randomUUID();await pool!.query('INSERT INTO owner_configuration_versions (id,tenant_id,config_type,version_number,status,name,configuration,created_by_uid) VALUES (?,?,?,?,?,?,?,?)',[id,tenant,type,version,parsed.data.status,parsed.data.name,JSON.stringify(parsed.data.configuration),req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',tenant,`admin.${type}_version_created`,'owner_configuration_version',id,{version,status:parsed.data.status,reason:parsed.data.reason});res.status(201).json({id,version,status:parsed.data.status});}));
 app.get('/api/admin/exports',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT id,actor_uid,resource_type,resource_id,export_format,watermark_enabled,expires_at,result,details,created_at FROM workspace_export_events WHERE tenant_id=? ORDER BY created_at DESC LIMIT 200',[req.user?.tenantId]);res.json({items:result.rows});}));
-app.get('/api/admin/purge-requests',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT r.*,d.original_filename,d.governance_status FROM workspace_purge_requests r JOIN documents d ON d.id=r.document_id AND d.tenant_id=r.tenant_id WHERE r.tenant_id=? ORDER BY r.created_at DESC LIMIT 200',[req.user?.tenantId]);res.json({items:result.rows,physicalPurgeAvailable:typeof documentStorage.delete==='function'&&documentStorage.provider!=='local'});}));
-app.post('/api/admin/purge-requests',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({documentId:z.string().uuid(),reason:z.string().trim().min(10).max(1000)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Document UUID and detailed purge reason are required.'});const tenant=req.user?.tenantId||'';const document=await pool!.query('SELECT id,storage_key FROM documents WHERE id=? AND tenant_id=?',[parsed.data.documentId,tenant]);if(!document.rowCount)return res.status(404).json({error:'Document not found.'});const policy=await pool!.query('SELECT legal_hold,retention_days FROM workspace_retention_policies WHERE tenant_id=?',[tenant]);if(policy.rows[0]?.legal_hold)return res.status(409).json({error:'Legal hold blocks purge requests.'});const requestId=crypto.randomUUID();await pool!.query("INSERT INTO workspace_purge_requests (id,tenant_id,document_id,requested_by_uid,reason,status) VALUES (?,?,?,?,?,'pending')",[requestId,tenant,parsed.data.documentId,req.user?.uid,parsed.data.reason]);await audit(req.user?.uid||'unknown',tenant,'admin.purge_requested','document',parsed.data.documentId,{requestId,reason:parsed.data.reason,physicalPurgeAvailable:typeof documentStorage.delete==='function'&&documentStorage.provider!=='local'});res.status(201).json({id:requestId,status:'pending',physicalPurgeAvailable:typeof documentStorage.delete==='function'&&documentStorage.provider!=='local'});}));
-app.post('/api/admin/purge-requests/:id/approve',authGuard,ownerGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A separate approval reason is required.'});const tenant=req.user?.tenantId||'';const request=await pool!.query("SELECT r.*,d.storage_key,d.created_at document_created_at FROM workspace_purge_requests r JOIN documents d ON d.id=r.document_id AND d.tenant_id=r.tenant_id WHERE r.id=? AND r.tenant_id=? AND r.status='pending'",[req.params.id,tenant]);if(!request.rowCount)return res.status(404).json({error:'Pending purge request not found.'});const policy=await pool!.query('SELECT legal_hold,retention_days FROM workspace_retention_policies WHERE tenant_id=?',[tenant]);if(policy.rows[0]?.legal_hold)return res.status(409).json({error:'Legal hold blocks purge.'});const retentionDays=Number(policy.rows[0]?.retention_days||2555);const created=new Date(request.rows[0].document_created_at).getTime();if(Date.now()-created<retentionDays*86400000)return res.status(409).json({error:'Retention window has not elapsed; purge is blocked.'});if(!documentStorage.delete||documentStorage.provider==='local')return res.status(501).json({error:'Configured storage provider does not support verified physical deletion.'});await documentStorage.delete(String(request.rows[0].storage_key));await pool!.query("UPDATE workspace_purge_requests SET status='completed',approved_by_uid=?,approved_at=NOW(6),completed_at=NOW(6) WHERE id=? AND tenant_id=?",[req.user?.uid,req.params.id,tenant]);await pool!.query("UPDATE documents SET governance_status='purged',governance_reason=?,governance_by_uid=?,governance_at=NOW(6) WHERE id=? AND tenant_id=?",[parsed.data.reason,req.user?.uid,request.rows[0].document_id,tenant]);await audit(req.user?.uid||'unknown',tenant,'admin.purge_completed','document',request.rows[0].document_id,{requestId:req.params.id,requestReason:request.rows[0].reason,approvalReason:parsed.data.reason,retentionDays});res.json({success:true,status:'completed'});}));
+app.get('/api/admin/purge-requests',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT r.*,d.original_filename,d.governance_status,d.storage_key FROM workspace_purge_requests r JOIN documents d ON d.id=r.document_id AND d.tenant_id=r.tenant_id WHERE r.tenant_id=? ORDER BY r.created_at DESC LIMIT 200',[req.user?.tenantId]);const items=result.rows.map(({storage_key,...item}:any)=>({...item,physicalPurgeAvailable:Boolean(documentStorage.delete&&documentStorage.canDelete?.(String(storage_key)))}));res.json({items,physicalPurgeAvailable:items.some((item:any)=>item.physicalPurgeAvailable)});}));
+app.post('/api/admin/purge-requests',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({documentId:z.string().uuid(),reason:z.string().trim().min(10).max(1000)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Document UUID and detailed purge reason are required.'});const tenant=req.user?.tenantId||'';const document=await pool!.query('SELECT id,storage_key FROM documents WHERE id=? AND tenant_id=?',[parsed.data.documentId,tenant]);if(!document.rowCount)return res.status(404).json({error:'Document not found.'});const policy=await pool!.query('SELECT legal_hold,retention_days FROM workspace_retention_policies WHERE tenant_id=?',[tenant]);if(policy.rows[0]?.legal_hold)return res.status(409).json({error:'Legal hold blocks purge requests.'});const requestId=crypto.randomUUID();await pool!.query("INSERT INTO workspace_purge_requests (id,tenant_id,document_id,requested_by_uid,reason,status) VALUES (?,?,?,?,?,'pending')",[requestId,tenant,parsed.data.documentId,req.user?.uid,parsed.data.reason]);await audit(req.user?.uid||'unknown',tenant,'admin.purge_requested','document',parsed.data.documentId,{requestId,reason:parsed.data.reason,physicalPurgeAvailable:Boolean(documentStorage.delete && documentStorage.canDelete?.(String(document.rows[0].storage_key)))});res.status(201).json({id:requestId,status:'pending',physicalPurgeAvailable:Boolean(documentStorage.delete && documentStorage.canDelete?.(String(document.rows[0].storage_key)))});}));
+app.post('/api/admin/purge-requests/:id/approve',authGuard,ownerGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A separate approval reason is required.'});const tenant=req.user?.tenantId||'';const request=await pool!.query("SELECT r.*,d.storage_key,d.created_at document_created_at FROM workspace_purge_requests r JOIN documents d ON d.id=r.document_id AND d.tenant_id=r.tenant_id WHERE r.id=? AND r.tenant_id=? AND r.status='pending'",[req.params.id,tenant]);if(!request.rowCount)return res.status(404).json({error:'Pending purge request not found.'});const policy=await pool!.query('SELECT legal_hold,retention_days FROM workspace_retention_policies WHERE tenant_id=?',[tenant]);if(policy.rows[0]?.legal_hold)return res.status(409).json({error:'Legal hold blocks purge.'});const retentionDays=Number(policy.rows[0]?.retention_days||2555);const created=new Date(request.rows[0].document_created_at).getTime();if(Date.now()-created<retentionDays*86400000)return res.status(409).json({error:'Retention window has not elapsed; purge is blocked.'});if(!documentStorage.delete||!documentStorage.canDelete?.(String(request.rows[0].storage_key)))return res.status(501).json({error:'Configured storage provider does not support verified physical deletion for this document.'});await documentStorage.delete(String(request.rows[0].storage_key));await pool!.query("UPDATE workspace_purge_requests SET status='completed',approved_by_uid=?,approved_at=NOW(6),completed_at=NOW(6) WHERE id=? AND tenant_id=?",[req.user?.uid,req.params.id,tenant]);await pool!.query("UPDATE documents SET governance_status='purged',governance_reason=?,governance_by_uid=?,governance_at=NOW(6) WHERE id=? AND tenant_id=?",[parsed.data.reason,req.user?.uid,request.rows[0].document_id,tenant]);await audit(req.user?.uid||'unknown',tenant,'admin.purge_completed','document',request.rows[0].document_id,{requestId:req.params.id,requestReason:request.rows[0].reason,approvalReason:parsed.data.reason,retentionDays});res.json({success:true,status:'completed'});}));
 app.get('/api/ocr/mappings',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT source_field,canonical_field,normalization_rule,active,updated_by_uid,updated_at FROM ocr_field_mappings WHERE tenant_id=? ORDER BY source_field',[req.user?.tenantId]);res.json({items:result.rows});}));
 app.get('/api/ocr/document-types',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT source_category,canonical_doc_type,active,updated_by_uid,updated_at FROM ocr_document_type_mappings WHERE tenant_id=? ORDER BY source_category',[req.user?.tenantId]);res.json({items:result.rows});}));
 app.put('/api/ocr/document-types/:sourceCategory',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const canonicalTypes=['sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney','encumbrance_certificate','rtc_pahani','mutation_record','survey_sketch_tippan','khata_e_khata','property_tax_receipt','layout_approval_conversion_order','master_plan_zoning_document','court_order_legal_notice','other','e_khata','mutation_extract','survey_sketch','tax_receipt','conversion_order','layout_approval','court_order'];const parsed=z.object({canonicalDocType:z.enum(canonicalTypes as [string,...string[]]),active:z.boolean()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid canonical document category.'});await pool!.query(`INSERT INTO ocr_document_type_mappings (tenant_id,source_category,canonical_doc_type,active,updated_by_uid) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE canonical_doc_type=VALUES(canonical_doc_type),active=VALUES(active),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,req.params.sourceCategory,parsed.data.canonicalDocType,parsed.data.active,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'data_steward.document_type_mapping_updated','ocr_document_type_mapping',req.params.sourceCategory,parsed.data);res.json({success:true});}));
 app.put('/api/ocr/mappings/:sourceField',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const parsed=z.object({canonicalField:z.string().trim().min(1).max(255),normalizationRule:z.enum(['trim','uppercase','lowercase','digits_only','survey_number','extent','date']),active:z.boolean()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid field mapping.'});await pool!.query(`INSERT INTO ocr_field_mappings (tenant_id,source_field,canonical_field,normalization_rule,active,updated_by_uid) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE canonical_field=VALUES(canonical_field),normalization_rule=VALUES(normalization_rule),active=VALUES(active),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,req.params.sourceField,parsed.data.canonicalField,parsed.data.normalizationRule,parsed.data.active,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'data_steward.ocr_mapping_updated','ocr_field_mapping',req.params.sourceField,parsed.data);res.json({success:true});}));
 app.get('/api/support/ocr/jobs',authGuard,asyncRoute(async(req,res)=>{if(req.user?.role!=='support')return res.status(403).json({error:'Scoped OJIX Support role required.'});const rows=await pool!.query(`SELECT id,status,progress,attempts,max_attempts,error_code,started_at,completed_at,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND created_at>=DATE_SUB(NOW(),INTERVAL 24 HOUR) ORDER BY created_at DESC LIMIT 100`,[req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'support.ocr_diagnostics_viewed','ocr_jobs','tenant',{windowHours:24,rowCount:rows.rows.length});res.json({windowHours:24,items:rows.rows});}));
 app.post('/api/support/ocr/jobs/:id/retry',authGuard,asyncRoute(async(req,res)=>{if(!['owner','admin','support'].includes(req.user?.role||''))return res.status(403).json({error:'Workspace admin or scoped OJIX Support role required.'});const job=await pool!.query('SELECT id,status,document_id FROM document_processing_jobs WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!job.rowCount)return res.status(404).json({error:'OCR diagnostic job not found.'});if(!['failed','retry_wait'].includes(String(job.rows[0].status)))return res.status(409).json({error:'Only failed OCR jobs can be retried.'});if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker is not configured.'});await pool!.query("UPDATE document_processing_jobs SET status='queued',processing_stage='queued',progress=0,attempts=0,error_code=NULL,error_message=NULL,started_at=NULL,completed_at=NULL,updated_at=NOW(6) WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);await pool!.query("UPDATE documents SET processing_status='queued' WHERE id=? AND tenant_id=?",[job.rows[0].document_id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.ocr_job_retried','ocr_job',req.params.id,{documentId:job.rows[0].document_id});res.status(202).json({success:true,status:'queued'});}));
-app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}const emailConfigured=Boolean(process.env.SMTP_USER?.trim()&&process.env.SMTP_PASS?.trim()&&(process.env.SMTP_HOST?.trim()||process.env.SMTP_USER?.trim().endsWith('@gmail.com')));const ai=await pool!.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[(_req as AuthenticatedRequest).user?.tenantId]);const workerReady=Boolean(process.env.OCR_WORKER_TOKEN);res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:documentStorage.provider==='supabase'?'supabase_private':'local_development',testSupported:false,detail:documentStorage.provider==='supabase'?'Private Supabase Storage with server-created expiring links.':'Local sandbox storage; configure private storage for production.'},{id:'ocr',label:'Google Document AI',state:ai.rowCount&&workerReady?'configured':ai.rowCount?'worker_not_configured':'not_configured',testSupported:false,detail:!ai.rowCount?'Configure project, location, and processor.':!workerReady?'Processor settings are saved, but OCR_WORKER_TOKEN is missing on the server.':'Processor and worker token are configured; Google credentials are resolved by the worker at runtime.'},{id:'email',label:'OTP email delivery',state:emailConfigured?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false,detail:'No authorized live government connector is configured.'},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false,detail:'No live GIS provider health check is configured.'}]});}));
+app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}const emailConfigured=Boolean(process.env.SMTP_USER?.trim()&&process.env.SMTP_PASS?.trim()&&(process.env.SMTP_HOST?.trim()||process.env.SMTP_USER?.trim().endsWith('@gmail.com')));const ai=await pool!.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[(_req as AuthenticatedRequest).user?.tenantId]);const workerReady=Boolean(process.env.OCR_WORKER_TOKEN);res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:documentStorage.provider==='gcs'?'gcs_private':documentStorage.provider==='supabase'?'supabase_private':'local_development',testSupported:false,detail:documentStorage.provider==='gcs'?'Private Google Cloud Storage with server-created expiring links.':documentStorage.provider==='supabase'?'Private Supabase Storage with server-created expiring links.':'Local sandbox storage; configure private storage for production.'},{id:'ocr',label:'Google Document AI',state:ai.rowCount&&workerReady?'configured':ai.rowCount?'worker_not_configured':'not_configured',testSupported:false,detail:!ai.rowCount?'Configure project, location, and processor.':!workerReady?'Processor settings are saved, but OCR_WORKER_TOKEN is missing on the server.':'Processor and worker token are configured; Google credentials are resolved by the worker at runtime.'},{id:'email',label:'OTP email delivery',state:emailConfigured?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false,detail:'No authorized live government connector is configured.'},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false,detail:'No live GIS provider health check is configured.'}]});}));
 app.post('/api/admin/integrations/:id/test',authGuard,adminGuard,asyncRoute(async(req,res)=>{if(req.params.id!=='mariadb')return res.status(501).json({error:'A live connection test is unsupported for this integration.'});await pool!.query('SELECT 1');await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.integration_tested','integration','mariadb',{result:'connected'});res.json({state:'connected',checkedAt:new Date().toISOString()});}));
 
 app.get('/api/admin/sessions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT s.id,s.user_uid,s.created_at,s.last_activity_at,s.expires_at,s.ip_address,s.user_agent,m.email,m.role FROM authentication_sessions s LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid WHERE s.tenant_id=? AND s.revoked_at IS NULL AND s.expires_at>NOW(6) ORDER BY s.last_activity_at DESC',[req.user?.tenantId]);res.json({items:result.rows});}));
@@ -4162,7 +4230,7 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 let server: any;
-if (process.env.NODE_ENV !== 'test') {
+if (process.env.NODE_ENV !== 'test' || process.env.TEST_API_SERVER === 'true') {
   void (async () => {
     const smtpIssues=getSmtpConfigurationIssues();
     if(smtpIssues.length)console.warn(`[smtp] Email OTP delivery is unavailable; configure: ${smtpIssues.join(', ')}.`);

@@ -1,0 +1,4 @@
+/** Non-browser requests have no Origin; browser origins must match exactly. */
+export function isCorsOriginAllowed(origin: string | undefined, allowedOrigins: readonly string[]): boolean {
+  return !origin || allowedOrigins.includes(origin);
+}

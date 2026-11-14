@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     id CHAR(36) NOT NULL,
     email VARCHAR(255) NOT NULL,
     full_name VARCHAR(160) NOT NULL,
+    onboarding_organization_name VARCHAR(160) NULL,
     middle_name VARCHAR(80) NULL,
     gender VARCHAR(32) NOT NULL DEFAULT 'prefer_not_to_say',
     password_hash VARCHAR(255) NOT NULL,
@@ -230,6 +231,7 @@ CREATE TABLE IF NOT EXISTS properties (
     UNIQUE KEY properties_application_number_key (application_number),
     KEY properties_survey_idx (tenant_id, survey_number(191)),
     KEY properties_tenant_updated_idx (tenant_id, updated_at),
+    KEY property_viewer_assignment_idx (tenant_id, assigned_viewer_uid, status, updated_at),
 
     CONSTRAINT properties_tenant_fk
         FOREIGN KEY (tenant_id)

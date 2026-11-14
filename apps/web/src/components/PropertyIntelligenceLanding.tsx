@@ -5,6 +5,7 @@ import { PropertyStoryVisual } from './PropertyStoryVisual';
 interface PropertyIntelligenceLandingProps {
   onLogin: () => void;
   onRegister: () => void;
+  onTryDemo: () => void;
 }
 
 const capabilities = [
@@ -36,7 +37,7 @@ const roles = [
   { title: 'Viewer', description: 'Access approved read-only workspace records.', icon: FileCheck2 },
 ];
 
-export function PropertyIntelligenceLanding({ onLogin, onRegister }: PropertyIntelligenceLandingProps) {
+export function PropertyIntelligenceLanding({ onLogin, onRegister, onTryDemo }: PropertyIntelligenceLandingProps) {
   const explore = () => document.getElementById('ojix-capabilities')?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
 
   return (
@@ -49,7 +50,7 @@ export function PropertyIntelligenceLanding({ onLogin, onRegister }: PropertyInt
         <nav className="ojix-story-nav" aria-label="Main navigation">
           <a href="#ojix-platform">Platform</a><a href="#ojix-roles">Roles</a><a href="#ojix-capabilities">Capabilities</a><a href="#ojix-workflow">Review workflow</a>
         </nav>
-        <div className="ojix-story-actions"><button className="story-login-link" onClick={onLogin}>Login</button><button className="story-nav-cta" onClick={onRegister}>Get started <ArrowRight size={15}/></button></div>
+        <div className="ojix-story-actions"><button className="story-nav-cta" onClick={onTryDemo}>Try the Demo <ArrowRight size={15}/></button><button className="story-login-link" onClick={onLogin}>Client Login</button><button className="story-secondary" onClick={onRegister}>Register</button></div>
       </header>
 
       <section id="top" className="ojix-story-hero">
@@ -59,7 +60,7 @@ export function PropertyIntelligenceLanding({ onLogin, onRegister }: PropertyInt
             <span className="story-eyebrow story-hero-eyebrow"><i/> PROPERTY DUE DILIGENCE · KARNATAKA</span>
             <h1><span>Every property detail.</span><br/><em>One clear picture.</em></h1>
             <p className="story-hero-description">Bring property records, legal documents, land information, and due-diligence findings into one connected workspace.</p>
-            <div className="story-hero-actions"><button className="story-primary" onClick={explore}>Explore the platform <ArrowDown size={16}/></button><button className="story-secondary" onClick={onLogin}>Login to workspace <ArrowRight size={16}/></button></div>
+            <div className="story-hero-actions"><button className="story-primary" onClick={onTryDemo}>Try the Demo <ArrowRight size={16}/></button><button className="story-secondary" onClick={onLogin}>Client Login <ArrowRight size={16}/></button><button className="story-secondary" onClick={onRegister}>Register</button></div>
             <div className="story-assurance"><ShieldCheck size={16}/><span>Evidence-linked review</span><i/><span>Source status at a glance</span><i/><span>Human oversight</span></div>
           </div>
           <div className="story-hero-art-wrap"><PropertyStoryVisual/></div>
@@ -117,8 +118,8 @@ export function PropertyIntelligenceLanding({ onLogin, onRegister }: PropertyInt
 
       <section className="ojix-story-cta reveal-on-scroll">
         <div className="story-cta-map" aria-hidden="true"><i/><i/><i/><i/><span/></div>
-        <div><span className="story-eyebrow">START WITH A CLEAR RECORD</span><h2>Bring your next property review<br/><em>into focus.</em></h2><p>Sign in to continue an existing matter or create a workspace for a new review.</p></div>
-        <div className="story-cta-actions"><button className="story-primary" onClick={onLogin}>Login to workspace <ArrowRight size={16}/></button><button className="story-secondary" onClick={onRegister}>Create an account</button></div>
+        <div><span className="story-eyebrow">START WITH A CLEAR RECORD</span><h2>Bring your next property review<br/><em>into focus.</em></h2><p>Explore the read-only sample, sign in to a client workspace, or register for access.</p></div>
+        <div className="story-cta-actions"><button className="story-primary" onClick={onTryDemo}>Try the Demo <ArrowRight size={16}/></button><button className="story-secondary" onClick={onLogin}>Client Login</button><button className="story-secondary" onClick={onRegister}>Register</button></div>
       </section>
 
       <footer className="ojix-story-footer reveal-on-scroll"><a className="ojix-story-brand" href="#top"><img src="/assets/ojix-wordmark-header.png" alt="OJIX" width="256" height="80"/><span><strong>Property Intelligence</strong><small>Karnataka due diligence workspace</small></span></a><p>Structured property review, with evidence kept in view.</p><nav aria-label="Footer navigation"><a href="#ojix-platform">Platform</a><a href="#ojix-roles">Roles</a><a href="#ojix-capabilities">Capabilities</a><a href="#ojix-workflow">Workflow</a><button onClick={onLogin}>Login <ArrowRight size={14}/></button></nav><small className="story-legal">OJIX supports document organisation and review workflows. It does not replace official records or qualified legal advice.</small></footer>

@@ -71,7 +71,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
 
   const handleDownloadPdf = async () => {
     const response=await authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-report/pdf`);
-    if(!response.ok)return alert('PDF export is unavailable because no validated PDF renderer is configured. Use Printable HTML.');
+    if(!response.ok){const body=await response.json().catch(()=>({}));return alert(body.error||'A reviewer-approved report PDF could not be generated.');}
     const url=URL.createObjectURL(await response.blob());
     const anchor=document.createElement('a');anchor.href=url;anchor.download=`${property.name.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}-approved-report.pdf`;anchor.click();
     window.setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -135,7 +135,6 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
           </button>
           <button
             onClick={handleDownloadPdf}
-            disabled
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -150,7 +149,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
               fontSize: '0.875rem',
             }}
           >
-            <Download size={16} /> PDF unavailable
+            <Download size={16} /> Download approved PDF
           </button>
         </div>
       </div>

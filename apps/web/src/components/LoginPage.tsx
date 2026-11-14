@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, X, RotateCcw, Crown, Settings2, Scale, SearchCheck, Files, BriefcaseBusiness, Headphones, Database, Mail, Smartphone } from 'lucide-react';
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
 import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
+import { SampleDemoWorkspace } from './SampleDemoWorkspace';
 import type { UserAccount, UserRole } from '../types';
 
 interface LoginPageProps {
@@ -48,9 +49,9 @@ const sanitizePersonNameInput=(value:string)=>value.replace(/[^\p{L} '\-]/gu,'')
 const formatRegistrationPhone=(countryCode:string,value:string)=>{const digits=value.replace(/\D/g,'').slice(0,countryCode==='+91'||countryCode==='+1'?10:15);if(countryCode==='+91')return digits.replace(/(\d{5})(?=\d)/,'$1 ');if(countryCode==='+1')return digits.replace(/(\d{3})(\d{0,3})(\d{0,4})/,(_,a,b,c)=>[a,b,c].filter(Boolean).join(' '));return digits.replace(/(\d{3})(?=\d)/g,'$1 ').trim();};
 
 export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
-  const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
+  const [mode, setMode] = useState<'landing'|'demo'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
     const path = window.location.pathname.replace(/\/$/, '');
-    return path === '/register' ? 'register' : expectedRole ? 'login' : 'landing';
+    return path === '/demo' ? 'demo' : path === '/register' ? 'register' : expectedRole ? 'login' : 'landing';
   });
   const [loginCardOpen, setLoginCardOpen] = useState(() => Boolean(expectedRole) || window.location.pathname.startsWith('/login'));
   const [loginModalClosing, setLoginModalClosing] = useState(false);
@@ -63,6 +64,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [registerName, setRegisterName] = useState('');
+  const [registerOrganizationName, setRegisterOrganizationName] = useState('');
   const [registerFirstName, setRegisterFirstName] = useState('');
   const [registerMiddleName, setRegisterMiddleName] = useState('');
   const [registerLastName, setRegisterLastName] = useState('');
@@ -104,6 +106,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const registrationErrorFor = (field: string) => {
     const emailPattern = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
     switch (field) {
+      case 'organizationName': return registerOrganizationName.trim().length >= 2 && registerOrganizationName.trim().length <= 160 ? '' : 'Enter an organization name of 2–160 characters.';
       case 'firstName': return validPersonName(registerFirstName) ? '' : 'Use 2–50 letters; spaces, hyphens and apostrophes are allowed.';
       case 'middleName': return validPersonName(registerMiddleName,true) ? '' : 'Use 2–50 letters; spaces, hyphens and apostrophes are allowed.';
       case 'lastName': return validPersonName(registerLastName) ? '' : 'Use 2–50 letters; spaces, hyphens and apostrophes are allowed.';
@@ -202,7 +205,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       const path = window.location.pathname.replace(/\/$/, '');
       const isRoleLogin = Boolean(expectedRole) && (/^\/login\/(super-admin|owner|admin|lawyer|analyst|operations|consultant|support|data-steward|viewer)$/.test(path)
         || /^\/(super-admin|owner|admin|lawyer|analyst|operations|consultant|support|data-steward|viewer)\/dashboard$/.test(path));
-      const next = path === '/register' ? 'register' : isRoleLogin ? 'login' : 'landing';
+      const next = path === '/demo' ? 'demo' : path === '/register' ? 'register' : isRoleLogin ? 'login' : 'landing';
       setLoginCardOpen(Boolean(path.startsWith('/login/')) || isRoleLogin);
       setMode(current => current === 'login-otp' || current === 'otp' || current === 'verified' ? current : next);
     };
@@ -394,7 +397,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     e?.preventDefault();
     setError('');
     setRegistrationSubmitted(true);
-    const requiredRegistrationFields = ['firstName','middleName','lastName','gender','mobileNumber','email','securityQuestion','securityAnswer','password','confirmPassword'];
+    const requiredRegistrationFields = ['organizationName','firstName','middleName','lastName','gender','mobileNumber','email','securityQuestion','securityAnswer','password','confirmPassword'];
     if(requiredRegistrationFields.some(field=>registrationErrorFor(field))){setError('Please correct the highlighted registration fields.');window.requestAnimationFrame(()=>{const first=registrationFormRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]');first?.focus();first?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'});});return;}
     const mobileDigits = registerMobile.replace(/\D/g, '');
     const fullName = [registerFirstName, registerMiddleName, registerLastName].filter(Boolean).join(' ').trim();
@@ -404,6 +407,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       const res = await fetch(`${apiUrl}/api/auth/register/request-otp`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          organizationName: registerOrganizationName.trim(),
           firstName: registerFirstName,
           middleName: registerMiddleName,
           lastName: registerLastName,
@@ -492,7 +496,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     <p className="executive-legal">Never share your verification code. OJIX staff will not ask you for it.</p>
   </section></main>;
 
-  if (mode !== 'login' && mode !== 'landing') {
+  if (mode !== 'login' && mode !== 'landing' && mode !== 'demo') {
     const isOtp = mode === 'otp';
     const isVerified = mode === 'verified';
     return (
@@ -507,6 +511,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
               <form onSubmit={verifyOtp} className="registration-otp-form"><p className="registration-otp-time" role="timer" aria-live="polite">{timeLeft>0?`Code expires in ${Math.floor(timeLeft/60)}:${String(timeLeft%60).padStart(2,'0')}`:'Code expired. Request a new code.'}</p><label className="registration-field"><span>Six-digit email code*</span><input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))} required pattern="\d{6}" placeholder="000000"/></label><button className="registration-primary" disabled={loading||otp.length!==6||timeLeft===0}>{loading?<><span className="executive-spinner"/> Verifying…</>:'Verify and Activate Account'}</button><button className="registration-link-button" type="button" disabled={loading||resendSecondsLeft>0} onClick={()=>requestOtp()}>{resendSecondsLeft>0?`Resend code in ${resendSecondsLeft}s`:'Resend verification code'}</button><button className="registration-link-button" type="button" onClick={()=>{setOtp('');setError('');setMode('register');}}>Change registration details</button></form>
             ) : (
               <form ref={registrationFormRef} onSubmit={requestOtp} className="registration-form" noValidate>
+                <label className="registration-field registration-wide"><span>Organization / Workspace Name*</span><input autoComplete="organization" value={registerOrganizationName} onChange={e=>setRegisterOrganizationName(e.target.value)} {...registrationValidationProps('organizationName')} required minLength={2} maxLength={160} placeholder="Your firm or organization"/>{registrationErrorMessage('organizationName')}<small className="registration-note">You will become the Owner of a new, private organization workspace.</small></label>
                 <div className="registration-person-grid">
                   <label className="registration-field"><span>First Name*</span><input autoComplete="given-name" value={registerFirstName} onChange={e=>setRegisterFirstName(sanitizePersonNameInput(e.target.value))} {...registrationValidationProps('firstName')} required minLength={2} maxLength={50}/>{registrationErrorMessage('firstName')}</label>
                   <label className="registration-field"><span>Middle Name <small>(optional)</small></span><input autoComplete="additional-name" value={registerMiddleName} onChange={e=>setRegisterMiddleName(sanitizePersonNameInput(e.target.value))} {...registrationValidationProps('middleName')} minLength={2} maxLength={50}/>{registrationErrorMessage('middleName')}</label>
@@ -520,7 +525,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
                   <label className="registration-field"><span>Answer*</span><input autoComplete="off" value={registerSecurityAnswer} onChange={e=>setRegisterSecurityAnswer(e.target.value)} {...registrationValidationProps('securityAnswer')} required minLength={3} maxLength={120}/>{registrationErrorMessage('securityAnswer')}<small className="registration-note">Your answer is hashed before storage.</small></label>
                 </div>
                 <fieldset className="registration-password-section"><legend>Password setup</legend><div className="registration-two-col"><label className="registration-field"><span>Create Password*</span><div className="registration-password-input"><input type={showRegisterPassword?'text':'password'} autoComplete="new-password" value={registerPassword} onChange={e=>setRegisterPassword(e.target.value)} {...registrationValidationProps('password')} required minLength={8} maxLength={128}/><button type="button" aria-label={showRegisterPassword?'Hide password':'Show password'} onClick={()=>setShowRegisterPassword(value=>!value)}>{showRegisterPassword?<EyeOff size={15}/>:<Eye size={15}/>}</button></div>{registrationErrorMessage('password')}<small className="registration-note">8+ characters with uppercase, lowercase, number and special character.</small></label><label className="registration-field"><span>Confirm Password*</span><div className="registration-password-input"><input type={showRegisterConfirmPassword?'text':'password'} autoComplete="new-password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} {...registrationValidationProps('confirmPassword')} required minLength={8} maxLength={128}/><button type="button" aria-label={showRegisterConfirmPassword?'Hide password':'Show password'} onClick={()=>setShowRegisterConfirmPassword(value=>!value)}>{showRegisterConfirmPassword?<EyeOff size={15}/>:<Eye size={15}/>}</button></div>{registrationErrorMessage('confirmPassword')}</label></div></fieldset>
-                <div className="registration-actions"><button type="reset" className="registration-reset" onClick={()=>{setRegisterFirstName('');setRegisterMiddleName('');setRegisterLastName('');setRegisterGender('');setRegisterCountryCode('+91');setRegisterMobile('');setRegisterEmail('');setRegisterSecurityQuestion('');setRegisterSecurityAnswer('');setRegisterPassword('');setConfirmPassword('');setRegistrationSubmitted(false);setRegistrationTouched({});setError('');}}><RotateCcw size={15}/> Reset</button><button className="registration-primary" disabled={loading}>{loading?<><span className="executive-spinner"/> Sending code…</>:'Register'}</button></div>
+                <div className="registration-actions"><button type="reset" className="registration-reset" onClick={()=>{setRegisterOrganizationName('');setRegisterFirstName('');setRegisterMiddleName('');setRegisterLastName('');setRegisterGender('');setRegisterCountryCode('+91');setRegisterMobile('');setRegisterEmail('');setRegisterSecurityQuestion('');setRegisterSecurityAnswer('');setRegisterPassword('');setConfirmPassword('');setRegistrationSubmitted(false);setRegistrationTouched({});setError('');}}><RotateCcw size={15}/> Reset</button><button className="registration-primary" disabled={loading}>{loading?<><span className="executive-spinner"/> Sending code…</>:'Register'}</button></div>
                 <p className="registration-login-prompt">Already a user? <button type="button" onClick={()=>navigateAuth('login')}>Login</button></p>
               </form>
             )}
@@ -532,8 +537,10 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const isOwner = currentAccount?.role === 'owner';
   const SelectedLoginRoleIcon = loginRoleIcons[selectedRole as keyof typeof loginRoleIcons] || UserCheck;
 
+  if (mode === 'demo') return <SampleDemoWorkspace onBack={()=>navigateAuth('landing')} onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')}/>;
+
   if (mode === 'landing') return <>
-    <PropertyIntelligenceLanding onLogin={()=>{setLoginModalClosing(false);setLoginCardOpen(true);}} onRegister={()=>navigateAuth('register')}/>
+    <PropertyIntelligenceLanding onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')} onTryDemo={()=>{setLoginCardOpen(false);setMode('demo');setError('');setOtp('');if(window.location.pathname!=='/demo')window.history.pushState({auth:'demo'},'','/demo');}}/>
     {loginCardOpen&&<div className={`landing-login-backdrop${loginModalClosing?' is-closing':''}`} onMouseDown={event=>{if(event.target===event.currentTarget)closeLandingLogin();}}>
       <section className="landing-login-modal" role="dialog" aria-modal="true" aria-labelledby="landing-login-title">
         <header className="landing-login-header"><span>Secure OJIX workspace access</span><button ref={loginModalCloseRef} type="button" aria-label="Close login" onClick={closeLandingLogin}><X size={20}/></button></header>

@@ -58,9 +58,10 @@ class RetryLimitReached(RuntimeError):
     """Raised for stale jobs which have exhausted their configured attempts."""
 
 
-def database_config():
-    parsed = urllib.parse.urlparse(os.environ["DATABASE_URL"])
-    return {
+def database_config(env=None):
+    env = os.environ if env is None else env
+    parsed = urllib.parse.urlparse(env["DATABASE_URL"])
+    config = {
         "host": parsed.hostname or "db",
         "port": parsed.port or 3306,
         "user": urllib.parse.unquote(parsed.username or ""),
@@ -68,6 +69,15 @@ def database_config():
         "database": parsed.path.lstrip("/"),
         "autocommit": False,
     }
+    tls_enabled = str(env.get("DATABASE_SSL", "false")).strip().lower() in {"1", "true", "yes", "on"}
+    config["ssl_disabled"] = not tls_enabled
+    if tls_enabled:
+        # Require both CA validation and hostname validation for managed MySQL.
+        config["ssl_verify_cert"] = True
+        config["ssl_verify_identity"] = True
+        if env.get("DATABASE_SSL_CA"):
+            config["ssl_ca"] = env["DATABASE_SSL_CA"]
+    return config
 
 
 def connect():

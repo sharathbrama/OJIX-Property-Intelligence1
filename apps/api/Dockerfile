@@ -21,13 +21,16 @@ FROM node:20-alpine AS runner
 RUN apk add --no-cache \
     dumb-init \
     curl \
+    chromium \
+    font-noto \
+    font-noto-kannada \
     poppler-utils \
     tesseract-ocr \
     tesseract-ocr-data-eng \
     tesseract-ocr-data-kan
 
 ENV NODE_ENV=production \
-    PORT=4000
+    PORT=8080
 
 WORKDIR /app
 
@@ -40,11 +43,11 @@ COPY --from=builder --chown=node:node /app/dist ./dist
 
 USER node
 
-EXPOSE 4000
+EXPOSE 8080
 
 # Docker healthcheck targeting the zero-dependency liveness probe
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:4000/healthz || exit 1
+  CMD curl -f "http://127.0.0.1:${PORT:-8080}/healthz" || exit 1
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "dist/src/server.js"]

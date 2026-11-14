@@ -1,5 +1,6 @@
 import concurrent.futures
 import threading
+import urllib.parse
 import unittest
 from unittest.mock import patch
 
@@ -159,6 +160,31 @@ class RetryTests(unittest.TestCase):
         self.assertFalse(retryable)
 
 
+class ProductionReadinessTests(unittest.TestCase):
+    def test_database_tls_requires_ca_and_hostname_verification(self):
+        config = worker.database_config({
+            "DATABASE_URL": "mysql://worker:pass@10.0.0.5:3306/ojix",
+            "DATABASE_SSL": "true",
+            "DATABASE_SSL_CA": "/var/run/secrets/mysql/server-ca.pem",
+        })
+        self.assertFalse(config["ssl_disabled"])
+        self.assertTrue(config["ssl_verify_cert"])
+        self.assertTrue(config["ssl_verify_identity"])
+        self.assertEqual(config["ssl_ca"], "/var/run/secrets/mysql/server-ca.pem")
+
+    def test_database_tls_is_disabled_for_local_defaults(self):
+        config = worker.database_config({"DATABASE_URL": "mysql://worker:pass@localhost/ojix"})
+        self.assertTrue(config["ssl_disabled"])
+        self.assertNotIn("ssl_ca", config)
+
+    def test_ocr_retrieves_document_from_authenticated_api_route(self):
+        job = {"job_id": "job / one", "document_id": "document-1"}
+        body = b"private PDF bytes"
+        with patch.object(worker, "api_request", return_value=body) as request:
+            self.assertEqual(worker.load_document(job), body)
+        request.assert_called_once_with(
+            "/internal/ocr/jobs/job%20%2F%20one/document", method="GET", timeout=120
+        )
 class AtomicClaimTests(unittest.TestCase):
     def test_stale_processing_job_is_recovered_and_attempt_increments(self):
         stale = make_job("stale", "processing", 1, attempts=1, stale_seconds=3600)

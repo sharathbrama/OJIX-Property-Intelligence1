@@ -1,4 +1,4 @@
-import { ArrowRight, BadgeCheck, BookOpen, Building2, FileCheck2, FileSearch, KeyRound, Map, ShieldAlert, Users } from 'lucide-react';
+import { ArrowRight, BadgeCheck, BookOpen, Building2, FileCheck2, FileSearch, KeyRound, Map, ShieldAlert, Users, Play, FlaskConical } from 'lucide-react';
 import type { UserAccount,UserRole } from '../types';
 
 type Destination='overview'|'properties'|'all-documents'|'all-findings'|'all-maps'|'legal-research'|'source-registry'|'admin-overview'|'super-admin';
@@ -10,6 +10,14 @@ const propertySteps:Step[]=[
  {title:'Run preliminary checks',description:'Review findings for missing data, conflicts and risk indicators. Treat each result as a prompt for professional verification.',destination:'all-findings',linkLabel:'Open Risk Reviews'},
  {title:'Check map and source context',description:'Inspect available map layers and source registry status. A reachable government portal does not mean its records are connected or verified.',destination:'all-maps',linkLabel:'Open Map Intelligence'},
  {title:'Record review and produce a report',description:'Document unresolved points and reviewer decisions. Open the property Report tab to create a due-diligence snapshot, then review and download the report.',destination:'properties',linkLabel:'Open Properties'},
+];
+const demoSteps:Step[]=[
+ {title:'Open the seeded sample case',description:'Use Properties and open OJIX-DEMO-0001. It is synthetic data created for product demonstrations.',destination:'properties',linkLabel:'Open sample case'},
+ {title:'Explore the case record',description:'Review property identity, supplied documents, title history, discrepancies, findings and the report tabs. Try creating a second sample application if you want to test intake.',destination:'properties',linkLabel:'Browse properties'},
+ {title:'Try role-specific actions',description:'Sign out and choose another demo role to see how permissions change. The guide will show a different checklist for each role.'},
+ {title:'Use only safe sample files',description:'Upload synthetic or redacted PDFs and images to try document intake, comparison and review. File extraction is a review aid and may need human correction.'},
+ {title:'Inspect maps and sources',description:'Open Map Intelligence and Source Registry. Demo map shapes are illustrative; external government records are not connected by default.',destination:'all-maps',linkLabel:'Open map intelligence'},
+ {title:'Create and review an export',description:'Run preliminary checks on a case, then open its Report tab to inspect and download the evidence snapshot. Treat it as a draft for professional review.'},
 ];
 const workspaceSteps:Step[]=[
  {title:'Invite workspace members',description:'Use Admin Console → Members to record an invitation and assign the least-privileged role needed.',destination:'admin-overview',linkLabel:'Open Admin Console',roles:'Owner or Admin'},
@@ -51,6 +59,7 @@ export function WorkflowGuide({onNavigate,currentUser,showSuperAdmin=false}:{onN
  const canOpen=(page:Destination)=>page==='super-admin'?Boolean(currentUser.isSuperAdmin&&showSuperAdmin):Boolean(ROLE_ACCESS[page]?.includes(currentUser.role));
  const go=(page:Destination)=>{if(canOpen(page))onNavigate(page);};
  return <main className="workflow-guide"><header className="page-heading"><div><div className="eyebrow">OJIX HOW-TO</div><h1>Workflow Guide</h1><p>Follow the steps in order. Each link opens the relevant area; available actions depend on your role.</p></div></header>
+ <section className="workflow-guide-section"><div className="workflow-section-title"><Play/><div><h2>Try the demo</h2><p>Guided product tour · synthetic data only</p></div></div><StepList steps={demoSteps} onNavigate={go} canOpen={canOpen}/><div className="workflow-guide-notice"><FlaskConical/><span><strong>Demo boundaries</strong><small>Use synthetic records. Live Bhoomi/Kaveri/BBMP lookups, official parcel boundaries, production OCR/AI extraction, and legal conclusions are not provided by this demo.</small></span></div></section>
  <section className="workflow-guide-section workflow-signin"><div className="workflow-section-title"><KeyRound/><div><h2>Sign in and access</h2><p>What happens when you log in</p></div></div><ol className="workflow-steps"><li><span className="workflow-step-number">1</span><div className="workflow-step-copy"><h3>Enter your account details</h3><p>Use your registered email and password. Local seeded demo accounts use the development OTP flow.</p></div></li><li><span className="workflow-step-number">2</span><div className="workflow-step-copy"><h3>Verify the one-time code</h3><p>In development, the demo code appears on the screen. In production, the code is sent to the verified email or phone configured for the account.</p></div></li><li><span className="workflow-step-number">3</span><div className="workflow-step-copy"><h3>Use the tools for your role</h3><p>Navigation and actions follow workspace permissions. The Workflow Guide stays available from the sidebar.</p></div></li></ol></section>
  <section className="workflow-guide-section"><div className="workflow-section-title"><BadgeCheck/><div><h2>Your role: {currentUser.designation}</h2><p>Suggested sequence for the current account</p></div></div><StepList steps={roleSteps[currentUser.role]} onNavigate={go} canOpen={canOpen}/></section>
  <div className="workflow-guide-notice"><ShieldAlert/><span><strong>Evidence-based review</strong><small>OJIX organizes evidence and flags issues. It does not certify ownership, fetch official records by default, or replace qualified legal review.</small></span></div>

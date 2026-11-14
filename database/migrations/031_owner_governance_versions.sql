@@ -49,20 +49,3 @@ CREATE TABLE workspace_purge_requests (
   CONSTRAINT workspace_purge_tenant_fk FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
   CONSTRAINT workspace_purge_document_fk FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE workspace_purge_requests (
-  id CHAR(36) NOT NULL,
-  tenant_id CHAR(36) NOT NULL,
-  document_id CHAR(36) NOT NULL,
-  requested_by_uid VARCHAR(191) NOT NULL,
-  reason TEXT NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'pending',
-  approved_by_uid VARCHAR(191) NULL,
-  approved_at DATETIME(6) NULL,
-  completed_at DATETIME(6) NULL,
-  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  PRIMARY KEY (id),
-  KEY workspace_purge_tenant_status_idx (tenant_id, status, created_at),
-  CONSTRAINT workspace_purge_tenant_fk FOREIGN KEY (tenant_id) REFERENCES organizations(id) ON DELETE CASCADE,
-  CONSTRAINT workspace_purge_document_fk FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
