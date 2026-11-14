@@ -1,0 +1,433 @@
+{
+  "config": {
+    "argv": [
+      "/usr/local/bin/node",
+      "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/node_modules/.bin/playwright",
+      "test",
+      "--list"
+    ],
+    "configFile": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/playwright.config.ts",
+    "rootDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/tests/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": true,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {},
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/test-results/playwright",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "id": "desktop-chrome",
+        "name": "desktop-chrome",
+        "testDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/test-results/playwright",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "id": "mobile-chrome",
+        "name": "mobile-chrome",
+        "testDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "filteredProjects": [
+      {
+        "grep": {},
+        "grepInvert": null,
+        "outputDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/test-results/playwright",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "name": "desktop-chrome",
+        "testDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/tests/e2e",
+        "snapshotDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/tests/e2e",
+        "testIgnore": [],
+        "testMatch": "**/*.@(spec|test).?(c|m)[jt]s?(x)",
+        "timeout": 30000,
+        "use": {
+          "baseURL": "http://127.0.0.1:5173",
+          "channel": "chrome",
+          "trace": "retain-on-failure",
+          "screenshot": "only-on-failure",
+          "video": "off",
+          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.4 Safari/537.36",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "screen": {
+            "width": 1920,
+            "height": 1080
+          },
+          "deviceScaleFactor": 1,
+          "isMobile": false,
+          "hasTouch": false,
+          "defaultBrowserType": "chromium"
+        },
+        "dependencies": [],
+        "ignoreSnapshots": false,
+        "__projectId": "desktop-chrome"
+      },
+      {
+        "grep": {},
+        "grepInvert": null,
+        "outputDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/test-results/playwright",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "name": "mobile-chrome",
+        "testDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/tests/e2e",
+        "snapshotDir": "/Users/apple/Desktop/OJIX-NonLetigation-Law-inteligence/tests/e2e",
+        "testIgnore": [],
+        "testMatch": "**/*.@(spec|test).?(c|m)[jt]s?(x)",
+        "timeout": 30000,
+        "use": {
+          "baseURL": "http://127.0.0.1:5173",
+          "channel": "chrome",
+          "trace": "retain-on-failure",
+          "screenshot": "only-on-failure",
+          "video": "off",
+          "userAgent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.4 Mobile Safari/537.36",
+          "viewport": {
+            "width": 412,
+            "height": 839
+          },
+          "screen": {
+            "width": 412,
+            "height": 915
+          },
+          "deviceScaleFactor": 2.625,
+          "isMobile": true,
+          "hasTouch": true,
+          "defaultBrowserType": "chromium"
+        },
+        "dependencies": [],
+        "ignoreSnapshots": false,
+        "__projectId": "mobile-chrome"
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "html",
+        {
+          "outputFolder": "playwright-report",
+          "open": "never"
+        }
+      ],
+      [
+        "json",
+        {
+          "outputFile": "qa-reports/playwright-results.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "default",
+    "updateSourceMethod": "patch",
+    "version": "1.64.1",
+    "workers": 4,
+    "webServer": {
+      "command": "npm run dev -w apps/web",
+      "url": "http://127.0.0.1:5173/login",
+      "reuseExistingServer": true,
+      "timeout": 120000
+    }
+  },
+  "suites": [
+    {
+      "title": "public-auth.spec.ts",
+      "file": "public-auth.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "public authentication experience",
+          "file": "public-auth.spec.ts",
+          "line": 3,
+          "column": 6,
+          "specs": [
+            {
+              "title": "renders the OJIX login landing experience",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop-chrome",
+                  "projectName": "desktop-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-eb862f047732a0187d5a",
+              "file": "public-auth.spec.ts",
+              "line": 8,
+              "column": 7
+            },
+            {
+              "title": "opens the secure login form and exposes required controls",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop-chrome",
+                  "projectName": "desktop-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-02492017d711980c25f5",
+              "file": "public-auth.spec.ts",
+              "line": 14,
+              "column": 7
+            },
+            {
+              "title": "shows the API/database outage without hiding the login form",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop-chrome",
+                  "projectName": "desktop-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-1841d92f613ae0724c3d",
+              "file": "public-auth.spec.ts",
+              "line": 22,
+              "column": 7
+            },
+            {
+              "title": "toggles password visibility",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop-chrome",
+                  "projectName": "desktop-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-4bce856b083b473f9dbd",
+              "file": "public-auth.spec.ts",
+              "line": 28,
+              "column": 7
+            },
+            {
+              "title": "navigates to registration and shows required account fields",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop-chrome",
+                  "projectName": "desktop-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-2c522b969d19c32d9d56",
+              "file": "public-auth.spec.ts",
+              "line": 37,
+              "column": 7
+            },
+            {
+              "title": "has no horizontal page overflow at the configured viewport",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop-chrome",
+                  "projectName": "desktop-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-4cfc528ff70345df8541",
+              "file": "public-auth.spec.ts",
+              "line": 46,
+              "column": 7
+            },
+            {
+              "title": "renders the OJIX login landing experience",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "mobile-chrome",
+                  "projectName": "mobile-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-41dbd515dff44e2a73b5",
+              "file": "public-auth.spec.ts",
+              "line": 8,
+              "column": 7
+            },
+            {
+              "title": "opens the secure login form and exposes required controls",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "mobile-chrome",
+                  "projectName": "mobile-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-6529b10cbec177b535ec",
+              "file": "public-auth.spec.ts",
+              "line": 14,
+              "column": 7
+            },
+            {
+              "title": "shows the API/database outage without hiding the login form",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "mobile-chrome",
+                  "projectName": "mobile-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-79426a5daf156d45b9ad",
+              "file": "public-auth.spec.ts",
+              "line": 22,
+              "column": 7
+            },
+            {
+              "title": "toggles password visibility",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "mobile-chrome",
+                  "projectName": "mobile-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-d8b6da7645d53561eae1",
+              "file": "public-auth.spec.ts",
+              "line": 28,
+              "column": 7
+            },
+            {
+              "title": "navigates to registration and shows required account fields",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "mobile-chrome",
+                  "projectName": "mobile-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-97fb0b2ecce5d05f24f4",
+              "file": "public-auth.spec.ts",
+              "line": 37,
+              "column": 7
+            },
+            {
+              "title": "has no horizontal page overflow at the configured viewport",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "mobile-chrome",
+                  "projectName": "mobile-chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "64cc60d2a1fbe6ed2e47-783f467de4e149330ce4",
+              "file": "public-auth.spec.ts",
+              "line": 46,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-27T05:37:48.086Z",
+    "duration": 50.51400000000001,
+    "expected": 0,
+    "skipped": 12,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}
