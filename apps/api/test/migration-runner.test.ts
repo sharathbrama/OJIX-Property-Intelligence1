@@ -119,6 +119,23 @@ test('fresh canonical baseline requires explicit baseline and records files with
   assert.equal(db.baselineThroughId, 35);
 });
 
+test('existing canonical baseline applies later migrations without re-registering baseline metadata', async () => {
+  const db = new MockConnection();
+  db.tables.add('ojix_schema_migrations');
+  db.tables.add('ojix_migration_metadata');
+  db.tables.add('org_memberships');
+  db.baseline = 'canonical-v1';
+  db.baselineThroughId = 36;
+  db.ledger.set(36, { migration_id: 36, filename: '036_test.sql', checksum: migration(36).checksum, status: 'applied', completed_at: new Date() });
+  assert.equal((await buildMigrationPlan(db, [migration(36), migration(37)], options())).canApply, true);
+
+  const plan = await runMigrationPlan(db, [migration(36), migration(37)], options({ apply: true, confirmation: 'ojix_mock' }));
+  assert.equal(plan.items.find(item => item.id === 37)?.status, 'applied');
+  assert.equal(db.baseline, 'canonical-v1');
+  assert.equal(db.baselineThroughId, 36);
+  assert.ok(db.executed.includes('SELECT 1'));
+});
+
 test('canonical baseline blocks missing ledger rows instead of replaying historical SQL', async () => {
   const db = new MockConnection();
   db.tables.add('ojix_schema_migrations'); db.tables.add('ojix_migration_metadata'); db.baseline = 'canonical-v1'; db.baselineThroughId = 35;

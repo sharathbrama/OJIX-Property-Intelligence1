@@ -306,6 +306,7 @@ export async function runMigrationPlan(connection: MigrationConnection, migratio
   const lockRows = await queryRows(connection, 'SELECT GET_LOCK(?,?) AS acquired', [lock, options.lockTimeoutSeconds ?? 0]);
   if (Number(lockRows[0]?.acquired) !== 1) throw new Error('Could not acquire the migration advisory lock. Another migration or session may hold it.');
   try {
+    const hasExistingLedger = await tableExists(connection, options.database, LEDGER_TABLE);
     let plan = await buildMigrationPlan(connection, migrations, options);
     const hasApplied035 = plan.items.some(item => item.id === 35 && item.status === 'applied');
     const hasPending035 = plan.items.some(item => item.id === 35 && item.status === 'pending');
@@ -316,7 +317,7 @@ export async function runMigrationPlan(connection: MigrationConnection, migratio
     if (!plan.canApply) throw new Error('Migration plan contains blocked or failed entries; no SQL was applied.');
     if (hasApplied035 && !identityCheck.ok) throw new Error('Super Admin preflight failed after migration 035 is already marked applied.');
 
-    if (plan.baseline === 'canonical-v1') {
+    if (!hasExistingLedger && plan.baseline === 'canonical-v1') {
       await initializeCanonicalBaseline(connection, migrations);
       return { ...plan, warnings: [...plan.warnings, 'Canonical baseline registered; no migration SQL was executed.'] };
     }

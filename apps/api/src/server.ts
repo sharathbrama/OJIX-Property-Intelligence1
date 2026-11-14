@@ -642,6 +642,24 @@ function ownerGuard(req: Request, res: Response, next: NextFunction) {
 
 const asyncRoute = (fn: (req: AuthenticatedRequest, res: Response, next: NextFunction) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req as AuthenticatedRequest, res, next)).catch(next);
 
+async function loadTenantReportBranding(tenantId: string) {
+  const result = await pool!.query(
+    'SELECT org_name,llpin,office_address,firm_logo_url,firm_email,default_report_template,legal_disclaimer FROM workspace_settings WHERE tenant_id=?',
+    [tenantId],
+  );
+  const row = result.rows[0];
+  return row ? {
+    id: tenantId,
+    organizationName: String(row.org_name || 'Not recorded'),
+    llpin: String(row.llpin || ''),
+    officeAddress: String(row.office_address || ''),
+    firmLogoUrl: String(row.firm_logo_url || ''),
+    firmEmail: String(row.firm_email || ''),
+    defaultReportTemplate: String(row.default_report_template || 'detailed_due_diligence'),
+    legalDisclaimer: String(row.legal_disclaimer || ''),
+  } : { id: tenantId, organizationName: 'Not recorded' };
+}
+
 function consultantReportScope(user: AuthenticatedRequest['user']) {
   if (['owner','admin'].includes(user?.role || '')) return { sql:'r.tenant_id=?', params:[user?.tenantId] };
   if (user?.role==='lawyer') return { sql:'r.tenant_id=? AND p.assigned_lawyer_uid=?', params:[user.tenantId,user.uid] };
@@ -2020,14 +2038,31 @@ app.get('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res) =
   res.json({ item: property.rows[0], members, history: history.rows, approvalChecks });
 }));
 
-app.patch('/api/properties/:id/workflow', authGuard, adminGuard, asyncRoute(async (req, res) => {
+app.patch('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed = workflowUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid workflow update.', issues: parsed.error.flatten() });
-  const currentResult = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
+  const actorRole = req.user?.role || '';
+  const isGovernance = ['owner','admin'].includes(actorRole);
+  const isLegalReviewer = actorRole === 'lawyer';
+  if (!isGovernance && !isLegalReviewer) return res.status(403).json({ error: 'Workflow update is not available for this role.' });
+  const currentResult = await pool.query(
+    `SELECT * FROM properties WHERE id=? AND tenant_id=?${isLegalReviewer ? ' AND assigned_lawyer_uid=?' : ''}`,
+    isLegalReviewer ? [req.params.id, req.user?.tenantId, req.user?.uid] : [req.params.id, req.user?.tenantId],
+  );
   if (!currentResult.rowCount) return res.status(404).json({ error: 'Property not found.' });
   const current = currentResult.rows[0];
   const update = parsed.data;
+  const isLegalApproval = ['approved','complete'].includes(update.status);
+  if (isLegalApproval && !isLegalReviewer) {
+    return res.status(403).json({ error: 'Only the assigned Lawyer can record legal approval or release.' });
+  }
+  if (isLegalReviewer && (!isLegalApproval || update.assignedLawyerUid && update.assignedLawyerUid !== req.user?.uid || update.assignedAnalystUid || update.assignedOperationsUid)) {
+    return res.status(403).json({ error: 'Lawyers may only approve or release matters assigned to them; workspace assignment changes are restricted to Owner/Admin.' });
+  }
+  if (isLegalApproval && current.assigned_lawyer_uid !== req.user?.uid) {
+    return res.status(403).json({ error: 'Only the assigned Lawyer can record legal approval or release.' });
+  }
   const assignments = [
     ['lawyer', update.assignedLawyerUid],
     ['analyst', update.assignedAnalystUid],
@@ -2038,18 +2073,35 @@ app.patch('/api/properties/:id/workflow', authGuard, adminGuard, asyncRoute(asyn
     const member = await pool.query('SELECT user_uid FROM org_memberships WHERE organization_id=? AND user_uid=? AND role=? LIMIT 1', [req.user?.tenantId, uid, role]);
     if (!member.rowCount) return res.status(400).json({ error: `Selected ${role} is not an active member of this workspace.` });
   }
-  if (['approved','complete'].includes(update.status)) {
-    const candidate = { ...current, assigned_lawyer_uid: update.assignedLawyerUid };
+  if (isLegalApproval) {
+    const candidate = { ...current, assigned_lawyer_uid: isLegalReviewer ? req.user?.uid : update.assignedLawyerUid };
     const approvalChecks = await getWorkflowApprovalChecks(candidate, req.user?.tenantId || '');
     if (!approvalChecks.ready) return res.status(409).json({ error: 'This application cannot be approved or released until the evidence safeguards are complete.', issues: approvalChecks.blockers, approvalChecks });
     if (update.status === 'complete' && current.status !== 'approved' && current.status !== 'complete') return res.status(409).json({ error: 'Approve the application before releasing it as complete.', issues: ['Change the status to Approved first, then release it as Complete.'] });
   }
   const before = { status:current.status, priority:current.workflow_priority, dueDate:current.due_date, assignedLawyerUid:current.assigned_lawyer_uid, assignedAnalystUid:current.assigned_analyst_uid, assignedOperationsUid:current.assigned_operations_uid };
-  const after = { status:update.status, priority:update.priority, dueDate:update.dueDate || null, assignedLawyerUid:update.assignedLawyerUid, assignedAnalystUid:update.assignedAnalystUid, assignedOperationsUid:update.assignedOperationsUid };
+  const after = {
+    status:update.status,
+    priority:update.priority,
+    dueDate:update.dueDate || null,
+    assignedLawyerUid:isLegalReviewer ? current.assigned_lawyer_uid : update.assignedLawyerUid,
+    assignedAnalystUid:isLegalReviewer ? current.assigned_analyst_uid : update.assignedAnalystUid,
+    assignedOperationsUid:isLegalReviewer ? current.assigned_operations_uid : update.assignedOperationsUid,
+  };
   if (JSON.stringify(before) === JSON.stringify(after)) return res.status(400).json({ error: 'No workflow changes were supplied.' });
-  await pool.query(`UPDATE properties SET status=?, workflow_priority=?, due_date=?, assigned_lawyer_uid=?, assigned_analyst_uid=?, assigned_operations_uid=?, updated_by_uid=?, updated_at=now() WHERE id=? AND tenant_id=?`, [after.status,after.priority,after.dueDate,after.assignedLawyerUid,after.assignedAnalystUid,after.assignedOperationsUid,req.user?.uid||'unknown',req.params.id,req.user?.tenantId]);
-  await pool.query('INSERT INTO property_workflow_history (id,tenant_id,property_id,previous_status,new_status,reason,changes_json,changed_by_uid) VALUES (?,?,?,?,?,?,?,?)', [crypto.randomUUID(),req.user?.tenantId,req.params.id,current.status,after.status,update.reason,JSON.stringify({before,after}),req.user?.uid||'unknown']);
-  await audit(req.user?.uid||'unknown',req.user?.tenantId,'property.workflow_updated','property',req.params.id,{before,after,reason:update.reason});
+  const clearsLegalApproval = ['approved','complete'].includes(String(current.status)) && !isLegalApproval;
+  await pool.query(
+    `UPDATE properties SET status=?, workflow_priority=?, due_date=?, assigned_lawyer_uid=?, assigned_analyst_uid=?, assigned_operations_uid=?,
+       legal_approved_by_uid=CASE WHEN ? THEN ? WHEN ? THEN NULL ELSE legal_approved_by_uid END,
+       legal_approved_at=CASE WHEN ? THEN NOW(6) WHEN ? THEN NULL ELSE legal_approved_at END,
+       updated_by_uid=?, updated_at=now() WHERE id=? AND tenant_id=?`,
+    [after.status,after.priority,after.dueDate,after.assignedLawyerUid,after.assignedAnalystUid,after.assignedOperationsUid,
+      isLegalApproval,req.user?.uid||'unknown',clearsLegalApproval,isLegalApproval,clearsLegalApproval,
+      req.user?.uid||'unknown',req.params.id,req.user?.tenantId],
+  );
+  const workflowAction = isLegalApproval ? 'report.legal_sign_off' : 'property.workflow_updated';
+  await pool.query('INSERT INTO property_workflow_history (id,tenant_id,property_id,previous_status,new_status,reason,changes_json,changed_by_uid) VALUES (?,?,?,?,?,?,?,?)', [crypto.randomUUID(),req.user?.tenantId,req.params.id,current.status,after.status,update.reason,JSON.stringify({before,after,legalSignOff:isLegalApproval?{approvedBy:req.user?.uid,role:actorRole}:undefined}),req.user?.uid||'unknown']);
+  await audit(req.user?.uid||'unknown',req.user?.tenantId,workflowAction,'property',req.params.id,{before,after,reason:update.reason,approverRole:actorRole,isLegalApproval});
   const result = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);
   res.json({ item: result.rows[0] });
 }));
@@ -3493,8 +3545,11 @@ app.post('/api/properties/:id/due-diligence-snapshot', authGuard, writeGuard, as
   const activeRules=await pool.query("SELECT version_number,configuration FROM owner_configuration_versions WHERE tenant_id=? AND config_type='discrepancy_rules' AND status='active' ORDER BY version_number DESC LIMIT 1",[req.user?.tenantId]);
   const discrepancyRules=activeRules.rowCount?(typeof activeRules.rows[0].configuration==='string'?JSON.parse(activeRules.rows[0].configuration):activeRules.rows[0].configuration):{};
   const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0], discrepancyRules);
+  const tenantBranding = await loadTenantReportBranding(String(req.user?.tenantId || ''));
 
   const snapshot = createDueDiligenceSnapshot({
+    tenant: tenantBranding,
+    statutoryNotice: tenantBranding.legalDisclaimer || undefined,
     property: p.rows[0],
     documents: docs.rows,
     titleTimeline,
@@ -3553,7 +3608,10 @@ app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(a
   const discrepancies = detectCrossDocumentDiscrepancies(docItems, p.rows[0], discrepancyRules);
   const activeTemplate=await pool.query("SELECT version_number,name,configuration FROM owner_configuration_versions WHERE tenant_id=? AND config_type='report_templates' AND status='active' ORDER BY version_number DESC LIMIT 1",[req.user?.tenantId]);
   const reportTemplate=activeTemplate.rowCount?{version:Number(activeTemplate.rows[0].version_number),name:activeTemplate.rows[0].name,configuration:typeof activeTemplate.rows[0].configuration==='string'?JSON.parse(activeTemplate.rows[0].configuration):activeTemplate.rows[0].configuration}:null;
+  const tenantBranding = await loadTenantReportBranding(String(req.user?.tenantId || ''));
   const snapshot = createDueDiligenceSnapshot({
+    tenant: tenantBranding,
+    statutoryNotice: tenantBranding.legalDisclaimer || undefined,
     property: p.rows[0],
     documents: docs.rows,
     titleTimeline,
@@ -4134,8 +4192,14 @@ app.get('/api/settings', authGuard, asyncRoute(async (req, res) => {
     return res.json({
       settings: {
         org_name: 'Karnataka Legal Partners LLP',
+        llpin: '',
         primary_contact: 'Deepak Professional (deepak@ojix.local)',
+        firm_email: '',
         default_district: 'Bengaluru Urban',
+        office_address: '',
+        firm_logo_url: '',
+        default_report_template: 'detailed_due_diligence',
+        legal_disclaimer: '',
         auto_screen_bhoomi: true,
         auto_screen_kaveri: true,
         auto_screen_spatial: true,
@@ -4154,18 +4218,35 @@ app.get('/api/settings', authGuard, asyncRoute(async (req, res) => {
 app.post('/api/settings', authGuard, adminGuard, asyncRoute(async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const s = req.body || {};
+  const branding = z.object({
+    llpin: z.string().trim().max(64).default(''),
+    firm_email: z.string().trim().max(191).refine(value => !value || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value), 'Enter a valid firm email.').default(''),
+    office_address: z.string().trim().max(2000).default(''),
+    firm_logo_url: z.string().trim().max(2048).refine(value => !value || value.startsWith('https://'), 'Logo URL must use HTTPS.').default(''),
+    default_report_template: z.enum(['detailed_due_diligence', 'preliminary_screening', 'client_decision_pack']).default('detailed_due_diligence'),
+    legal_disclaimer: z.string().trim().max(10000).default(''),
+  }).safeParse(s);
+  if (!branding.success) return res.status(400).json({ error: 'Invalid organization branding or report settings.', details: branding.error.flatten().fieldErrors });
+  const b = branding.data;
   await pool.query(
     `INSERT INTO workspace_settings
-     (tenant_id, org_name, primary_contact, default_district,
+     (tenant_id, org_name, llpin, primary_contact, firm_email, default_district,
+      office_address, firm_logo_url, default_report_template, legal_disclaimer,
       auto_screen_bhoomi, auto_screen_kaveri, auto_screen_spatial,
       swd_primary_buffer_m, swd_secondary_buffer_m, swd_tertiary_buffer_m,
       lake_buffer_m, survey_margin_tolerance_pct, ocr_confidence_threshold,
       updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
      ON DUPLICATE KEY UPDATE
        org_name = VALUES(org_name),
+       llpin = VALUES(llpin),
        primary_contact = VALUES(primary_contact),
+       firm_email = VALUES(firm_email),
        default_district = VALUES(default_district),
+       office_address = VALUES(office_address),
+       firm_logo_url = VALUES(firm_logo_url),
+       default_report_template = VALUES(default_report_template),
+       legal_disclaimer = VALUES(legal_disclaimer),
        auto_screen_bhoomi = VALUES(auto_screen_bhoomi),
        auto_screen_kaveri = VALUES(auto_screen_kaveri),
        auto_screen_spatial = VALUES(auto_screen_spatial),
@@ -4179,8 +4260,14 @@ app.post('/api/settings', authGuard, adminGuard, asyncRoute(async (req, res) => 
     [
       req.user?.tenantId,
       s.org_name || 'Karnataka Legal Partners LLP',
+      b.llpin,
       s.primary_contact || 'Deepak Professional (deepak@ojix.local)',
+      b.firm_email,
       s.default_district || 'Bengaluru Urban',
+      b.office_address || null,
+      b.firm_logo_url || null,
+      b.default_report_template,
+      b.legal_disclaimer || null,
       s.auto_screen_bhoomi ?? true,
       s.auto_screen_kaveri ?? true,
       s.auto_screen_spatial ?? true,

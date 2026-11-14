@@ -56,14 +56,16 @@ test('forward correction checks and preserves existing viewer indexes and data',
   assert.doesNotMatch(correction, /DROP\s+(?:TABLE|INDEX|COLUMN)|TRUNCATE\s+TABLE|DELETE\s+FROM/i);
 });
 
-test('migration numbering is unique and onboarding follows the role/index correction', () => {
+test('migration numbering is unique and post-onboarding settings follow the role/index correction', () => {
   const migrationFiles = fs.readdirSync(migrationDirectory).filter(file => /^\d{3}_.*\.sql$/.test(file));
   const ids = migrationFiles.map(file => Number(file.slice(0, 3)));
   assert.equal(new Set(ids).size, ids.length, 'migration IDs must be unique');
   assert.ok(migrationFiles.includes('034_viewer_matter_assignment.sql'));
   assert.ok(migrationFiles.includes('035_correct_platform_role_and_viewer_index.sql'));
   assert.ok(migrationFiles.includes('036_organization_onboarding.sql'));
-  assert.equal(Math.max(...ids), 36, '036 is currently the final migration');
+  assert.ok(migrationFiles.includes('037_workspace_firm_branding.sql'));
+  assert.ok(migrationFiles.includes('038_legal_sign_off_separation.sql'));
+  assert.equal(Math.max(...ids), 38, '038 is the current final migration');
 });
 
 test('registration onboarding stores an organization name and no longer assigns a shared demo tenant', () => {

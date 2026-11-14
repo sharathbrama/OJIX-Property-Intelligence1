@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>OJIX Property Intelligence — Comprehensive Project Evaluation & Roadmap</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    :root {
+      --primary: #0f172a;
+      --primary-light: #1e293b;
+      --accent-orange: #ea580c;
+      --accent-orange-light: #ffedd5;
+      --text-main: #0f172a;
+      --text-muted: #475569;
+      --border-color: #cbd5e1;
+      --bg-soft: #f8fafc;
+      --badge-done-bg: #dcfce7;
+      --badge-done-text: #166534;
+      --badge-pending-bg: #fee2e2;
+      --badge-pending-text: #991b1b;
+      --badge-partial-bg: #fef3c7;
+      --badge-partial-text: #92400e;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: var(--text-main);
+      background-color: #e2e8f0;
+      line-height: 1.6;
+      font-size: 13.5px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .document-container {
+      max-width: 900px;
+      margin: 30px auto;
+      background: #ffffff;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    /* Header Bar */
+    .brand-header {
+      background: var(--primary);
+      border-top: 5px solid var(--accent-orange);
+      color: #ffffff;
+      padding: 24px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .brand-logo {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: 2px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .brand-logo span {
+      color: var(--accent-orange);
+    }
+
+    .brand-meta {
+      text-align: right;
+      font-size: 11.5px;
+      color: #94a3b8;
+      line-height: 1.4;
+    }
+
+    .brand-meta strong {
+      color: #ffffff;
+    }
+
+    /* Content Area */
+    .content-body {
+      padding: 40px 50px;
+    }
+
+    /* Cover Header Area */
+    .doc-hero {
+      border-bottom: 2px solid #e2e8f0;
+      padding-bottom: 25px;
+      margin-bottom: 30px;
+    }
+
+    .doc-hero h1 {
+      font-size: 32px;
+      font-weight: 800;
+      color: var(--primary);
+      line-height: 1.2;
+      margin-bottom: 6px;
+      letter-spacing: -0.5px;
+    }
+
+    .doc-hero .doc-subtitle {
+      font-size: 18px;
+      color: var(--accent-orange);
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .doc-hero .doc-tagline {
+      font-size: 13.5px;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    /* Scope & Principle Boxes */
+    .callout-box {
+      border-radius: 6px;
+      padding: 16px 20px;
+      margin: 20px 0;
+      font-size: 13px;
+    }
+
+    .callout-scope {
+      background-color: var(--bg-soft);
+      border-left: 4px solid var(--primary);
+    }
+
+    .callout-principle {
+      background-color: var(--accent-orange-light);
+      border-left: 4px solid var(--accent-orange);
+      color: #7c2d12;
+    }
+
+    .callout-principle strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #9a3412;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Metadata Grid */
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      background: var(--bg-soft);
+      border: 1px solid var(--border-color);
+      padding: 18px 24px;
+      border-radius: 6px;
+      margin: 20px 0 35px 0;
+      font-size: 13px;
+    }
+
+    .meta-item {
+      display: flex;
+    }
+
+    .meta-label {
+      width: 140px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .meta-value {
+      font-weight: 500;
+      color: var(--primary);
+    }
+
+    /* Headings */
+    h2 {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--primary);
+      margin: 35px 0 16px 0;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #f1f5f9;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--primary-light);
+      margin: 20px 0 10px 0;
+    }
+
+    p {
+      margin-bottom: 14px;
+      color: #334155;
+    }
+
+    ul,
+    ol {
+      margin-left: 22px;
+      margin-bottom: 16px;
+      color: #334155;
+    }
+
+    li {
+      margin-bottom: 6px;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      font-size: 12.5px;
+      border: 1px solid var(--border-color);
+    }
+
+    th {
+      background-color: var(--bg-soft);
+      color: var(--primary);
+      font-weight: 600;
+      text-align: left;
+      padding: 10px 14px;
+      border-bottom: 2px solid var(--border-color);
+      border-right: 1px solid var(--border-color);
+    }
+
+    td {
+      padding: 9px 14px;
+      border-bottom: 1px solid #e2e8f0;
+      border-right: 1px solid #e2e8f0;
+      vertical-align: top;
+    }
+
+    tr:nth-child(even) td {
+      background-color: #fafbfd;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    .badge-done {
+      background: var(--badge-done-bg);
+      color: var(--badge-done-text);
+    }
+
+    .badge-pending {
+      background: var(--badge-pending-bg);
+      color: var(--badge-pending-text);
+    }
+
+    .badge-partial {
+      background: var(--badge-partial-bg);
+      color: var(--badge-partial-text);
+    }
+
+    .badge-p0 {
+      background: #dc2626;
+      color: #ffffff;
+      font-size: 10px;
+      padding: 1px 6px;
+    }
+
+    /* Flow Chart / Diagram Box */
+    .diagram-box {
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 20px 24px;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-x: auto;
+      margin: 20px 0;
+    }
+
+    .diagram-box .arrow {
+      color: var(--accent-orange);
+      font-weight: bold;
+    }
+
+    .diagram-box .node {
+      color: #38bdf8;
+    }
+
+    /* Print Footer */
+    .page-footer {
+      border-top: 1px solid var(--border-color);
+      padding: 20px 40px;
+      background: var(--bg-soft);
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+      font-size: 11.5px;
+    }
+
+    @media print {
+      body {
+        background: none;
+      }
+
+      .document-container {
+        box-shadow: none;
+        margin: 0;
+        max-width: 100%;
+      }
+
+      @page {
+        margin: 15mm;
+        size: A4;
+      }
+
+      .no-print {
+        display: none !important;
+      }
+    }
+
+    .print-button-bar {
+      max-width: 900px;
+      margin: 20px auto 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 10px;
+    }
+
+    .btn-print {
+      background: var(--accent-orange);
+      color: #ffffff;
+      border: none;
+      padding: 10px 20px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.2s;
+    }
+
+    .btn-print:hover {
+      background: #c2410c;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="print-button-bar no-print">
+    <div style="font-size: 13px; color: #475569;">
+      <strong>OJIX Property Intelligence:</strong> Official Project Evaluation & Technical Roadmap
+    </div>
+    <button class="btn-print" onclick="window.print()">
+      🖨️ Print / Save as PDF
+    </button>
+  </div>
+
+  <div class="document-container">
+
+    <!-- Header matching OJIX PDF style -->
+    <div class="brand-header">
+      <div class="brand-logo">
+        OJI<span>X</span>
+      </div>
+      <div class="brand-meta">
+        <strong>OJIX Engineering &amp; Technology LLP</strong><br>
+        LLPIN: ADA-1604 &bull; Bengaluru, Karnataka, India<br>
+        info@ojix.in
+      </div>
+    </div>
+
+    <div class="content-body">
+
+      <!-- Cover Area -->
+      <div class="doc-hero">
+        <h1>PROPERTY INTELLIGENCE</h1>
+        <div class="doc-subtitle">Project Evaluation, Technical Architecture &amp; Delivery Roadmap</div>
+        <div class="doc-tagline">AI-assisted land, property and legal due-diligence platform (Karnataka &amp; Bengaluru
+          first)</div>
+      </div>
+
+      <div class="callout-box callout-scope">
+        <strong>SCOPE:</strong> Comprehensive evaluation of requirements from FRD v1.0 (29 September 2026) against the
+        active codebase baseline. Details project necessity, system flow, completed components, pending implementation,
+        defects/divergences, and the remediation path to release.
+      </div>
+
+      <div class="meta-grid">
+        <div class="meta-item">
+          <div class="meta-label">Prepared For:</div>
+          <div class="meta-value">OJIX Engineering &amp; Product Team</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Evaluation Date:</div>
+          <div class="meta-value">October 2026</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Document Version:</div>
+          <div class="meta-value">1.1 (Comprehensive Review)</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Current Release Status:</div>
+          <div class="meta-value"><span class="badge badge-partial">CONDITIONAL GO (Synthetic QA Only)</span></div>
+        </div>
+      </div>
+
+      <div class="callout-box callout-principle">
+        <strong>IMPORTANT OPERATING PRINCIPLE</strong>
+        The platform is an evidence and workflow system. It must not represent AI output as a legal opinion, ownership
+        determination, or government certification. High-impact conclusions remain strictly reviewable and signable by a
+        qualified professional.
+      </div>
+
+      <!-- SECTION 1 -->
+      <h2>1. The Core Need: Why Was This Project Built?</h2>
+      <p>
+        Property due diligence in Karnataka—particularly around Bengaluru—suffers from chronic fragmentation, legal
+        risks, and high-stakes disputes. Due diligence teams previously had to manually cross-examine documents across
+        unconnected departments.
+      </p>
+      <ul>
+        <li><strong>Severe Spatial Hazards:</strong> Unmapped storm-water drains (<strong>Rajakaluve</strong>) and
+          mandatory National Green Tribunal (NGT) lake buffer zones (30m, 50m, 75m) frequently intersect properties,
+          triggering government demolitions or registration bans.</li>
+        <li><strong>Fragmented Records:</strong> Critical records are siloed across Bhoomi (RTC/Pahani, Mutation
+          extracts), Kaveri 2.0 (Registered Deeds, Encumbrance Certificates), BBMP e-Aasthi (Khata, property tax), and
+          BDA (Layout approvals, Master Plans).</li>
+        <li><strong>Multilingual Discrepancies:</strong> Documents mix archaic Kannada terminology with modern English.
+          Area measurements differ between traditional units (Acres, Guntas, Cents) and standard square feet, causing
+          undetected over-conveyance.</li>
+        <li><strong>The AI Hype Trap:</strong> A generic AI chatbot cannot be trusted with legal titles. Legal
+          professionals require an <strong>unbroken chain of provenance</strong> with exact page anchors, bounding
+          boxes, and cryptographic checksums.</li>
+      </ul>
+
+      <!-- SECTION 2 -->
+      <h2>2. What Is the Flow We Should Follow?</h2>
+      <p>
+        The FRD mandates a deterministic, 6-stage evidence lifecycle from initial property intake to final legal
+        sign-off:
+      </p>
+
+      <div class="diagram-box">
+        [1. Matter & Property Intake]
+        <span class="arrow">│</span> (Survey No, Taluk, Hobli, Village, Extent, Coordinates)
+        <span class="arrow">▼</span>
+        [2. Ingestion & Verification]
+        <span class="arrow">│</span> (PDF/Image Upload ➔ SHA-256 Checksum ➔ Virus Quarantine)
+        <span class="arrow">▼</span>
+        [3. Extraction & Bilingual OCR]
+        <span class="arrow">│</span> (Tesseract kan+eng ➔ Property Schedule, Parties, Boundaries ➔ BBox Anchors)
+        <span class="arrow">▼</span>
+        [4. Deterministic Intelligence Engines]
+        <span class="arrow">├─►</span> <span class="node">A. Title Chain Engine</span> (DAG graph, timeline, broken
+        links & gap detection)
+        <span class="arrow">├─►</span> <span class="node">B. GIS Rules Engine</span> (Buffer calculations: Rajakaluve
+        drains & lake proximity)
+        <span class="arrow">├─►</span> <span class="node">C. Discrepancy Engine</span> (Cross-document comparison: Deed
+        vs RTC vs EC)
+        <span class="arrow">└─►</span> <span class="node">D. Risk Scoring Engine</span> (Explainable findings: Critical,
+        High, Moderate, Info)
+        <span class="arrow">▼</span>
+        [5. Professional Review & Disposition]
+        <span class="arrow">│</span> (Lawyer reviews: Accept, Dispute, Override, or Assign Task)
+        <span class="arrow">▼</span>
+        [6. Immutable Report Snapshot]
+        <span class="arrow">└─►</span> (Versioned JSON & Signed PDF export with complete evidence appendix)
+      </div>
+
+      <!-- SECTION 3 -->
+      <h2>3. Completed Work vs. Pending Work Status</h2>
+      <p>
+        Overall Functional Implementation: <strong>~55% – 60%</strong> (Core domain logic and UI prototypes are
+        written).<br>
+        Overall Production Readiness: <strong>~20%</strong> (Lacks cloud storage, real PDF rendering, and licensed GIS
+        layers).
+      </p>
+
+      <h3>3.1 Summary Comparison Table</h3>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 25%;">Domain Area</th>
+            <th style="width: 45%;">Features &amp; Implemented Capabilities</th>
+            <th style="width: 15%;">FRD Priority</th>
+            <th style="width: 15%;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Authentication &amp; Tenancy</strong></td>
+            <td>Multi-tenant <code>tenant_id</code> scoping, local email/password login, RBAC roles (Owner, Admin,
+              Lawyer, Analyst, Viewer, Super Admin), and immutable audit events table.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-done">Completed</span></td>
+          </tr>
+          <tr>
+            <td><strong>Property Register</strong></td>
+            <td>Property CRUD, 31 Karnataka Districts hierarchy (Taluks, Hoblis, Villages), survey numbers,
+              subdivisions, extent values, and coordinate points.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-done">Completed</span></td>
+          </tr>
+          <tr>
+            <td><strong>Document Ingestion</strong></td>
+            <td>Multipart file upload, size/type limits (25MB max), local directory storage, and SHA-256 cryptographic
+              hash calculated on every file.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-done">Completed</span></td>
+          </tr>
+          <tr>
+            <td><strong>Local OCR</strong></td>
+            <td>Tesseract CLI wrapper with bilingual support (<code>kan+eng</code> for Kannada/English) and
+              <code>pdftoppm</code> for multi-page PDF image extraction.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-done">Completed</span></td>
+          </tr>
+          <tr>
+            <td><strong>Title Chain Engine</strong></td>
+            <td>Directed Acyclic Graph (DAG) construction, deed sequence ordering, party normalization, and detection of
+              missing predecessors, chronological inversions, and extent over-conveyance.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-done">Completed</span></td>
+          </tr>
+          <tr>
+            <td><strong>Discrepancy Engine</strong></td>
+            <td>Extent parsing (acres, guntas, sq. ft), cross-document comparison across Sale Deeds vs RTC vs EC, and
+              boundary conflict detection.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-done">Completed</span></td>
+          </tr>
+          <tr>
+            <td><strong>Spatial Rules Engine</strong></td>
+            <td>Cadastral GeoJSON validation, distance measurement to Rajakaluve storm drains and lakes, and spatial
+              buffer rule logic.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-done">Completed</span></td>
+          </tr>
+          <tr>
+            <td><strong>Report PDF Generation</strong></td>
+            <td>Real PDF generation is not configured. The endpoint returns <code>501 PDF_RENDERER_NOT_CONFIGURED</code>
+              after fake PDF bytes were removed.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-pending">Pending / Blocked</span></td>
+          </tr>
+          <tr>
+            <td><strong>Cloud Storage &amp; Antivirus</strong></td>
+            <td>Currently uses local disk volume (<code>./uploads</code>). Lacks Google Cloud Storage signed URLs and
+              automated malware scanning.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-pending">Pending / Blocked</span></td>
+          </tr>
+          <tr>
+            <td><strong>Licensed Spatial Data</strong></td>
+            <td>Only synthetic demo layers exist. Official BBMP Rajakaluve shapefiles and SSLR revenue maps have not
+              been ingested.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-pending">Pending / Blocked</span></td>
+          </tr>
+          <tr>
+            <td><strong>Async Job Queues</strong></td>
+            <td>No background worker queue (Cloud Tasks / PubSub / BullMQ). Long document processing runs synchronously
+              on HTTP handlers.</td>
+            <td><span class="badge badge-p0">P0</span></td>
+            <td><span class="badge badge-pending">Pending</span></td>
+          </tr>
+          <tr>
+            <td><strong>Legal Research Vector Search</strong></td>
+            <td>Full-text and semantic vector search over statutory land acts (requires pgvector / embeddings).</td>
+            <td><span class="badge" style="background:#e0e7ff; color:#3730a3;">P1</span></td>
+            <td><span class="badge badge-pending">Phase 2</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- SECTION 4 -->
+      <h2>4. Defects, Mistakes &amp; Architectural Divergences in Current Code</h2>
+
+      <h3>4.1 Major Architectural Divergence: Database &amp; Framework</h3>
+      <p>
+        <strong>FRD Requirement:</strong> Google Cloud SQL PostgreSQL with <strong>PostGIS</strong> and
+        <strong>pgvector</strong> + <strong>NestJS</strong>.<br>
+        <strong>Actual Codebase:</strong> <strong>MariaDB 10.11</strong> + <strong>Express.js</strong>.<br>
+        <strong>Consequence:</strong> MariaDB lacks native vector embeddings (<code>pgvector</code>) for legal research.
+        In addition, using Express led to a monolithic 3,685-line file (<code>apps/api/src/server.ts</code>) that is
+        difficult to maintain compared to modular NestJS controllers and services.
+      </p>
+
+      <h3>4.2 The "Fake Fallback" Trap (Previously Present, Now Safeguarded)</h3>
+      <p>
+        In earlier iterations, whenever a service failed or had no data, the code fabricated believable demo results:
+      </p>
+      <ul>
+        <li>Generating 3 synthetic historical deeds when a title chain was empty.</li>
+        <li>Assuming default central Bengaluru coordinates and a hard-coded 18m buffer distance when spatial queries
+          failed.</li>
+        <li>Serving mock PDF bytes and presenting the output as a "Signed PDF".</li>
+      </ul>
+      <p>
+        <strong>Status:</strong> These misleading fallbacks were removed and replaced with defensive <code>501</code> /
+        <code>unknown</code> responses (see <code>P0-GAP-REGISTER.md</code>). However, the real external service
+        integrations (Playwright PDF renderer, real GIS layers) have not yet been wired up in their place.
+      </p>
+
+      <h3>4.3 Frontend Bundle Size Bloat</h3>
+      <p>
+        The Vite production build produces a single unchunked JavaScript bundle of <strong>~1.68 MB</strong>. All
+        components (MapLibre, Report Viewer, Admin Console) are loaded simultaneously without route-based code-splitting
+        (<code>React.lazy()</code>).
+      </p>
+
+      <h3>4.4 Test Suite Environment Dependency</h3>
+      <p>
+        Running <code>npm test</code> fails with <code>ECONNREFUSED</code> unless MariaDB is actively running on port
+        <code>3306</code>. The test suite lacks mocked in-memory database adapters for isolated testing in standard
+        CI/CD environments.
+      </p>
+
+      <!-- SECTION 5 -->
+      <h2>5. Actionable Roadmap &amp; Release Steps</h2>
+      <ol>
+        <li><strong>Step 1 — Wire Headless PDF Renderer:</strong> Replace the 501 stub in
+          <code>report-generator.ts</code> with Playwright/Puppeteer to produce verified PDF reports.</li>
+        <li><strong>Step 2 — Ingest Official GIS Layers:</strong> Replace the synthetic demo row with genuine BBMP
+          Rajakaluve shapefiles and official Karnataka lake boundaries.</li>
+        <li><strong>Step 3 — Implement Cloud Object Storage:</strong> Migrate file uploads from local disk to a cloud
+          bucket (Google Cloud Storage / S3) with short-lived signed URLs.</li>
+        <li><strong>Step 4 — Add Async Job Queues:</strong> Offload OCR and PDF generation to background workers to
+          prevent HTTP request timeouts.</li>
+        <li><strong>Step 5 — Frontend Optimization:</strong> Split the 1.68 MB bundle into lazy-loaded routes to ensure
+          responsive performance on mobile devices.</li>
+      </ol>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="page-footer">
+      <div>OJIX Engineering &amp; Technology LLP &bull; Internal Implementation Baseline</div>
+      <div>Confidential &bull; October 2026</div>
+    </div>
+
+  </div>
+
+</body>
+
+</html>

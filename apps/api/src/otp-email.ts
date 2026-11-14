@@ -151,3 +151,43 @@ export async function sendOtpEmailWithSmtp(
     throw failure;
   }
 }
+
+export interface InvitationEmailInput {
+  to: string;
+  name: string;
+  role: string;
+  activationUrl: string;
+  from: string;
+}
+
+export async function sendInvitationEmailWithSmtp(
+  settings: SmtpSettings,
+  message: InvitationEmailInput,
+  transportFactory: SmtpTransportFactory = nodemailer.createTransport as unknown as SmtpTransportFactory,
+) {
+  const safeName = message.name.replace(/[<>&"']/g, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[char] || '');
+  const safeRole = message.role.replace(/[<>&"']/g, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[char] || '');
+  const activation = new URL(message.activationUrl);
+  if (!['https:', 'http:'].includes(activation.protocol) || (activation.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(activation.hostname))) {
+    throw new Error('Invitation activation URL must use HTTPS (or local HTTP for development).');
+  }
+  const safeActivationUrl = activation.toString().replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || '');
+  const subject = `Invitation to join OJIX Property Intelligence workspace`;
+  const text = `Hello ${message.name},\n\nYou have been invited to join the OJIX Property Intelligence workspace as a ${message.role.toUpperCase()}.\n\nTo activate your account and set your password, click the link below:\n${activation.toString()}\n\nThis invitation is valid for 7 days.\n\nOJIX Property Intelligence`;
+  const html = `<!doctype html><html><body style="margin:0;padding:24px 12px;background:#f2f5f9;font-family:Arial,Helvetica,sans-serif;color:#334155">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e1e7ef;border-radius:10px;overflow:hidden">
+<tr><td style="padding:22px 28px;background:#1d4278;color:#ffffff"><div style="font-size:18px;font-weight:800;letter-spacing:.2px">OJIX <span style="color:#f28a52">Property Intelligence</span></div><div style="margin-top:5px;color:#d9e4f2;font-size:10px;font-weight:700;letter-spacing:1.1px">WORKSPACE INVITATION</div></td></tr>
+<tr><td style="padding:26px 28px 12px"><h1 style="margin:0 0 12px;color:#1d2d44;font-size:22px;line-height:1.3">You've Been Invited</h1><p style="margin:0 0 8px;font-size:14px;line-height:1.6">Hello ${safeName},</p><p style="margin:0;color:#53647a;font-size:14px;line-height:1.6">You have been invited to join the <strong>OJIX Property Intelligence</strong> workspace as a <strong>${safeRole.toUpperCase()}</strong>.</p></td></tr>
+<tr><td style="padding:16px 28px"><a href="${safeActivationUrl}" style="display:inline-block;padding:12px 24px;background:#1d4ed8;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:700;font-size:14px">Activate Account & Set Password</a></td></tr>
+<tr><td style="padding:0 28px 26px"><p style="margin:0 0 8px;color:#64748b;font-size:12px;line-height:1.6">This invitation link expires in 7 days and can only be used once.</p><div style="padding-top:13px;border-top:1px solid #e8edf3;color:#7b8797;font-size:11px;line-height:1.5">OJIX Property Intelligence<br/>Secure workspace onboarding</div></td></tr>
+</table></body></html>`;
+
+  const transporter = transportFactory({
+    host: settings.host,
+    port: settings.port,
+    secure: settings.secure,
+    requireTLS: !settings.secure,
+    auth: { user: settings.user, pass: settings.pass },
+  });
+  await transporter.sendMail({ from: message.from, to: message.to, subject, html, text });
+}

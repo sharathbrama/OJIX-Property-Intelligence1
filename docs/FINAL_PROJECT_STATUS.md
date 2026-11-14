@@ -12,6 +12,9 @@ OJIX is an existing, substantially implemented property intelligence application
 - Email verification now provisions a distinct organization and first active Owner membership in one database transaction and records onboarding audit events.
 - Registration no longer assigns new users to the shared demo organization.
 - Added migration 036 for the pending organization name; it is safe against the canonical schema already containing that column.
+- Merged firm branding/report fields as migration 037 and explicit legal sign-off metadata as migration 038, avoiding duplicate historical migration IDs.
+- Workspace settings validate and persist organization/report branding. Property workflow sign-off is restricted to the assigned Lawyer and records reviewer identity/time; report status alone no longer claims legal sign-off.
+- Password-only sign-in remains disabled. The Keerthana branch's MFA-off/password-only path and embedded demo-password fallbacks were not merged because they would weaken the existing authentication policy.
 - Firebase Hosting's `/api/**` rewrite now uses the repository's configured API service name and region.
 - Existing safeguards remain: migration 035 repairs only the reserved Super Admin membership and Viewer assignment schema; the migration runner blocks ambiguous historical replay.
 
@@ -21,17 +24,19 @@ These code changes have not been applied to an external or staging database.
 
 - `npm run typecheck`: **passed** after final harness edits.
 - `npm run build`: **passed** after final harness edits. The frontend build reports a non-blocking large-chunk warning (about 1.87 MB before gzip).
-- Managed full API suite: **499 passed, 0 failed**, using `npm test -w apps/api` with `TEST_DATABASE_URL` pointed to a dedicated loopback MariaDB 10.4 database `ojix_property_test`, never the XAMPP/OJIX database. This exercised database-backed route tests, role/tenant scoping, onboarding transaction unit coverage, migration runner checks, storage adapter tests, source reachability, and real Chromium PDF rendering.
+- Managed full API suite: **522 passed, 0 failed**, using `npm test -w apps/api` with `TEST_DATABASE_URL` pointed to a dedicated loopback MariaDB 10.4 database `ojix_property_test`, never the XAMPP/OJIX database. This exercised database-backed route tests, role/tenant scoping, onboarding provisioning coverage, migration runner checks, storage adapter tests, source reachability, and Chromium/PDFKit report generation.
 - Test runner now requires an explicit loopback-only disposable DB URL with a test-like database name, starts a managed API instance, checks readiness, and cleans up. It does not fall back to `DATABASE_URL`.
-- The isolated schema was loaded from `database/mysql-schema.sql` plus synthetic `infra/db/seed.sql` fixtures. Migration runner baseline report shows migrations 004–036 recorded applied. This verifies the canonical fresh-schema baseline and ledger reporting, **not** execution of every historical SQL migration from an empty schema. Upgrade migration 036 against a prior-version database, backup restore, and full catalog comparison remain unverified.
+- The isolated schema was loaded from `database/mysql-schema.sql` plus synthetic `infra/db/seed.sql` fixtures. The migration runner reported baseline `canonical-v1`, then applied migrations 037–038 to that isolated schema. It did not replay every historical migration from an empty schema. Prior-version upgrade rehearsal, backup restore, and full catalog comparison remain unverified.
 
 ## Security
 
 Server-side RBAC and route integration checks passed, including role-specific access and tenant-scoped list routes. Storage adapter tests passed with local/mock GCS clients. The suite does not establish the full requested two-organization property/document/report/audit IDOR matrix with private-object download through deployed IAM; that remains a staging security gate. Staging login/OTP, deployed IAM, malware scanning, and full security review remain unverified.
 
+The branch's configurable password-only sign-in behavior was excluded. The application continues to return HTTP 410 for password-only login and uses the existing OTP flow. The UI does not expose an MFA-off toggle that cannot be enforced safely end to end.
+
 ## Database
 
-The repository includes canonical schema, migrations, a guarded migration runner, migration 035, and migration 036. A separate local MariaDB 10.4 instance and `ojix_property_test` schema were initialized without using the existing XAMPP/OJIX database. Canonical schema and synthetic seed loaded successfully; migration runner reported IDs 004–036 applied under `canonical-v1`. Historical SQL migrations were not replayed because this runner explicitly baselines a canonical fresh install. A prior-version upgrade rehearsal (including actual execution of 036), final catalog comparison, and backup restore remain **not verified**. Existing migration history still needs reconciliation before applying to a real target.
+The repository includes canonical schema, guarded migration tooling, migrations 035–038, and schema-aligned firm/report/sign-off fields. A separate local MariaDB 10.4 instance and `ojix_property_test` schema were used without touching XAMPP/OJIX. Canonical schema and synthetic seed loaded successfully; migrations 037–038 were actually applied to the isolated database after baseline `canonical-v1`. Historical migrations were not replayed because the runner explicitly baselines a canonical fresh install. A prior-version upgrade rehearsal, final catalog comparison, and backup restore remain **not verified**. Existing migration history still needs reconciliation before applying to a real target.
 
 ## Deployment
 
@@ -39,7 +44,7 @@ No staging deployment was performed. Firebase Hosting now routes to `ojix-api` i
 
 ## Reports and OCR
 
-- PDF endpoint no longer returns 501: Chromium-based rendering was implemented with bounded HTML input, network requests disabled, printable A4 layout, and page numbering. The real PDF test passed and `pdftotext` verified readable report/property/reviewer/evidence text. This is local renderer verification; route-level approved-report export was not exercised against staging.
+- PDF endpoint no longer returns 501: approved-report export uses the bounded Chromium renderer; the merged report generator also has a PDFKit fallback. Chromium and PDFKit tests passed, including a multi-page render. Local PDF readability was verified; approved-report export and reviewer audit still need staging verification.
 - OCR remains an implemented Tesseract worker path, but no representative PDF/image was processed through the worker and persisted via queue in this pass. OCR quality, upload-to-job integration, and retry remain unverified.
 - Worker unit tests were not runnable in the local Python environment because `mysql-connector-python` is not installed (`ModuleNotFoundError: mysql`); the container installs the declared requirements. No OCR output was fabricated.
 - No active malware scanner/quarantine service is configured or verified.
@@ -58,7 +63,7 @@ Not run: there is no verified staging URL or deployed API/worker/database. The l
 
 ## Known Limitations
 
-- PDF export now has a real Chromium renderer and passed a local content/readability test; staging route and report approval flow remain unverified.
+- PDF export has Chromium and PDFKit rendering paths; report approval, route download, and reviewer audit remain unverified in staging.
 - No active malware scanner/quarantine path is verified.
 - Tesseract OCR worker code exists; deployed processing and quality are unverified.
 - Government portal reachability is not a government record connector. No authorized live connector is established.

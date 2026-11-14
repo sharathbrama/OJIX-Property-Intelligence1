@@ -4,6 +4,12 @@ import { authFetch } from '../authFetch';
 
 interface SettingsData {
   org_name: string;
+  llpin?: string;
+  office_address?: string;
+  firm_logo_url?: string;
+  firm_email?: string;
+  default_report_template?: string;
+  legal_disclaimer?: string;
   primary_contact: string;
   default_district: string;
   auto_screen_bhoomi: boolean;
@@ -22,6 +28,12 @@ import type { UserAccount } from '../types';
 export function SettingsView({ apiUrl, currentUser }: { apiUrl: string; currentUser?: UserAccount | null }) {
   const [form, setForm] = useState<SettingsData>({
     org_name: 'Karnataka Legal Partners LLP',
+    llpin: 'ADA-1604',
+    office_address: 'Ranga Rao Rd, Shankarapura, Bengaluru 560004',
+    firm_logo_url: '',
+    firm_email: 'info@ojix.in',
+    default_report_template: 'detailed_due_diligence',
+    legal_disclaimer: 'The platform is an evidence and workflow system. It does not represent AI output as a legal opinion, ownership determination, or government certification. High-impact conclusions must be verified by a qualified Lead Advocate.',
     primary_contact: 'Deepak Professional (deepak@ojix.local)',
     default_district: 'Bengaluru Urban',
     auto_screen_bhoomi: true,
@@ -118,13 +130,22 @@ export function SettingsView({ apiUrl, currentUser }: { apiUrl: string; currentU
               </div>
 
               <div className="form-grid">
-                <label className="form-field span-2">
+                <label className="form-field">
                   <span>Organization / Law Firm Name</span>
                   <input
                     type="text"
                     value={form.org_name}
                     onChange={e => setForm({ ...form, org_name: e.target.value })}
                     required
+                  />
+                </label>
+                <label className="form-field">
+                  <span>Firm Registration / LLPIN</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. ADA-1604 or Reg No"
+                    value={form.llpin || ''}
+                    onChange={e => setForm({ ...form, llpin: e.target.value })}
                   />
                 </label>
                 <label className="form-field">
@@ -137,6 +158,15 @@ export function SettingsView({ apiUrl, currentUser }: { apiUrl: string; currentU
                   />
                 </label>
                 <label className="form-field">
+                  <span>Official Firm Email</span>
+                  <input
+                    type="email"
+                    placeholder="e.g. info@ojix.in"
+                    value={form.firm_email || ''}
+                    onChange={e => setForm({ ...form, firm_email: e.target.value })}
+                  />
+                </label>
+                <label className="form-field">
                   <span>Default Revenue District</span>
                   <input
                     type="text"
@@ -144,6 +174,48 @@ export function SettingsView({ apiUrl, currentUser }: { apiUrl: string; currentU
                     onChange={e => setForm({ ...form, default_district: e.target.value })}
                     required
                   />
+                </label>
+                <label className="form-field">
+                  <span>Default Report Template Mode</span>
+                  <select
+                    value={form.default_report_template || 'detailed_due_diligence'}
+                    onChange={e => setForm({ ...form, default_report_template: e.target.value })}
+                  >
+                    <option value="detailed_due_diligence">Detailed Due Diligence (Full Legal Opinion & Evidence)</option>
+                    <option value="preliminary_screening">Preliminary Screening (Fast First-Look & Completeness)</option>
+                    <option value="client_decision_pack">Client Decision Pack (Executive Summary & Limitations)</option>
+                  </select>
+                </label>
+                <label className="form-field span-2">
+                  <span>Registered Office Address</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. Ranga Rao Rd, Shankarapura, Bengaluru 560004"
+                    value={form.office_address || ''}
+                    onChange={e => setForm({ ...form, office_address: e.target.value })}
+                  />
+                </label>
+                <label className="form-field span-2">
+                  <span>Firm Logo HTTPS URL</span>
+                  <input
+                    type="url"
+                    placeholder="https://example.com/logo.png"
+                    value={form.firm_logo_url || ''}
+                    onChange={e => setForm({ ...form, firm_logo_url: e.target.value })}
+                  />
+                </label>
+                <label className="form-field span-2">
+                  <span>Legal Disclaimer & Limitation Statement (Printed on Title Reports)</span>
+                  <textarea
+                    rows={3}
+                    placeholder="Mandatory legal limitation statement required by FRD RISK-05"
+                    value={form.legal_disclaimer || ''}
+                    onChange={e => setForm({ ...form, legal_disclaimer: e.target.value })}
+                    style={{ width: '100%', resize: 'vertical' }}
+                  />
+                  <small style={{ color: '#64748b', fontSize: '11px', marginTop: '4px' }}>
+                    Enforces FRD Operating Principle: Platform evidence does not constitute a government certificate or ownership declaration without professional sign-off.
+                  </small>
                 </label>
               </div>
             </div>
