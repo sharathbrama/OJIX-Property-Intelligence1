@@ -93,6 +93,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const [resendSecondsLeft, setResendSecondsLeft] = useState(0);
   const [serviceStatus, setServiceStatus] = useState<'checking'|'ready'|'unavailable'>('checking');
   const [serviceMessage, setServiceMessage] = useState('Checking API and database…');
+  const [demoAccessMode, setDemoAccessMode] = useState<'disabled'|'local'|'public'>('disabled');
   const [recoveryStep,setRecoveryStep]=useState<'request'|'reset'|'success'|null>(null);
   const [recoveryChallengeId,setRecoveryChallengeId]=useState('');
   const [recoveryOtp,setRecoveryOtp]=useState('');
@@ -300,6 +301,15 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
         }
       })
       .catch(() => setDummyAccounts([]));
+
+    fetch(`${apiUrl}/api/auth/demo/status`)
+      .then(res => res.ok ? res.json() : { enabled: false })
+      .then(data => {
+        const nextMode = data.enabled && (data.mode === 'public' || data.mode === 'local') ? data.mode : 'disabled';
+        setDemoAccessMode(nextMode);
+        if (nextMode !== 'disabled' && selectedRole === 'super-admin') setSelectedRole('owner');
+      })
+      .catch(() => setDemoAccessMode('disabled'));
   }, [apiUrl]);
 
   const selectAccount = (acc: UserAccount) => {
@@ -348,6 +358,27 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
     }
   };
   const handleLogin=(e:React.FormEvent)=>requestLoginOtp('email',e);
+
+  const startDemoSession = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      if (selectedRole === 'super-admin') throw new Error('Super Admin access is not available through the demo workspace.');
+      const res = await fetch(`${apiUrl}/api/auth/demo/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: selectedRole }),
+      });
+      const data = await readApiJson(res);
+      if (!res.ok) throw new Error(data.error || 'Could not open the demo workspace.');
+      if (!matchesRequestedRole(data.user, selectedRole)) throw new Error('The demo session returned a different role than the one selected.');
+      onLoginSuccess(data.token, data.user, selectedRole);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open the demo workspace.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const openPasswordRecovery=()=>{setMode('landing');setLoginCardOpen(true);if(!expectedRole&&window.location.pathname!=='/')window.history.pushState({auth:'landing'},'','/');setRecoveryStep('request');setRecoveryOtp('');setRecoveryPassword('');setRecoveryConfirmPassword('');setError('');};
   const requestPasswordRecovery=async(e?:React.FormEvent)=>{
@@ -556,10 +587,17 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
             <h1 id="landing-login-title">{recoveryStep==='request'?'Reset your password':recoveryStep==='reset'?'Enter recovery code':recoveryStep==='success'?'Password updated':'Sign in to OJIX'}</h1>
             <p className="landing-login-intro">{recoveryStep==='request'?'Select your assigned role and enter the account email. We will send a one-time recovery code.':recoveryStep==='reset'?`Enter the six-digit code sent for ${email} and choose a new password.`:recoveryStep==='success'?'Your password was changed and existing sessions were securely revoked.':'Choose your assigned role, then continue with email verification.'}</p>
             {(!recoveryStep||recoveryStep==='request')&&<div className="landing-modal-role-grid" aria-label="Choose assigned role">
-              {loginRoleOrder.map(value=>{const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={active?'selected':''} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} key={value}><RoleIcon size={14}/><span>{roleLoginCopy[value].label}</span></button>})}
+              {(demoAccessMode === 'disabled' ? loginRoleOrder : loginRoleOrder.filter(value => value !== 'super-admin')).map(value=>{const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={active?'selected':''} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} key={value}><RoleIcon size={14}/><span>{roleLoginCopy[value].label}</span></button>})}
             </div>}
             {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
             {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
+            {demoAccessMode !== 'disabled' && !recoveryStep && <div className="demo-access-panel">
+              <div className="executive-alert service" role="note"><ShieldCheck size={16}/><span>{demoAccessMode === 'public' ? 'Public demo uses isolated synthetic sample data. Changes may be visible to other demo users.' : 'Local test mode opens a seeded synthetic workspace without email verification.'}</span></div>
+              <button className="executive-submit" type="button" onClick={startDemoSession} disabled={loading || serviceStatus !== 'ready' || !selectedRole || selectedRole === 'super-admin'}>
+                {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <>Instant Demo Access <ArrowRight/></>}
+              </button>
+              <p className="demo-access-note">No password or OTP required. Choose any workspace role above.</p>
+            </div>}
             {!recoveryStep&&<form className="executive-login-form landing-modal-form" onSubmit={handleLogin}>
               <div className="login-selected-role"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Signing in as</small><strong>{roleLoginCopy[selectedRole]?.label}</strong></span></div>
               <label><span>Work email</span><div className="executive-input"><UserCheck/><input autoFocus type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
@@ -623,10 +661,19 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
           <div className="login-card-brand"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><span>PROPERTY INTELLIGENCE</span></div>
           <div className="login-card-tabs" role="tablist" aria-label="Account access"><button type="button" className="active" role="tab" aria-selected="true">Login</button><button type="button" role="tab" aria-selected="false" onClick={()=>navigateAuth('register')}>Register</button></div>
           <div className="executive-access-topline"><span className="executive-secure-pill"><ShieldCheck size={13}/> Secure access</span><span className={`executive-service ${serviceStatus}`}><i/>{serviceStatus==='checking'?'Checking services':serviceStatus==='ready'?'Systems available':'Service unavailable'}</span></div>
-          <div className="executive-user-heading"><div><span>SECURE WORKSPACE ACCESS</span><h2>Welcome to OJIX</h2><p>{selectedRole?`${roleLoginCopy[selectedRole]?.label}: ${roleLoginCopy[selectedRole]?.description}`:'Choose your assigned role, then continue with email verification.'}</p></div></div>
+          <div className="executive-user-heading"><div><span>SECURE WORKSPACE ACCESS</span><h2>Welcome to OJIX</h2><p>{demoAccessMode !== 'disabled' ? `Choose a workspace role to explore with synthetic demo data. ${roleLoginCopy[selectedRole]?.label || ''}` : selectedRole?`${roleLoginCopy[selectedRole]?.label}: ${roleLoginCopy[selectedRole]?.description}`:'Choose your assigned role, then continue with email verification.'}</p></div></div>
 
           {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
           {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
+
+          {demoAccessMode !== 'disabled' && <div className="demo-access-panel">
+            <div className="executive-alert service" role="note"><ShieldCheck size={16}/><span>{demoAccessMode === 'public' ? 'Public demo is isolated to synthetic sample data. Changes are visible to other demo visitors.' : 'Local test mode uses seeded synthetic data and skips email OTP.'}</span></div>
+            <button className="executive-submit" type="button" onClick={startDemoSession} disabled={loading || serviceStatus !== 'ready' || !selectedRole || selectedRole === 'super-admin'}>
+              {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <>Instant Demo Access <ArrowRight/></>}
+            </button>
+            <p className="demo-access-note">No password or OTP required for the synthetic demo workspace.</p>
+            <div className="demo-access-divider"><span>OR SIGN IN TO A REGISTERED ACCOUNT</span></div>
+          </div>}
 
           <form className="executive-login-form" onSubmit={handleLogin}>
             <div className="login-selected-role" aria-live="polite"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Signing in as</small><strong>{roleLoginCopy[selectedRole]?.label || 'Select your assigned role'}</strong></span><button type="button" onClick={()=>document.getElementById('login-role-picker')?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'})}>Change</button></div>
@@ -641,7 +688,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
         <aside id="login-role-picker" className="login-role-panel" aria-label="Available workspace roles">
           <div className="login-role-panel-head"><span>WORKSPACE ACCESS</span><h2>Select your role</h2><p>Your assigned role is verified after authentication.</p></div>
           <div className="login-role-list">
-            {loginRoleOrder.map((value,index)=>{const copy=roleLoginCopy[value];const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={`${index===0?'featured ':''}${active?'selected':''}`} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} style={{'--login-role-delay':`${index*45}ms`} as React.CSSProperties} key={value}>
+            {(demoAccessMode === 'disabled' ? loginRoleOrder : loginRoleOrder.filter(value => value !== 'super-admin')).map((value,index)=>{const copy=roleLoginCopy[value];const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={`${index===0?'featured ':''}${active?'selected':''}`} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} style={{'--login-role-delay':`${index*45}ms`} as React.CSSProperties} key={value}>
               <span className="login-role-badge-icon"><RoleIcon size={15}/></span><span><strong>{copy.label}</strong><small>{copy.description}</small></span>{index===0&&<em>Recommended</em>}<ArrowRight size={14}/>
             </button>})}
           </div>

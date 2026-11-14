@@ -1,6 +1,6 @@
 # Multi-Stage Production Dockerfile for @ojix/property-api
 # Stage 1: Build & Compile TypeScript
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 COPY package*.json ./
@@ -14,7 +14,7 @@ RUN npm run build
 RUN npm prune --production
 
 # Stage 2: Minimal Production Runtime
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 # Local OCR supports Kannada and English scans. Poppler renders PDF pages before
 # Tesseract reads them; document facts still require human verification.

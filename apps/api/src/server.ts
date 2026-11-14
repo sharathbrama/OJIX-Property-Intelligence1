@@ -1056,6 +1056,52 @@ app.get('/api/auth/dummy-accounts', (_req, res) => {
   res.json({ accounts: DUMMY_ACCOUNTS });
 });
 
+const publicDemoRoles = ['owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer'] as const;
+const publicDemoEnabled = () => process.env.PUBLIC_DEMO_LOGIN_ENABLED === 'true' && Boolean(process.env.PUBLIC_DEMO_TENANT_ID?.trim());
+const localDemoEnabled = () => process.env.NODE_ENV === 'development' && process.env.LOCAL_TEST_LOGIN_BYPASS === 'true';
+app.get('/api/auth/demo/status', (_req, res) => {
+  const mode = publicDemoEnabled() ? 'public' : localDemoEnabled() ? 'local' : 'disabled';
+  res.json({ enabled: mode !== 'disabled', mode, roles: mode === 'disabled' ? [] : publicDemoRoles });
+});
+app.post('/api/auth/demo/login', loginOtpRequestRateLimit, asyncRoute(async (req, res) => {
+  const mode = publicDemoEnabled() ? 'public' : localDemoEnabled() ? 'local' : 'disabled';
+  if (mode === 'disabled') return res.status(404).json({ error: 'Not found.' });
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const parsed = z.object({ role: z.enum(publicDemoRoles) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Choose one of the available demo workspace roles.' });
+  const role = parsed.data.role;
+  const target = DUMMY_ACCOUNTS.find(account => account.role === role && !account.isSuperAdmin);
+  if (!target) return res.status(404).json({ error: 'No seeded demo identity is available for that role.' });
+
+  let membership;
+  if (mode === 'public') {
+    membership = await pool.query(
+      `SELECT m.organization_id,m.role,m.status,o.slug
+       FROM org_memberships m JOIN organizations o ON o.id=m.organization_id
+       WHERE m.user_uid=? AND m.organization_id=? AND o.slug='ojix-public-demo' LIMIT 1`,
+      [target.uid, process.env.PUBLIC_DEMO_TENANT_ID!.trim()],
+    );
+    const allMemberships = await pool.query('SELECT COUNT(*) AS total FROM org_memberships WHERE user_uid=?', [target.uid]);
+    if (Number(allMemberships.rows[0]?.total || 0) !== 1) return res.status(403).json({ error: 'Demo identities must belong only to the isolated public demo workspace.' });
+  } else {
+    membership = await pool.query("SELECT organization_id,role,status,'local-demo' AS slug FROM org_memberships WHERE user_uid=? ORDER BY (role='super_admin') DESC,created_at LIMIT 1", [target.uid]);
+  }
+  if (!membership.rowCount || membership.rows[0].status !== 'active') return res.status(403).json({ error: 'The seeded demo workspace role is not active. Check the demo database seed.' });
+  if (membership.rows[0].role !== role) return res.status(403).json({ error: 'The seeded demo identity does not match the selected role.' });
+  const tenantId = String(membership.rows[0].organization_id);
+  const demoEmail = mode === 'public' ? `demo.${role}@ojix-public-demo.invalid` : target.email;
+  const demoName = mode === 'public' ? `OJIX Demo ${role.replace('_',' ')}` : target.name;
+  const sessionMs = role === 'support' ? SUPPORT_SESSION_MS : AUTH_SESSION_MS;
+  const token = `ojix-${crypto.randomBytes(32).toString('base64url')}`;
+  const expiresAt = Date.now() + sessionMs;
+  const sessionId = crypto.randomUUID();
+  authSessions.set(token, { id: sessionId, uid: target.uid, email: demoEmail, name: demoName, role, tenantId, expiresAt, lastActivityAt: Date.now() });
+  await pool.query('INSERT INTO authentication_sessions (id,tenant_id,user_uid,token_hash,expires_at,ip_address,user_agent) VALUES (?,?,?,?,?,?,?)', [sessionId, tenantId, target.uid, crypto.createHash('sha256').update(token).digest('hex'), new Date(expiresAt), req.ip || null, String(req.header('user-agent') || '').slice(0,500) || null]);
+  if (role === 'support') supportSessions.set(target.uid, expiresAt);
+  await audit(target.uid, tenantId, 'auth.demo_login', 'user_account', target.uid, { role, mode, syntheticDataOnly: true, otpBypassed: true });
+  res.status(201).json({ token, user: { ...target, email: demoEmail, name: demoName, role, tenantId, isSuperAdmin: false, permissions: [...(DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] || [])], accessExpiresAt: new Date(expiresAt).toISOString() }, message: `Synthetic demo session started as ${demoName}.` });
+}));
+
 const registrationNameSchema=z.string().trim().min(2,'Name must contain at least 2 characters.').max(50,'Name must be 50 characters or fewer.').regex(/^[\p{L}]+(?:[ '\-][\p{L}]+)*$/u,'Use letters, spaces, hyphens or apostrophes only.');
 const registrationSchema = z.object({
   organizationName: z.string().trim().min(2, 'Organization name must contain at least 2 characters.').max(160, 'Organization name must be 160 characters or fewer.'),
@@ -1340,6 +1386,9 @@ app.post('/api/auth/login', (_req, res) => res.status(410).json({ error: 'Passwo
 app.get('/api/auth/me', authGuard, asyncRoute(async (req, res) => {
   const u = (req as AuthenticatedRequest).user;
   const registered = u?.uid && pool ? await pool.query('SELECT full_name,email FROM user_accounts WHERE id=? LIMIT 1', [u.uid]) : { rowCount: 0, rows: [] };
+  const publicDemoIdentity = publicDemoEnabled() && u?.tenantId === process.env.PUBLIC_DEMO_TENANT_ID
+    ? DUMMY_ACCOUNTS.find(account => account.uid === u?.uid && !account.isSuperAdmin)
+    : undefined;
   const meta = DUMMY_ACCOUNTS.find(a => a.uid === u?.uid) || (registered.rowCount ? {
     uid: u?.uid || 'unknown', email: registered.rows[0].email, name: registered.rows[0].full_name,
     designation: 'Registered Reviewer', role: u?.role || 'viewer',
@@ -1357,6 +1406,7 @@ app.get('/api/auth/me', authGuard, asyncRoute(async (req, res) => {
   res.json({
     user: {
       ...meta,
+      ...(publicDemoIdentity ? { email: `demo.${publicDemoIdentity.role}@ojix-public-demo.invalid`, name: `OJIX Demo ${publicDemoIdentity.role.replace('_',' ')}`, designation: `Demo ${publicDemoIdentity.role.replace('_',' ')}`, avatar: 'OJ' } : {}),
       role: u?.role || meta.role,
       isSuperAdmin: Boolean(u?.isSuperAdmin),
       permissions: u?.permissions || [],

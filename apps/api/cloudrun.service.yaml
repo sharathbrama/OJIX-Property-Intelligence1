@@ -47,6 +47,10 @@ spec:
               value: REPLACE_WITH_EXACT_HTTPS_FRONTEND_ORIGIN
             - name: FIREBASE_PROJECT_ID
               value: ojix-property-intelligence
+            - name: PUBLIC_DEMO_LOGIN_ENABLED
+              value: "false"
+            - name: PUBLIC_DEMO_TENANT_ID
+              value: "REPLACE_WITH_ISOLATED_PUBLIC_DEMO_TENANT_ID"
             - name: DATABASE_SSL
               value: "true"
             - name: DATABASE_SSL_CA

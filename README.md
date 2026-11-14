@@ -26,7 +26,7 @@ A Karnataka-first, Bengaluru-first property due-diligence workspace built from t
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22.12+
 - Docker Desktop / Docker Engine with Compose
 - npm 10+
 

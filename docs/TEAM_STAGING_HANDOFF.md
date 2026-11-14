@@ -12,7 +12,7 @@
 
 ## Option A: team runs the complete synthetic local stack
 
-Requirements: Git, Node.js 20+, npm, and Docker Desktop/Engine with Compose.
+Requirements: Git, Node.js 22.12+, npm, and Docker Desktop/Engine with Compose.
 
 ```bash
 git clone <approved-repository-url>
@@ -59,6 +59,18 @@ Before the first deployment:
 8. Deploy Hosting to the **staging Firebase project only** after checking the active project and reviewing the target. Keep production deploys separate.
 
 The manifests under `apps/api/cloudrun.service.yaml` and `apps/api/worker/cloudrun.worker-pool.yaml` are templates with `REPLACE_*` values. Fill and review them for the staging environment before applying. They are not turnkey deployment files. See `docs/CLOUD_RUN_PRODUCTION_PREPARATION.md` and `docs/PRODUCTION_ENVIRONMENT.md` for the configuration inventory and cloud-specific details.
+
+### Optional one-click role demo
+
+The login page supports an **Instant Demo Access** button for each workspace role when the API is configured for it. For a public Vercel demo, use a separate database containing synthetic data only:
+
+1. Initialize the dedicated demo database with `database/mysql-schema.sql` and `infra/db/seed.sql`.
+2. Apply `database/seeds/public-demo.sql` to mark the seeded organization as `ojix-public-demo` and replace its demo-member email labels. This script is only for that isolated demo database.
+3. Configure the API service with `PUBLIC_DEMO_LOGIN_ENABLED=true` and `PUBLIC_DEMO_TENANT_ID=11111111-1111-4111-8111-111111111111`. Do not reuse these demo identities in another organization. The API checks the fixed demo tenant and rejects an identity that has any other membership.
+4. Set the Vercel frontend's `VITE_API_BASE_URL` to the API's HTTPS origin and configure API `CORS_ORIGIN` for the exact Vercel site origin. Ensure Hosting/Vercel routes API calls to that API and that the API/database health check succeeds.
+5. Confirm `GET /api/auth/demo/status` returns `enabled: true`, then use each role button and verify the resulting role in the dashboard. Only workspace roles are offered; Super Admin is a platform-wide role and is never exposed through public demo access.
+
+The public demo button is hidden unless the API feature flag and tenant ID are configured. Public demo sessions have no password or OTP and can change the shared synthetic workspace, so treat all demo data as public and disposable. Keep this feature disabled in any environment with real client data. The local-only shortcut is separately controlled by `LOCAL_TEST_LOGIN_BYPASS=true` and is accepted only when `NODE_ENV=development`.
 
 ## Staging smoke test and team test plan
 
