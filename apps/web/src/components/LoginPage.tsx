@@ -278,6 +278,8 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
             ? 'The API has no DATABASE_URL configured.'
             : data.database === 'disconnected'
               ? 'The API is running but cannot connect to its database.'
+              : res.ok
+                ? 'The API responded, but did not confirm a database connection.'
               : `${data.error || `Health check failed (HTTP ${res.status}).`}${data.errorCode ? ` (${data.errorCode})` : ''}`;
           throw new Error(reason);
         }
@@ -287,7 +289,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       .catch(error => {
         setServiceStatus('unavailable');
         const detail = error instanceof Error ? error.message : 'Request failed.';
-        setServiceMessage(`API health check failed: ${detail} Start the local API and database, then retry.`);
+        setServiceMessage(`API unavailable: ${detail}`);
       });
 
     // The API exposes this list only when it is itself running in local
