@@ -7,6 +7,7 @@ import type { UserAccount, UserRole } from '../types';
 interface LoginPageProps {
   apiUrl: string;
   onLoginSuccess: (token: string, user: UserAccount, requestedRole?: string) => void;
+  onOpenDemo: () => void;
   expectedRole?: string;
 }
 
@@ -47,7 +48,7 @@ const validPersonName=(value:string,optional=false)=>{const normalized=value.tri
 const sanitizePersonNameInput=(value:string)=>value.replace(/[^\p{L} '\-]/gu,'').replace(/\s{2,}/g,' ').slice(0,50);
 const formatRegistrationPhone=(countryCode:string,value:string)=>{const digits=value.replace(/\D/g,'').slice(0,countryCode==='+91'||countryCode==='+1'?10:15);if(countryCode==='+91')return digits.replace(/(\d{5})(?=\d)/,'$1 ');if(countryCode==='+1')return digits.replace(/(\d{3})(\d{0,3})(\d{0,4})/,(_,a,b,c)=>[a,b,c].filter(Boolean).join(' '));return digits.replace(/(\d{3})(?=\d)/g,'$1 ').trim();};
 
-export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
+export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: LoginPageProps) {
   const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
     const path = window.location.pathname.replace(/\/$/, '');
     return path === '/register' ? 'register' : expectedRole ? 'login' : 'landing';
@@ -592,6 +593,10 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
               {(demoAccessMode === 'disabled' ? loginRoleOrder : loginRoleOrder.filter(value => value !== 'super-admin')).map(value=>{const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={active?'selected':''} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} key={value}><RoleIcon size={14}/><span>{roleLoginCopy[value].label}</span></button>})}
             </div>}
             {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
+            {!recoveryStep&&<div className="public-demo-entry">
+              <div><strong>Just exploring?</strong><span>Open a read-only preview with synthetic sample records. No account or API needed.</span></div>
+              <button type="button" className="executive-submit" onClick={onOpenDemo}>Explore read-only demo <ArrowRight/></button>
+            </div>}
             {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
             {demoAccessMode !== 'disabled' && !recoveryStep && <div className="demo-access-panel">
               <div className="executive-alert service" role="note"><ShieldCheck size={16}/><span>{demoAccessMode === 'public' ? 'Public demo uses isolated synthetic sample data. Changes may be visible to other demo users.' : 'Local test mode opens a seeded synthetic workspace without email verification.'}</span></div>
@@ -666,6 +671,10 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
           <div className="executive-user-heading"><div><span>SECURE WORKSPACE ACCESS</span><h2>Welcome to OJIX</h2><p>{demoAccessMode !== 'disabled' ? `Choose a workspace role to explore with synthetic demo data. ${roleLoginCopy[selectedRole]?.label || ''}` : selectedRole?`${roleLoginCopy[selectedRole]?.label}: ${roleLoginCopy[selectedRole]?.description}`:'Choose your assigned role, then continue with email verification.'}</p></div></div>
 
           {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
+          <div className="public-demo-entry">
+            <div><strong>Just exploring?</strong><span>Open a read-only preview with synthetic sample records. No account or API needed.</span></div>
+            <button type="button" className="executive-submit" onClick={onOpenDemo}>Explore read-only demo <ArrowRight/></button>
+          </div>
           {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
 
           {demoAccessMode !== 'disabled' && <div className="demo-access-panel">

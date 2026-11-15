@@ -55,6 +55,7 @@ import {
   Key,
 } from "lucide-react";
 import { LoginPage } from "./components/LoginPage";
+import { PublicDemoPreview } from "./components/PublicDemoPreview";
 import { SideBySideReview } from "./components/SideBySideReview";
 import { TitleChainTimeline } from "./components/TitleChainTimeline";
 import { MapViewer } from "./components/MapViewer";
@@ -450,6 +451,7 @@ function updateBrowserUrl(page: AppPage, propertyId?: string, replace = false) {
 
 export default function App() {
   const isDedicatedLoginRoute = /^\/login(?:\/|$)/.test(window.location.pathname);
+  const [publicDemoOpen, setPublicDemoOpen] = useState(() => /^\/demo\/?$/.test(window.location.pathname));
   const [page, setPage] = useState<AppPage>(
     () => routeFromPath(window.location.pathname).page,
   );
@@ -1218,6 +1220,10 @@ export default function App() {
 
   const sharedReportMatch = window.location.pathname.match(/^\/shared\/reports\/([a-f0-9]{64})\/?$/i);
   if (sharedReportMatch) return <SharedConsultantReport apiUrl={API} token={sharedReportMatch[1]} />;
+  if (publicDemoOpen) return <PublicDemoPreview onExit={() => {
+    setPublicDemoOpen(false);
+    window.history.replaceState({}, "", "/");
+  }} />;
   if (authChecking) {
     return (
       <div className="login-loading">
@@ -1231,6 +1237,10 @@ export default function App() {
     return (
       <><div className={sessionExpiredMessage ? "session-expired-notice is-visible" : "session-expired-notice"} role="alert">{sessionExpiredMessage}</div><LoginPage
         apiUrl={API}
+        onOpenDemo={() => {
+          setPublicDemoOpen(true);
+          window.history.pushState({ page: "public-demo" }, "", "/demo");
+        }}
         expectedRole={loginRoleFromPath(window.location.pathname)}
         onLoginSuccess={(token, user, requestedRole) => {
           sessionStorage.removeItem("ojix_session_expired_message");
