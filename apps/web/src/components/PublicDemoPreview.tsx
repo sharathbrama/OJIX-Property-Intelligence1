@@ -18,16 +18,30 @@ const documents = [
   ['Survey sketch', 'Illustrative sample · 2022'],
 ];
 
+const roleLabels: Record<string, string> = {
+  owner: 'Workspace Owner',
+  'super-admin': 'Super Admin',
+  admin: 'Organization Admin',
+  lawyer: 'Legal Reviewer',
+  analyst: 'Evidence Analyst',
+  operations: 'Document Operations',
+  consultant: 'Consultant',
+  support: 'Support',
+  data_steward: 'Data Steward',
+  viewer: 'Viewer',
+};
+
 const findings = [
   ['Survey details need comparison', 'Compare the supplied sample records before reaching a conclusion.', 'Review'],
   ['Supporting document not included', 'The demonstration file set is intentionally incomplete.', 'Follow up'],
   ['Location source not verified', 'No official land boundary or government connector is configured in this preview.', 'Unverified'],
 ];
 
-export function PublicDemoPreview({ onExit }: { onExit: () => void }) {
+export function PublicDemoPreview({ role, onExit }: { role: string; onExit: () => void }) {
   const [section, setSection] = useState<DemoSection>('overview');
   const current = navigation.find(item => item.id === section)!;
   const CurrentIcon = current.icon;
+  const roleLabel = roleLabels[role] || roleLabels.owner;
 
   return (
     <main className="public-demo-shell">
@@ -37,7 +51,7 @@ export function PublicDemoPreview({ onExit }: { onExit: () => void }) {
           <span><strong>Property Intelligence</strong><small>Demonstration workspace</small></span>
         </a>
         <div className="public-demo-top-actions">
-          <span className="public-demo-label"><Sparkles size={15}/> PUBLIC SYNTHETIC DEMO · READ ONLY</span>
+          <span className="public-demo-label"><Sparkles size={15}/> {roleLabel.toUpperCase()} DEMO · SYNTHETIC · READ ONLY</span>
           <button type="button" onClick={onExit}><ArrowLeft size={16}/> Back to site</button>
         </div>
       </header>
@@ -52,7 +66,7 @@ export function PublicDemoPreview({ onExit }: { onExit: () => void }) {
         </aside>
 
         <section className="public-demo-content" aria-live="polite">
-          <div className="public-demo-page-heading"><div><span className="public-demo-eyebrow">SAMPLE PROPERTY · OJIX-DEMO-0001</span><h1><CurrentIcon size={25}/>{section === 'overview' ? 'Workspace overview' : current.label}</h1><p>A read-only walkthrough using synthetic demonstration records.</p></div><span className="public-demo-status"><i/> Synthetic sample</span></div>
+          <div className="public-demo-page-heading"><div><span className="public-demo-eyebrow">{roleLabel.toUpperCase()} PREVIEW · SAMPLE PROPERTY · OJIX-DEMO-0001</span><h1><CurrentIcon size={25}/>{section === 'overview' ? 'Workspace overview' : current.label}</h1><p>Read-only {roleLabel} walkthrough using synthetic demonstration records.</p></div><span className="public-demo-status"><i/> Synthetic sample</span></div>
 
           {section === 'overview' && <>
             <div className="public-demo-stat-grid"><article><span>Sample matters</span><strong>1</strong><small>Fictional record</small></article><article><span>Documents</span><strong>3</strong><small>Illustrative samples</small></article><article><span>Open findings</span><strong>3</strong><small>Require human review</small></article><article><span>Verified sources</span><strong>0</strong><small>No live connectors</small></article></div>

@@ -7,7 +7,7 @@ import type { UserAccount, UserRole } from '../types';
 interface LoginPageProps {
   apiUrl: string;
   onLoginSuccess: (token: string, user: UserAccount, requestedRole?: string) => void;
-  onOpenDemo: () => void;
+  onOpenDemo: (role: string) => void;
   expectedRole?: string;
 }
 
@@ -590,12 +590,12 @@ export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: 
             <h1 id="landing-login-title">{recoveryStep==='request'?'Reset your password':recoveryStep==='reset'?'Enter recovery code':recoveryStep==='success'?'Password updated':'Sign in to OJIX'}</h1>
             <p className="landing-login-intro">{recoveryStep==='request'?'Select your assigned role and enter the account email. We will send a one-time recovery code.':recoveryStep==='reset'?`Enter the six-digit code sent for ${email} and choose a new password.`:recoveryStep==='success'?'Your password was changed and existing sessions were securely revoked.':'Choose your assigned role, then continue with email verification.'}</p>
             {(!recoveryStep||recoveryStep==='request')&&<div className="landing-modal-role-grid" aria-label="Choose assigned role">
-              {(demoAccessMode === 'disabled' ? loginRoleOrder : loginRoleOrder.filter(value => value !== 'super-admin')).map(value=>{const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={active?'selected':''} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} key={value}><RoleIcon size={14}/><span>{roleLoginCopy[value].label}</span></button>})}
+              {loginRoleOrder.map(value=>{const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={active?'selected':''} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} key={value}><RoleIcon size={14}/><span>{roleLoginCopy[value].label}</span></button>})}
             </div>}
             {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
             {!recoveryStep&&<div className="public-demo-entry">
               <div><strong>Just exploring?</strong><span>Open a read-only preview with synthetic sample records. No account or API needed.</span></div>
-              <button type="button" className="executive-submit" onClick={onOpenDemo}>Explore read-only demo <ArrowRight/></button>
+              <button type="button" className="executive-submit" onClick={()=>onOpenDemo(selectedRole)}>Launch Instant Demo Access ({roleLoginCopy[selectedRole]?.label || 'Select a role'}) <ArrowRight/></button>
             </div>}
             {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
             {demoAccessMode !== 'disabled' && !recoveryStep && <div className="demo-access-panel">
@@ -673,7 +673,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: 
           {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
           <div className="public-demo-entry">
             <div><strong>Just exploring?</strong><span>Open a read-only preview with synthetic sample records. No account or API needed.</span></div>
-            <button type="button" className="executive-submit" onClick={onOpenDemo}>Explore read-only demo <ArrowRight/></button>
+            <button type="button" className="executive-submit" onClick={()=>onOpenDemo(selectedRole)}>Launch Instant Demo Access ({roleLoginCopy[selectedRole]?.label || 'Select a role'}) <ArrowRight/></button>
           </div>
           {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
 
@@ -699,7 +699,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: 
         <aside id="login-role-picker" className="login-role-panel" aria-label="Available workspace roles">
           <div className="login-role-panel-head"><span>WORKSPACE ACCESS</span><h2>Select your role</h2><p>Your assigned role is verified after authentication.</p></div>
           <div className="login-role-list">
-            {(demoAccessMode === 'disabled' ? loginRoleOrder : loginRoleOrder.filter(value => value !== 'super-admin')).map((value,index)=>{const copy=roleLoginCopy[value];const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={`${index===0?'featured ':''}${active?'selected':''}`} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} style={{'--login-role-delay':`${index*45}ms`} as React.CSSProperties} key={value}>
+            {loginRoleOrder.map((value,index)=>{const copy=roleLoginCopy[value];const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={`${index===0?'featured ':''}${active?'selected':''}`} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} style={{'--login-role-delay':`${index*45}ms`} as React.CSSProperties} key={value}>
               <span className="login-role-badge-icon"><RoleIcon size={15}/></span><span><strong>{copy.label}</strong><small>{copy.description}</small></span>{index===0&&<em>Recommended</em>}<ArrowRight size={14}/>
             </button>})}
           </div>
