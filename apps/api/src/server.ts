@@ -140,7 +140,11 @@ function parseMariaDbJsonRows(rows: any[]): any[] {
 const mysqlPool = process.env.DATABASE_URL
   ? mysql.createPool({
       uri: process.env.DATABASE_URL,
+      // Production and Vercel connections must use verified TLS. DATABASE_SSL
+      // remains available to opt into TLS during local development.
       ssl: process.env.DATABASE_SSL?.toLowerCase() === 'true'
+        || process.env.NODE_ENV === 'production'
+        || Boolean(process.env.VERCEL)
         ? {
             rejectUnauthorized: true,
             ...(process.env.DATABASE_SSL_CA ? { ca: fs.readFileSync(process.env.DATABASE_SSL_CA, 'utf8') } : {}),
@@ -148,8 +152,10 @@ const mysqlPool = process.env.DATABASE_URL
         : undefined,
       waitForConnections: true,
       connectionLimit: (() => {
-        const configured = Number(process.env.DB_POOL_LIMIT || 10);
-        return Number.isInteger(configured) && configured >= 1 && configured <= 10 ? configured : 10;
+        const serverless = Boolean(process.env.VERCEL);
+        const maxConnections = serverless ? 2 : 10;
+        const configured = Number(process.env.DB_POOL_LIMIT || maxConnections);
+        return Number.isInteger(configured) && configured >= 1 && configured <= maxConnections ? configured : maxConnections;
       })(),
       queueLimit: 0,
       connectTimeout: 5000,
@@ -504,7 +510,11 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
 
   const dummyIdentity = DUMMY_ACCOUNTS.find(account => account.uid === identity?.uid);
   if (dummyIdentity?.role === 'support') {
-    const expiresAt = supportSessions.get(dummyIdentity.uid) || 0;
+    // Durable API sessions are validated from MySQL and can be rehydrated on
+    // any Vercel instance. The in-memory map is only for local dev identities.
+    const expiresAt = requestSession?.uid === dummyIdentity.uid && requestSession.role === 'support'
+      ? requestSession.expiresAt
+      : supportSessions.get(dummyIdentity.uid) || 0;
     if (expiresAt <= Date.now()) return res.status(401).json({ error: 'Support access has expired. Sign in again to request a new time-limited session.' });
   }
 
@@ -1059,30 +1069,66 @@ const databaseHealthHandler = asyncRoute(async (_req, res) => {
 app.get('/health', databaseHealthHandler);
 app.get('/api/health', databaseHealthHandler);
 
+const livenessResponse = { status: 'ok', service: 'ojix-property-api', version: '0.1.0' };
 app.get('/healthz', (_req, res) => {
-  res.status(200).send('OK');
+  res.status(200).json(livenessResponse);
 });
 app.get('/api/healthz', (_req, res) => {
-  res.status(200).send('OK');
+  res.status(200).json(livenessResponse);
 });
 
 const databaseReadinessHandler = asyncRoute(async (_req, res) => {
-  if (!pool) return res.status(503).json({ status: 'not_ready', error: 'Database pool not initialized' });
+  if (!pool) return res.status(503).json({
+    status: 'not_ready',
+    service: 'ojix-property-api',
+    database: 'not_configured',
+    storage: documentStorage.provider === 'local' ? 'ephemeral' : 'configured',
+    error: 'Database pool not initialized',
+  });
   try {
-    const dbRes = await pool.query(`SELECT VERSION() AS database_version,
-      ST_AsText(ST_GeomFromText('POINT(77.5946 12.9716)', 4326)) AS spatial_probe`);
+    const dbRes = await pool.query(`SELECT ST_AsText(ST_GeomFromText('POINT(77.5946 12.9716)', 4326)) AS spatial_probe`);
+    if (
+      documentStorage.provider === 'local'
+      && (process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL))
+    ) {
+      return res.status(503).json({
+        status: 'not_ready',
+        service: 'ojix-property-api',
+        database: 'connected',
+        storage: 'ephemeral',
+        error: 'Durable remote document storage is required for production readiness.',
+      });
+    }
+    if (documentStorage.provider !== 'local') {
+      try {
+        await documentStorage.checkReady?.();
+      } catch {
+        return res.status(503).json({
+          status: 'not_ready',
+          service: 'ojix-property-api',
+          database: 'connected',
+          storage: 'disconnected',
+          error: 'Durable document storage readiness check failed.',
+        });
+      }
+    }
     res.json({
       status: 'ready',
       service: 'ojix-property-api',
-      databaseEngine: 'MariaDB',
-      databaseVersion: dbRes.rows[0]?.database_version,
+      database: 'connected',
+      storage: documentStorage.provider,
       spatial: dbRes.rows[0]?.spatial_probe === 'POINT(77.5946 12.9716)' ? 'available' : 'unavailable',
       uptimeSeconds: Math.floor(process.uptime()),
-      memoryUsage: process.memoryUsage(),
       timestamp: new Date().toISOString()
     });
   } catch (err: any) {
-    res.status(503).json({ status: 'not_ready', error: process.env.NODE_ENV === 'production' ? 'Database readiness check failed.' : err.message });
+    res.status(503).json({
+      status: 'not_ready',
+      service: 'ojix-property-api',
+      database: 'disconnected',
+      storage: documentStorage.provider === 'local' ? 'ephemeral' : documentStorage.provider,
+      error: 'Database readiness check failed.',
+    });
   }
 });
 app.get('/readyz', databaseReadinessHandler);

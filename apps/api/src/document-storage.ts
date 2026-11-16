@@ -12,6 +12,7 @@ export interface StoredDocument {
 
 export interface DocumentStorage {
   readonly provider: StorageProviderName;
+  checkReady?(): Promise<void>;
   put(input: { localPath: string; objectKey: string; mimeType: string }): Promise<StoredDocument>;
   createSignedUrl(storageKey: string, expiresInSeconds: number): Promise<string | null>;
   createSignedUploadUrl?(storageKey: string, mimeType: string, sizeBytes: number, expiresInSeconds: number): Promise<{ url: string; method: 'PUT' | 'POST'; headers: Record<string, string>; fields?: Record<string, string> }>;
@@ -29,7 +30,7 @@ type GcsFileLike = {
 };
 
 export type GcsStorageClient = {
-  bucket(name: string): { file(name: string): GcsFileLike; name?: string };
+  bucket(name: string): { file(name: string): GcsFileLike; getMetadata?(): Promise<unknown>; name?: string };
 };
 
 const STORAGE_KEY_PREFIX: Record<RemoteStorageProviderName, string> = {
@@ -92,6 +93,14 @@ export class SupabaseDocumentStorage implements DocumentStorage {
       Authorization: `Bearer ${this.serviceRoleKey}`,
       ...extra,
     };
+  }
+
+  async checkReady(): Promise<void> {
+    const response = await this.fetchImpl(
+      `${this.baseUrl.replace(/\/$/, '')}/storage/v1/bucket/${encodeURIComponent(this.bucket)}`,
+      { method: 'GET', headers: this.headers(), signal: AbortSignal.timeout(5_000) },
+    );
+    if (!response.ok) throw new Error('Supabase storage is unavailable.');
   }
 
   private objectUrl(storageKey: string, action: 'object' | 'sign'): string {
@@ -180,6 +189,11 @@ export class GcsDocumentStorage implements DocumentStorage {
     this.bucket = storageClient.bucket(bucketName);
   }
 
+  async checkReady(): Promise<void> {
+    if (!this.bucket.getMetadata) throw new Error('Google Cloud Storage readiness check is unavailable.');
+    await this.bucket.getMetadata();
+  }
+
   async put(input: { localPath: string; objectKey: string; mimeType: string }): Promise<StoredDocument> {
     const objectKey = normalizeObjectKey(input.objectKey);
     const body = await fs.readFile(input.localPath);
@@ -253,6 +267,11 @@ export class RoutedDocumentStorage implements DocumentStorage {
 
   put(input: { localPath: string; objectKey: string; mimeType: string }) {
     return this.active.put(input);
+  }
+
+  async checkReady(): Promise<void> {
+    if (!this.active.checkReady) throw new Error('Durable document storage readiness check is unavailable.');
+    await this.active.checkReady();
   }
 
   createSignedUploadUrl(storageKey: string, mimeType: string, sizeBytes: number, expiresInSeconds: number) {
