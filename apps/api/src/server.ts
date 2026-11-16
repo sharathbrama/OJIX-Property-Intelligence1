@@ -3,7 +3,7 @@ import { openapiSpec } from './swagger/openapi.js';
 import dotenv from 'dotenv';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
+import { default as helmet } from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import multer from 'multer';
 import path from 'node:path';
