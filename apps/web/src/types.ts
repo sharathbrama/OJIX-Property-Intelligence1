@@ -183,5 +183,6 @@ export interface UserAccount {
   tenantId?: string;
   accessExpiresAt?: string;
   isSuperAdmin?: boolean;
+  isDemo?: boolean;
   permissions?: string[];
 }

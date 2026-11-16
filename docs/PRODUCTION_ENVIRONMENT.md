@@ -32,6 +32,8 @@ The current code has no production hosting/API URL selected. `apps/web/src/apiCo
 | `OCR_WORKER_TOKEN`, `OCR_RETRY_DELAY_SECONDS`, `OCR_LANGUAGES`, `OCR_MAX_PAGES`, `OCR_TIMEOUT_MS` | Worker authentication and bounded OCR settings. Token shared only with private worker. |
 | `RTC_PROVIDER_MODE`, `RTC_API_BASE_URL`, `RTC_API_TOKEN`, `RTC_REQUEST_TIMEOUT_MS` | Disabled by default; enable only with authorized supported integration. |
 
+Public demo configuration (`PUBLIC_DEMO_LOGIN_ENABLED`, `PUBLIC_DEMO_TENANT_ID`, `PUBLIC_DEMO_DATABASE_NAME`, and optional `PUBLIC_DEMO_SESSION_TTL_HOURS`) belongs only on the separate `ojix-demo-api` service described in `apps/api/cloudrun.demo.service.yaml`. The API refuses demo login unless `DATABASE_URL` names the configured database and that name contains `demo`. Use a database credential scoped only to the synthetic demo database and a private demo-only document bucket. Keep these flags off on the production API; omit SMTP, Twilio, and OCR worker credentials from the demo service.
+
 ## OCR worker
 
 Provide `DATABASE_URL`, `OCR_API_INTERNAL_URL`, `OCR_WORKER_TOKEN`, `OCR_LANGUAGES`, `OCR_MAX_PAGES`, `OCR_TIMEOUT_MS`, `OCR_WORKER_POLL_SECONDS` and required private storage settings. The worker requires Python dependencies, Poppler and Tesseract Kannada/English language data. It must be able to access files without public URLs and reach only the API/database/storage resources it needs.

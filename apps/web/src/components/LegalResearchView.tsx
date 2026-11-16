@@ -34,7 +34,7 @@ interface Category {
   count: number;
 }
 
-export function LegalResearchView({ apiUrl, onOpenProperty }: { apiUrl: string; onOpenProperty?: (id: string) => void }) {
+export function LegalResearchView({ apiUrl, onOpenProperty, readOnly = false }: { apiUrl: string; onOpenProperty?: (id: string) => void; readOnly?: boolean }) {
   const [provisions, setProvisions] = useState<StatutoryProvision[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -48,8 +48,8 @@ export function LegalResearchView({ apiUrl, onOpenProperty }: { apiUrl: string; 
   useEffect(() => {
     fetchCategories();
     fetchProvisions('', 'all');
-    fetchBookmarks();
-  }, []);
+    if (!readOnly) fetchBookmarks();
+  }, [readOnly]);
 
   const fetchCategories = async () => {
     try {
@@ -234,7 +234,7 @@ export function LegalResearchView({ apiUrl, onOpenProperty }: { apiUrl: string; 
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <button
+                    {!readOnly && <button
                       type="button"
                       onClick={() => toggleBookmark(prov)}
                       disabled={bookmarkingId === prov.id}
@@ -243,7 +243,7 @@ export function LegalResearchView({ apiUrl, onOpenProperty }: { apiUrl: string; 
                       style={{ color: isBookmarked ? '#d97706' : '#94a3b8' }}
                     >
                       <Bookmark size={18} fill={isBookmarked ? '#d97706' : 'none'} />
-                    </button>
+                    </button>}
                     <button
                       type="button"
                       onClick={() => setExpandedId(isExpanded ? null : prov.id)}

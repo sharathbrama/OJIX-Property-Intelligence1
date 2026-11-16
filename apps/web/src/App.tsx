@@ -196,6 +196,31 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return data as T;
 }
+const DIRECT_UPLOAD_THRESHOLD_BYTES = 3.5 * 1024 * 1024;
+const USE_SERVERLESS_DIRECT_UPLOADS = import.meta.env.VITE_SERVERLESS_UPLOADS === 'true';
+async function uploadDocumentDirect(propertyId: string, file: File, metadata: { documentType?: string; customDocumentType?: string; classificationConfidence?: number; manualReview?: boolean } = {}) {
+  const request = { originalFilename: file.name, mimeType: file.type, sizeBytes: file.size, ...metadata };
+  const prepared = await api<{ documentId: string; upload: { url: string; method: 'PUT' | 'POST'; headers: Record<string, string>; fields?: Record<string, string> } }>(
+    `/api/properties/${encodeURIComponent(propertyId)}/documents/direct-upload`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) },
+  );
+  // The signed cloud URL is a bearer capability: send only its required headers,
+  // never the user's OJIX authorization token.
+  let uploadBody: BodyInit = file;
+  if (prepared.upload.method === 'POST') {
+    const form = new FormData();
+    for (const [name, value] of Object.entries(prepared.upload.fields || {})) form.append(name, value);
+    form.append('file', file);
+    uploadBody = form;
+  }
+  const uploadResponse = await fetch(prepared.upload.url, { method: prepared.upload.method, headers: prepared.upload.headers, body: uploadBody });
+  if (!uploadResponse.ok) throw new Error(`Private document storage rejected the upload (${uploadResponse.status}). Check the bucket CORS policy and signed upload URL.`);
+  const completed = await api<{ items: Doc[] }>(
+    `/api/properties/${encodeURIComponent(propertyId)}/documents/direct-upload/${encodeURIComponent(prepared.documentId)}/complete`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) },
+  );
+  return completed.items[0];
+}
 const dateLabel = (date?: string) =>
   date
     ? new Date(date).toLocaleDateString("en-IN", {
@@ -376,6 +401,7 @@ const PAGE_PERMISSIONS: Partial<Record<AppPage,string>> = {
 };
 const canAccessPage = (user: UserAccount, page: AppPage) => {
   if(page==="super-admin")return Boolean(user.isSuperAdmin);
+  if(user.isDemo) return ["overview","properties","property","all-documents","all-findings","all-maps","legal-research","consultant-reports"].includes(page);
   const required=PAGE_PERMISSIONS[page];
   if(user.permissions?.length&&required)return user.permissions.includes(required);
   return ROLE_PAGES[user.role]?.includes(page)??false;
@@ -488,6 +514,7 @@ export default function App() {
   const [sessionExpiredMessage, setSessionExpiredMessage] = useState(() =>
     sessionStorage.getItem("ojix_session_expired_message") || "",
   );
+  const [demoClockNow, setDemoClockNow] = useState(Date.now());
 
   const [properties, setProperties] = useState<Property[]>([]);
   const [overview, setOverview] = useState({
@@ -666,7 +693,7 @@ export default function App() {
     }
   };
 
-  const handleLogout = useCallback((reason: "manual" | "inactivity" = "manual") => {
+  const handleLogout = useCallback((reason: "manual" | "inactivity" | "demo-expired" = "manual") => {
     authFetch(`${API}/api/auth/logout`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -677,6 +704,11 @@ export default function App() {
       sessionStorage.setItem("ojix_session_expired_message", message);
       setSessionExpiredMessage(message);
       localStorage.setItem("ojix_session_event", JSON.stringify({ type: "logout", reason, at: Date.now() }));
+    }
+    if (reason === "demo-expired") {
+      const message = "Your Demo Mode session has expired. Start a new demo session to continue.";
+      sessionStorage.setItem("ojix_session_expired_message", message);
+      setSessionExpiredMessage(message);
     }
     localStorage.removeItem("ojix_auth_token");
     localStorage.removeItem("ojix_workspace_id");setActiveWorkspaceId("");setWorkspaces([]);
@@ -690,6 +722,18 @@ export default function App() {
     setPage("overview");
     window.history.replaceState({}, "", "/login");
   }, []);
+  useEffect(() => {
+    if (!currentUser?.isDemo || !currentUser.accessExpiresAt) return;
+    const expiresAt = new Date(currentUser.accessExpiresAt).getTime();
+    const tick = () => {
+      const now = Date.now();
+      setDemoClockNow(now);
+      if (Number.isFinite(expiresAt) && expiresAt <= now) handleLogout("demo-expired");
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [currentUser?.isDemo, currentUser?.accessExpiresAt, handleLogout]);
   const handleOwnerInactivity = useCallback(() => handleLogout("inactivity"), [handleLogout]);
 
   const changePassword = async (event: FormEvent) => {
@@ -1032,17 +1076,22 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
-      const body = new FormData();
-      Array.from(files).forEach((file) => body.append("files", file));
-      if (metadata) body.append("metadata", JSON.stringify(metadata));
-      const result = await api<{ items: Doc[]; note: string }>(
-        `/api/properties/${selected.id}/documents`,
-        { method: "POST", body },
-      );
-      setDocs((prev) => [...result.items, ...prev]);
-      setNotice(result.note);
+      const selectedFiles = Array.from(files);
+      let uploaded: Doc[];
+      if (USE_SERVERLESS_DIRECT_UPLOADS && selectedFiles.reduce((total, file) => total + file.size, 0) > DIRECT_UPLOAD_THRESHOLD_BYTES) {
+        uploaded = [];
+        for (const [index, file] of selectedFiles.entries()) uploaded.push(await uploadDocumentDirect(selected.id, file, metadata?.[index]));
+      } else {
+        const body = new FormData();
+        selectedFiles.forEach((file) => body.append("files", file));
+        if (metadata) body.append("metadata", JSON.stringify(metadata));
+        const result = await api<{ items: Doc[]; note: string }>(`/api/properties/${selected.id}/documents`, { method: "POST", body });
+        uploaded = result.items;
+      }
+      setDocs((prev) => [...uploaded, ...prev]);
+      setNotice(`${uploaded.length} document${uploaded.length === 1 ? "" : "s"} uploaded and queued for review.`);
       await refresh();
-      return result.items;
+      return uploaded;
     } catch (e) {
       setError((e as Error).message);
       return [];
@@ -1238,11 +1287,6 @@ export default function App() {
     return (
       <><div className={sessionExpiredMessage ? "session-expired-notice is-visible" : "session-expired-notice"} role="alert">{sessionExpiredMessage}</div><LoginPage
         apiUrl={API}
-        onOpenDemo={(role) => {
-          setPublicDemoRole(role);
-          setPublicDemoOpen(true);
-          window.history.pushState({ page: "public-demo", role }, "", `/demo?role=${encodeURIComponent(role)}`);
-        }}
         expectedRole={loginRoleFromPath(window.location.pathname)}
         onLoginSuccess={(token, user, requestedRole) => {
           sessionStorage.removeItem("ojix_session_expired_message");
@@ -1349,10 +1393,14 @@ export default function App() {
     ? { bg: "#fef2f2", text: "#b42318", border: "#fecaca", label: "SUPER ADMIN" }
     : getRoleStyle(currentUser.role);
   const displayedUserName = portalMode === "super-admin" ? "Sharath — Super Admin" : currentUser.name;
+  const demoMsRemaining = currentUser.isDemo && currentUser.accessExpiresAt
+    ? Math.max(0, new Date(currentUser.accessExpiresAt).getTime() - demoClockNow)
+    : 0;
+  const demoTimeRemaining = `${String(Math.floor(demoMsRemaining / 3_600_000)).padStart(2, "0")}:${String(Math.floor((demoMsRemaining % 3_600_000) / 60_000)).padStart(2, "0")}:${String(Math.floor((demoMsRemaining % 60_000) / 1000)).padStart(2, "0")}`;
 
   return (
     <div className={`app-shell premium-shell role-${currentUser.role} ${portalMode === "super-admin" ? "platform-only-shell" : ""}`}>
-      {portalMode === "workspace" && currentUser.role === "owner" && (
+      {portalMode === "workspace" && currentUser.role === "owner" && !currentUser.isDemo && (
         <OwnerInactivityGuard onExpire={handleOwnerInactivity} apiUrl={API} />
       )}
       <aside className={`sidebar ${portalMode === "super-admin" ? "super-admin-sidebar" : ""} ${mobileNav ? "sidebar-open" : ""}`}>
@@ -1391,7 +1439,7 @@ export default function App() {
           <ChevronDown size={15} />
         </div>
         <div className="nav-label">
-          {currentUser.role === "admin"
+          {currentUser.isDemo ? "DEMO EXPLORATION" : currentUser.role === "admin"
             ? "ADMINISTRATION"
             : currentUser.role === "lawyer"
               ? "LEGAL REVIEW"
@@ -1431,7 +1479,7 @@ export default function App() {
                           : currentUser.role === "data_steward"
                             ? "Data Quality Overview"
                             : currentUser.role === "viewer"
-                              ? "Released Reports"
+                              ? currentUser.isDemo ? "Demo Dashboard" : "Released Reports"
                               : currentUser.role === "owner" ? "Dashboard" : "Overview"}
             </span>
           </button>
@@ -1442,7 +1490,7 @@ export default function App() {
             >
               <Building2 size={18} />
               <span>
-                {currentUser.role === "viewer"
+              {currentUser.role === "viewer" && !currentUser.isDemo
                   ? "Approved matters"
                   : currentUser.role === "owner"
                     ? "Portfolio & Matters"
@@ -1470,7 +1518,7 @@ export default function App() {
               </span>
             </button>
           )}
-          {!["admin", "viewer", "support"].includes(currentUser.role) && (
+          {! ["admin", "support"].includes(currentUser.role) && (
             <button
               className={`nav-item ${page === "all-documents" ? "active" : ""}`}
               onClick={() => navigate("all-documents")}
@@ -1491,13 +1539,7 @@ export default function App() {
               </span>
             </button>
           )}
-          {![
-            "admin",
-            "operations",
-            "viewer",
-            "support",
-            "data_steward",
-          ].includes(currentUser.role) && (
+          {(!["admin", "operations", "support", "data_steward"].includes(currentUser.role) || currentUser.isDemo) && (
             <button
               className={`nav-item ${page === "all-findings" ? "active" : ""}`}
               onClick={() => navigate("all-findings")}
@@ -1536,9 +1578,9 @@ export default function App() {
           {currentUser.role === "lawyer" && (
             <button className={`nav-item ${page === "consultant-issues" ? "active" : ""}`} onClick={() => navigate("consultant-issues")}><ShieldCheck size={18}/><span>Finding Review</span></button>
           )}
-          {!["admin", "lawyer", "operations", "viewer", "support"].includes(
+          {(!["admin", "lawyer", "operations", "support"].includes(
             currentUser.role,
-          ) && (
+          ) || currentUser.isDemo) && (
             <button
               className={`nav-item ${page === "all-maps" ? "active" : ""}`}
               onClick={() => navigate("all-maps")}
@@ -1556,9 +1598,9 @@ export default function App() {
             </button>
           )}
         </nav>
-        {!["admin", "analyst", "operations", "viewer", "support"].includes(
+        {(!["admin", "analyst", "operations", "support"].includes(
           currentUser.role,
-        ) && (
+        ) || currentUser.isDemo) && (
           <>
             <div className="nav-label nav-label-spaced">TOOLS</div>
             <nav>
@@ -1672,6 +1714,12 @@ export default function App() {
               Workspace <span>/</span> <strong>{getPageTitle()}</strong>
             </div>
           </div>
+          {currentUser.isDemo && <div className="demo-mode-banner" role="region" aria-label="Demo Mode session controls">
+            <span className="demo-mode-badge">DEMO MODE</span>
+            <span className="demo-mode-owner">Restricted demo access · read only</span>
+            <span className="demo-mode-expiry">Expires in <strong aria-live="off">{demoTimeRemaining}</strong></span>
+            <button type="button" onClick={() => handleLogout("manual")}>Exit Demo</button>
+          </div>}
           <div className="topbar-actions">
             {workspaces.length>1&&<label className="workspace-picker"><span>Workspace</span><select aria-label="Select authorized workspace" value={activeWorkspaceId} onChange={event=>void switchWorkspace(event.target.value)}>{workspaces.map(workspace=><option key={workspace.id} value={workspace.id}>{workspace.name} · {workspace.role.replace(/_/g,' ')}</option>)}</select></label>}
             <div
@@ -1746,7 +1794,7 @@ export default function App() {
           </div>
         </header>
 
-        {currentUser.role === "viewer" && (
+      {currentUser.role === "viewer" && !currentUser.isDemo && (
           <div
             style={{
               background: "#fffbeb",
@@ -1843,7 +1891,7 @@ export default function App() {
                 currentUser={currentUser}
                 onNavigate={navigate}
               />
-            ) : currentUser.role === "viewer" ? (
+            ) : currentUser.role === "viewer" && !currentUser.isDemo ? (
               <ClientDashboard
                 properties={properties}
                 loading={loading}
@@ -1894,7 +1942,7 @@ export default function App() {
                 overview={overview}
                 properties={properties}
                 loading={loading}
-                onCreate={() => setShowCreate(true)}
+                onCreate={() => { if (!currentUser.isDemo) setShowCreate(true); }}
                 onOpen={openProperty}
                 onProperties={() => navigate("properties")}
                 currentUser={currentUser}
@@ -1906,7 +1954,7 @@ export default function App() {
               query={query}
               setQuery={setQuery}
               loading={loading}
-              onCreate={() => setShowCreate(true)}
+              onCreate={() => { if (!currentUser.isDemo) setShowCreate(true); }}
               onOpen={openProperty}
               currentUser={currentUser}
             />
@@ -1969,7 +2017,7 @@ export default function App() {
             />
           )}
           {page === "legal-research" && (
-            <LegalResearchView apiUrl={API} onOpenProperty={openPropertyById} />
+            <LegalResearchView apiUrl={API} onOpenProperty={openPropertyById} readOnly={Boolean(currentUser.isDemo)} />
           )}
           {page === "source-registry" && (
             <SourceRegistryView
@@ -2105,14 +2153,14 @@ export default function App() {
           </div>
         </div>
       )}
-      {showCreate && (
+      {showCreate && !currentUser.isDemo && (
         <CreatePropertyModal
           onClose={() => setShowCreate(false)}
           onSubmit={createProperty}
           busy={busy}
         />
       )}
-      {showEdit && selected && (
+      {showEdit && selected && !currentUser.isDemo && (
         <CreatePropertyModal
           initialProperty={selected}
           onClose={() => setShowEdit(false)}
@@ -4355,23 +4403,22 @@ function DocumentIntakeDashboard({
     setUploading(true);
     setUploadError("");
     try {
-      const body = new FormData();
-      files.forEach((file) => body.append("files", file));
-      body.append(
-        "metadata",
-        JSON.stringify(
-          entries.map((entry) => ({
-            ...entry,
-            classificationConfidence:
-              Number(entry.classificationConfidence) / 100,
-          })),
-        ),
-      );
-      const result = await api<{ items: Doc[]; note: string }>(
-        `/api/properties/${selectedProperty.id}/documents`,
-        { method: "POST", body },
-      );
-      setUploaded(result.items);
+      const normalizedMetadata = entries.map((entry) => ({
+        ...entry,
+        classificationConfidence: Number(entry.classificationConfidence) / 100,
+      }));
+      let uploaded: Doc[];
+      if (USE_SERVERLESS_DIRECT_UPLOADS && files.reduce((total, file) => total + file.size, 0) > DIRECT_UPLOAD_THRESHOLD_BYTES) {
+        uploaded = [];
+        for (const [index, file] of files.entries()) uploaded.push(await uploadDocumentDirect(selectedProperty.id, file, normalizedMetadata[index]));
+      } else {
+        const body = new FormData();
+        files.forEach((file) => body.append("files", file));
+        body.append("metadata", JSON.stringify(normalizedMetadata));
+        const result = await api<{ items: Doc[]; note: string }>(`/api/properties/${selectedProperty.id}/documents`, { method: "POST", body });
+        uploaded = result.items;
+      }
+      setUploaded(uploaded);
       setStep(4);
       await onRefresh();
     } catch (error) {
@@ -6285,7 +6332,7 @@ function PropertyPage({
   );
   const nextRequired = requiredDetails.find((item) => !item.complete);
 
-  if (isViewer)
+  if (isViewer && !currentUser.isDemo)
     return (
       <>
         <div className="detail-back">

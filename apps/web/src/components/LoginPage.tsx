@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, X, RotateCcw, Crown, Settings2, Scale, SearchCheck, Files, BriefcaseBusiness, Headphones, Database, Mail, Smartphone } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, X, RotateCcw, Crown, Settings2, Scale, SearchCheck, Files, BriefcaseBusiness, Headphones, Database, Mail, Smartphone, Zap } from 'lucide-react';
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
 import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
 import type { UserAccount, UserRole } from '../types';
@@ -7,7 +7,6 @@ import type { UserAccount, UserRole } from '../types';
 interface LoginPageProps {
   apiUrl: string;
   onLoginSuccess: (token: string, user: UserAccount, requestedRole?: string) => void;
-  onOpenDemo: (role: string) => void;
   expectedRole?: string;
 }
 
@@ -48,7 +47,7 @@ const validPersonName=(value:string,optional=false)=>{const normalized=value.tri
 const sanitizePersonNameInput=(value:string)=>value.replace(/[^\p{L} '\-]/gu,'').replace(/\s{2,}/g,' ').slice(0,50);
 const formatRegistrationPhone=(countryCode:string,value:string)=>{const digits=value.replace(/\D/g,'').slice(0,countryCode==='+91'||countryCode==='+1'?10:15);if(countryCode==='+91')return digits.replace(/(\d{5})(?=\d)/,'$1 ');if(countryCode==='+1')return digits.replace(/(\d{3})(\d{0,3})(\d{0,4})/,(_,a,b,c)=>[a,b,c].filter(Boolean).join(' '));return digits.replace(/(\d{3})(?=\d)/g,'$1 ').trim();};
 
-export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: LoginPageProps) {
+export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPageProps) {
   const [mode, setMode] = useState<'landing'|'login'|'login-otp'|'register'|'otp'|'verified'>(() => {
     const path = window.location.pathname.replace(/\/$/, '');
     return path === '/register' ? 'register' : expectedRole ? 'login' : 'landing';
@@ -271,7 +270,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: 
   }, [mode]);
 
   useEffect(() => {
-    fetch(`${apiUrl}/health`)
+    fetch(`${apiUrl}/api/health`)
       .then(async res => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.database !== 'connected') {
@@ -366,16 +365,15 @@ export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: 
     setLoading(true);
     setError('');
     try {
-      if (selectedRole === 'super-admin') throw new Error('Super Admin access is not available through the demo workspace.');
       const res = await fetch(`${apiUrl}/api/auth/demo/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: selectedRole }),
+        body: JSON.stringify({}),
       });
       const data = await readApiJson(res);
       if (!res.ok) throw new Error(data.error || 'Could not open the demo workspace.');
-      if (!matchesRequestedRole(data.user, selectedRole)) throw new Error('The demo session returned a different role than the one selected.');
-      onLoginSuccess(data.token, data.user, selectedRole);
+      if (data.user?.role !== 'viewer' || data.user?.isSuperAdmin || !data.user?.isDemo || !data.user?.accessExpiresAt) throw new Error('The API did not return a valid restricted demo session.');
+      onLoginSuccess(data.token, data.user, 'viewer');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not open the demo workspace.');
     } finally {
@@ -588,23 +586,12 @@ export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: 
             <div className="landing-login-tabs" role="tablist" aria-label="Account access"><button className="active" type="button" role="tab" aria-selected="true">Login</button><button type="button" role="tab" aria-selected="false" onClick={()=>navigateAuth('register')}>Register</button></div>
             <span className="executive-secure-pill"><ShieldCheck size={13}/> {recoveryStep?'Account recovery':'Secure access'}</span>
             <h1 id="landing-login-title">{recoveryStep==='request'?'Reset your password':recoveryStep==='reset'?'Enter recovery code':recoveryStep==='success'?'Password updated':'Sign in to OJIX'}</h1>
-            <p className="landing-login-intro">{recoveryStep==='request'?'Select your assigned role and enter the account email. We will send a one-time recovery code.':recoveryStep==='reset'?`Enter the six-digit code sent for ${email} and choose a new password.`:recoveryStep==='success'?'Your password was changed and existing sessions were securely revoked.':'Choose your assigned role, then continue with email verification.'}</p>
+            <p className="landing-login-intro">{recoveryStep==='request'?'Select your assigned role and enter the account email. We will send a one-time recovery code.':recoveryStep==='reset'?`Enter the six-digit code sent for ${email} and choose a new password.`:recoveryStep==='success'?'Your password was changed and existing sessions were securely revoked.':demoAccessMode!=='disabled'?'Explore the synthetic workspace in read-only demo mode, or sign in with your assigned role.':'Choose your assigned role, then continue with email verification.'}</p>
             {(!recoveryStep||recoveryStep==='request')&&<div className="landing-modal-role-grid" aria-label="Choose assigned role">
               {loginRoleOrder.map(value=>{const RoleIcon=loginRoleIcons[value];const active=selectedRole===value;return <button type="button" className={active?'selected':''} aria-pressed={active} onClick={()=>{setSelectedRole(value);setError('');}} key={value}><RoleIcon size={14}/><span>{roleLoginCopy[value].label}</span></button>})}
             </div>}
             {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
-            {!recoveryStep&&<div className="public-demo-entry">
-              <div><strong>Just exploring?</strong><span>Open a read-only preview with synthetic sample records. No account or API needed.</span></div>
-              <button type="button" className="executive-submit" onClick={()=>onOpenDemo(selectedRole)}>Launch Instant Demo Access ({roleLoginCopy[selectedRole]?.label || 'Select a role'}) <ArrowRight/></button>
-            </div>}
             {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
-            {demoAccessMode !== 'disabled' && !recoveryStep && <div className="demo-access-panel">
-              <div className="executive-alert service" role="note"><ShieldCheck size={16}/><span>{demoAccessMode === 'public' ? 'Public demo uses isolated synthetic sample data. Changes may be visible to other demo users.' : 'Local test mode opens a seeded synthetic workspace without email verification.'}</span></div>
-              <button className="executive-submit" type="button" onClick={startDemoSession} disabled={loading || serviceStatus !== 'ready' || !selectedRole || selectedRole === 'super-admin'}>
-                {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <>Instant Demo Access <ArrowRight/></>}
-              </button>
-              <p className="demo-access-note">No password or OTP required. Choose any workspace role above.</p>
-            </div>}
             {!recoveryStep&&<form className="executive-login-form landing-modal-form" onSubmit={handleLogin}>
               <div className="login-selected-role"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Signing in as</small><strong>{roleLoginCopy[selectedRole]?.label}</strong></span></div>
               <label><span>Work email</span><div className="executive-input"><UserCheck/><input autoFocus type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
@@ -612,6 +599,13 @@ export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: 
               <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/>Code expires in 10 minutes</span><button type="button" onClick={openPasswordRecovery}>Forgot password?</button></div>
               <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'||!selectedRole}>{loading?<><span className="executive-spinner"/>Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
             </form>}
+            {!recoveryStep&&<div className="public-demo-entry">
+              <div><strong>Explore the full workspace</strong><span>Open a temporary read-only demo with synthetic property intelligence data.</span></div>
+              <button type="button" className="executive-submit demo-entry-button" onClick={startDemoSession} disabled={loading || demoAccessMode === 'disabled' || serviceStatus !== 'ready'}>
+                {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <><Zap size={17}/> Launch Instant Demo Access (Admin)</>}
+              </button>
+              {demoAccessMode === 'disabled' && <small className="demo-entry-status">Demo access is not configured on this API.</small>}
+            </div>}
             {recoveryStep==='request'&&<form className="executive-login-form landing-modal-form recovery-form" onSubmit={requestPasswordRecovery}>
               <div className="login-selected-role"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Recovering access for</small><strong>{roleLoginCopy[selectedRole]?.label}</strong></span></div>
               <label><span>Work email</span><div className="executive-input"><UserCheck/><input autoFocus type="email" autoComplete="username" value={email} onChange={event=>setEmail(event.target.value)} required placeholder="name@organisation.com"/></div></label>
@@ -668,23 +662,10 @@ export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: 
           <div className="login-card-brand"><img src="/assets/ojix-wordmark-header.png" alt="OJIX"/><span>PROPERTY INTELLIGENCE</span></div>
           <div className="login-card-tabs" role="tablist" aria-label="Account access"><button type="button" className="active" role="tab" aria-selected="true">Login</button><button type="button" role="tab" aria-selected="false" onClick={()=>navigateAuth('register')}>Register</button></div>
           <div className="executive-access-topline"><span className="executive-secure-pill"><ShieldCheck size={13}/> Secure access</span><span className={`executive-service ${serviceStatus}`}><i/>{serviceStatus==='checking'?'Checking services':serviceStatus==='ready'?'Systems available':'Service unavailable'}</span></div>
-          <div className="executive-user-heading"><div><span>SECURE WORKSPACE ACCESS</span><h2>Welcome to OJIX</h2><p>{demoAccessMode !== 'disabled' ? `Choose a workspace role to explore with synthetic demo data. ${roleLoginCopy[selectedRole]?.label || ''}` : selectedRole?`${roleLoginCopy[selectedRole]?.label}: ${roleLoginCopy[selectedRole]?.description}`:'Choose your assigned role, then continue with email verification.'}</p></div></div>
+          <div className="executive-user-heading"><div><span>SECURE WORKSPACE ACCESS</span><h2>Welcome to OJIX</h2><p>{demoAccessMode !== 'disabled' ? 'Explore the synthetic workspace in read-only demo mode, or sign in with your assigned role.' : selectedRole?`${roleLoginCopy[selectedRole]?.label}: ${roleLoginCopy[selectedRole]?.description}`:'Choose your assigned role, then continue with email verification.'}</p></div></div>
 
           {serviceStatus==='unavailable'&&<div className="executive-alert service"><ShieldAlert size={16}/><span>{serviceMessage}</span></div>}
-          <div className="public-demo-entry">
-            <div><strong>Just exploring?</strong><span>Open a read-only preview with synthetic sample records. No account or API needed.</span></div>
-            <button type="button" className="executive-submit" onClick={()=>onOpenDemo(selectedRole)}>Launch Instant Demo Access ({roleLoginCopy[selectedRole]?.label || 'Select a role'}) <ArrowRight/></button>
-          </div>
           {error&&<div className="executive-alert error" role="alert"><AlertCircle size={16}/><span>{error}</span></div>}
-
-          {demoAccessMode !== 'disabled' && <div className="demo-access-panel">
-            <div className="executive-alert service" role="note"><ShieldCheck size={16}/><span>{demoAccessMode === 'public' ? 'Public demo is isolated to synthetic sample data. Changes are visible to other demo visitors.' : 'Local test mode uses seeded synthetic data and skips email OTP.'}</span></div>
-            <button className="executive-submit" type="button" onClick={startDemoSession} disabled={loading || serviceStatus !== 'ready' || !selectedRole || selectedRole === 'super-admin'}>
-              {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <>Instant Demo Access <ArrowRight/></>}
-            </button>
-            <p className="demo-access-note">No password or OTP required for the synthetic demo workspace.</p>
-            <div className="demo-access-divider"><span>OR SIGN IN TO A REGISTERED ACCOUNT</span></div>
-          </div>}
 
           <form className="executive-login-form" onSubmit={handleLogin}>
             <div className="login-selected-role" aria-live="polite"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Signing in as</small><strong>{roleLoginCopy[selectedRole]?.label || 'Select your assigned role'}</strong></span><button type="button" onClick={()=>document.getElementById('login-role-picker')?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'})}>Change</button></div>
@@ -693,6 +674,13 @@ export function LoginPage({ apiUrl, onLoginSuccess, onOpenDemo, expectedRole }: 
             <div className="executive-form-meta"><span className="executive-otp-hint"><ShieldCheck size={13}/>Code expires in 10 minutes</span><button type="button" onClick={openPasswordRecovery}>Forgot password?</button></div>
             <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'||!selectedRole}>{loading?<><span className="executive-spinner"/>Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
           </form>
+          <div className="public-demo-entry">
+            <div><strong>Explore the full workspace</strong><span>Open a temporary read-only demo with synthetic property intelligence data.</span></div>
+            <button type="button" className="executive-submit demo-entry-button" onClick={startDemoSession} disabled={loading || demoAccessMode === 'disabled' || serviceStatus !== 'ready'}>
+              {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <><Zap size={17}/> Launch Instant Demo Access (Admin)</>}
+            </button>
+            {demoAccessMode === 'disabled' && <small className="demo-entry-status">Demo access is not configured on this API.</small>}
+          </div>
 
         </div>
         </div>

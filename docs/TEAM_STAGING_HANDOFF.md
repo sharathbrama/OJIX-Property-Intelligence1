@@ -60,17 +60,19 @@ Before the first deployment:
 
 The manifests under `apps/api/cloudrun.service.yaml` and `apps/api/worker/cloudrun.worker-pool.yaml` are templates with `REPLACE_*` values. Fill and review them for the staging environment before applying. They are not turnkey deployment files. See `docs/CLOUD_RUN_PRODUCTION_PREPARATION.md` and `docs/PRODUCTION_ENVIRONMENT.md` for the configuration inventory and cloud-specific details.
 
-### Optional one-click role demo
+### Temporary read-only public demo
 
-The login page supports an **Instant Demo Access** button for each workspace role when the API is configured for it. For a public Vercel demo, use a separate database containing synthetic data only:
+The login page’s **Launch Instant Demo Access (Admin)** button obtains an eight-hour (configurable, maximum eight-hour) read-only demo session from the API. The session uses the seeded Viewer identity in a separate synthetic-only database and receives a narrowly scoped read permission set. Writes, uploads, user management, workspace administration and external report sharing remain blocked. The demo API is intentionally separate from the production API and database.
 
-1. Initialize the dedicated demo database with `database/mysql-schema.sql` and `infra/db/seed.sql`.
-2. Apply `database/seeds/public-demo.sql` to mark the seeded organization as `ojix-public-demo` and replace its demo-member email labels. This script is only for that isolated demo database.
-3. Configure the API service with `PUBLIC_DEMO_LOGIN_ENABLED=true` and `PUBLIC_DEMO_TENANT_ID=11111111-1111-4111-8111-111111111111`. Do not reuse these demo identities in another organization. The API checks the fixed demo tenant and rejects an identity that has any other membership.
-4. Set the Vercel frontend's `VITE_API_BASE_URL` to the API's HTTPS origin and configure API `CORS_ORIGIN` for the exact Vercel site origin. Ensure Hosting/Vercel routes API calls to that API and that the API/database health check succeeds.
-5. Confirm `GET /api/auth/demo/status` returns `enabled: true`, then use each role button and verify the resulting role in the dashboard. Only workspace roles are offered; Super Admin is a platform-wide role and is never exposed through public demo access.
+1. Create a dedicated database named `ojix_property_demo`, a database credential granted access only to that database (prefer a separate demo database instance), and a private document bucket used only by the demo service. Do not reuse production database credentials, storage buckets, SMTP, or OCR worker credentials.
+2. Initialize only that database with `database/mysql-schema.sql`, `infra/db/seed.sql`, and `database/seeds/public-demo.sql`, in that order. The seed includes illustrative property/map data and removes the seeded Super Admin membership from the demo tenant.
+3. Deploy the API from `apps/api/cloudrun.demo.service.yaml` as a separate Cloud Run service. Fill in its `REPLACE_*` values with demo-only infrastructure. The `DATABASE_URL` secret must target database `ojix_property_demo`; the server checks that it matches `PUBLIC_DEMO_DATABASE_NAME` and refuses to expose demo login on a production-named database. The demo bucket must be private and owned by the demo service account.
+4. Keep the demo service’s SMTP, Twilio, OCR worker and external report-sharing integrations unset. OTP, registration, password recovery and credential-changing API routes are disabled in the public demo service. Uploaded documents are stored in the dedicated demo bucket and streamed only through authenticated API routes; demo report sharing is blocked.
+5. Set `VITE_API_BASE_URL` on Vercel to the demo API’s HTTPS origin, and set the API’s `CORS_ORIGIN` to the exact Vercel site origin. Configure API routing so `/api/**` reaches the demo API. Do not point the production frontend/API configuration at this demo database.
+6. Optionally set `PUBLIC_DEMO_SESSION_TTL_HOURS` to a whole number from 1 to 8; the default is 8. Confirm `GET /api/auth/demo/status` returns `enabled: true` and `defaultRole: "viewer"`, then use the login button and verify the persistent DEMO MODE countdown and Exit Demo control.
+7. Confirm the demo Viewer can read dashboard, properties, documents, findings, legal review and report data; cannot create, edit, delete, upload, manage users or access admin endpoints; cannot request an OTP, register an account, reset a password or share a report; and cannot use the demo token with a different tenant ID. Verify expiry and logout revoke the session.
 
-The public demo button is hidden unless the API feature flag and tenant ID are configured. Public demo sessions have no password or OTP and can change the shared synthetic workspace, so treat all demo data as public and disposable. Keep this feature disabled in any environment with real client data. The local-only shortcut is separately controlled by `LOCAL_TEST_LOGIN_BYPASS=true` and is accepted only when `NODE_ENV=development`.
+The existing login, registration, OTP and password reset paths remain enabled on the normal production API. `LOCAL_TEST_LOGIN_BYPASS` remains development-only and is not used by this feature.
 
 ## Staging smoke test and team test plan
 

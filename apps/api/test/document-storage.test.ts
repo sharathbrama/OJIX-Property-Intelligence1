@@ -10,6 +10,7 @@ import {
   normalizeObjectKey,
   RoutedDocumentStorage,
   SupabaseDocumentStorage,
+  type GcsStorageClient,
 } from '../src/document-storage.js';
 
 test('defaults to local document storage', () => {
@@ -46,6 +47,7 @@ test('uploads, retrieves, signs and deletes private GCS objects', async () => {
       return {
         file: (objectName: string) => ({
           save: async (body: Buffer, options: unknown) => { operations.push({ name: 'save', value: { objectName, body: body.toString(), options } }); },
+          generateSignedPostPolicyV4: async (options: unknown) => { operations.push({ name: 'post-policy', value: { objectName, options } }); return [{ url: 'https://storage.test/upload', fields: { key: objectName, policy: 'signed-policy' } }, {}] as any; },
           getSignedUrl: async (options: unknown) => { operations.push({ name: 'sign', value: { objectName, options } }); return [`https://storage.test/${objectName}?signed=1`] as [string]; },
           download: async () => { operations.push({ name: 'download', value: objectName }); return [Buffer.from('private document')] as [Buffer]; },
           delete: async (options: unknown) => { operations.push({ name: 'delete', value: { objectName, options } }); },
@@ -76,6 +78,60 @@ test('uploads, retrieves, signs and deletes private GCS objects', async () => {
   }
 });
 
+test('GCS direct upload URL is short-lived, MIME-bound, and cannot overwrite an existing object', async () => {
+  const operations: Array<{ options: any }> = [];
+  const client = { bucket: () => ({ file: () => ({
+    save: async () => {},
+    generateSignedPostPolicyV4: async (options: any) => { operations.push({ options }); return [{ url: 'https://storage.test/upload', fields: { key: 'tenant/property/document.pdf', policy: 'signed-policy', 'Content-Type': 'application/pdf', 'x-goog-if-generation-match': '0' } }, {}] as any; },
+    getSignedUrl: async () => ['https://storage.test/download'] as [string],
+    download: async () => [Buffer.from('')], delete: async () => {},
+  }) }) } as unknown as GcsStorageClient;
+  const storage = new GcsDocumentStorage('private-bucket', client);
+  const result = await storage.createSignedUploadUrl('gcs:tenant/property/document.pdf', 'application/pdf', 8192, 300);
+  const policy = operations[0];
+  assert.equal(result.method, 'POST');
+  assert.equal(result.fields.key, 'tenant/property/document.pdf');
+  assert.equal(result.fields.policy, 'signed-policy');
+  assert.equal(result.url, 'https://storage.test/upload');
+  assert.equal(policy.options.fields['Content-Type'], 'application/pdf');
+  assert.equal(policy.options.fields['x-goog-if-generation-match'], '0');
+  assert.ok((policy.options.conditions as unknown[][]).some(condition => condition[0] === 'content-length-range' && condition[1] === 8192 && condition[2] === 8192));
+  assert.ok(policy.options.expires <= Date.now() + 300_000);
+});
+
+test('routed storage delegates signed uploads to the provider encoded in the key', async () => {
+  const signedKeys: string[] = [];
+  const supabase = new SupabaseDocumentStorage('https://example.supabase.co', 'secret', 'private-documents', (async () => new Response(JSON.stringify({ signedURL: '/upload?token=1' }), { status: 200 })) as typeof fetch);
+  const remote = {
+    provider: 'supabase' as const,
+    put: supabase.put.bind(supabase),
+    createSignedUrl: supabase.createSignedUrl.bind(supabase),
+    getObject: supabase.getObject.bind(supabase),
+    delete: supabase.delete.bind(supabase),
+    canDelete: supabase.canDelete.bind(supabase),
+    createSignedUploadUrl: async (key: string, _mime: string, _size: number, _ttl: number) => { signedKeys.push(key); return { url: 'https://storage.test/signed', method: 'PUT' as const, headers: {} }; },
+  };
+  const local = { provider: 'local' as const, put: async () => ({ storageKey: 'file', provider: 'local' as const }), createSignedUrl: async () => null };
+  const routed = new RoutedDocumentStorage(local, { supabase: remote });
+  await routed.createSignedUploadUrl('supabase:tenant/property/document.pdf', 'application/pdf', 16, 300);
+  assert.deepEqual(signedKeys, ['supabase:tenant/property/document.pdf']);
+});
+
+test('Supabase direct upload URL does not reveal its service role key', async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const storage = new SupabaseDocumentStorage('https://example.supabase.co', 'server-secret', 'private-documents', (async (url, init) => {
+    requests.push({ url: String(url), init });
+    return new Response(JSON.stringify({ signedURL: '/object/upload/sign/private-documents/tenant/property/file.pdf?token=short-lived' }), { status: 200 });
+  }) as typeof fetch);
+  const result = await storage.createSignedUploadUrl('supabase:tenant/property/file.pdf', 'application/pdf', 12, 300);
+  assert.equal(result.method, 'PUT');
+  assert.equal(result.headers['Content-Type'], 'application/pdf');
+  assert.match(result.url, /token=short-lived/);
+  assert.doesNotMatch(result.url, /server-secret/);
+  assert.equal((requests[0].init?.headers as Record<string, string>).Authorization, 'Bearer server-secret');
+  assert.deepEqual(JSON.parse(String(requests[0].init?.body)), { upsert: false });
+});
+
 test('routes legacy Supabase keys while GCS is the active upload provider', async () => {
   const requests: string[] = [];
   const supabase = new SupabaseDocumentStorage('https://example.supabase.co', 'server-secret', 'private-documents', (async (url) => {
@@ -83,7 +139,7 @@ test('routes legacy Supabase keys while GCS is the active upload provider', asyn
     return new Response(JSON.stringify({ signedURL: '/legacy.pdf?token=short-lived' }), { status: 200 });
   }) as typeof fetch);
   const gcs = new GcsDocumentStorage('private-bucket', { bucket: () => ({ file: () => ({
-    save: async () => {}, getSignedUrl: async () => ['https://storage.test/current'] as [string],
+    save: async () => {}, generateSignedPostPolicyV4: async () => [{ url: 'https://storage.test/upload', fields: {} }, {}] as any, getSignedUrl: async () => ['https://storage.test/current'] as [string],
     download: async () => [Buffer.from('')] as [Buffer], delete: async () => {},
   }) }) });
   const routed = new RoutedDocumentStorage(gcs, { gcs, supabase });

@@ -59,6 +59,8 @@ import { renderReportPdf } from './report-pdf.js';
 import { isCorsOriginAllowed } from './cors-policy.js';
 import { ocrAccess, type OcrRole } from './ocr-access.js';
 import { DEFAULT_ROLE_PERMISSIONS, hasPermission, permissionForRequest, RBAC_ACTIONS, RBAC_ROLES } from './rbac.js';
+import { demoReadPermissions, demoSessionExpiresAt, demoSessionIsActive, isDedicatedDemoDatabase, isDemoAuthRouteAllowed, isDemoExternalShareAllowed, isDemoReadPermissionAllowed, isDemoTenantRequest, resolveDemoSessionTtlMs, resolveDemoWorkspaceRole } from './demo-access.js';
+import { detectedDocumentMimeType, resolveDirectUploadLimit, resolveMultipartFileLimit, resolveUploadDirectory } from './upload-config.js';
 
 
 // Resolve environment files from this package so `tsx watch` and the compiled
@@ -76,7 +78,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
 const port = Number(process.env.PORT || 4000);
 const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
-const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
+const uploadDir = resolveUploadDirectory();
 const documentStorage = createDocumentStorage();
 
 
@@ -193,6 +195,18 @@ const pool = mysqlPool
       },
     }
   : null;
+
+let superAdminBootstrapPromise: Promise<void> | null = null;
+function ensureSuperAdminBootstrapped(): Promise<void> {
+  if (!pool) return Promise.resolve();
+  if (!superAdminBootstrapPromise) {
+    superAdminBootstrapPromise = bootstrapSuperAdmin(pool as unknown as import('./super-admin-bootstrap.js').BootstrapPool)
+      .then(result => { if (result.configured) console.log(`Super Admin bootstrap ready (${result.created ? 'created' : 'account preserved'}).`); })
+      .catch(error => { superAdminBootstrapPromise = null; throw error; });
+  }
+  return superAdminBootstrapPromise;
+}
+
 // Schema changes are managed by database/mysql-schema.sql. Startup deliberately
 // avoids DDL so an existing MariaDB database is never recreated or altered.
 let firebaseAuth: any = null;
@@ -217,6 +231,14 @@ app.use(cors({
   },
   credentials: true,
 }));
+// Vercel initializes functions on demand, so run the same idempotent bootstrap
+// before authentication routes. Avoid database work for preflight and health calls.
+if (process.env.VERCEL) {
+  app.use((req, _res, next) => {
+    if (req.method === 'OPTIONS' || !req.path.startsWith('/api/auth')) return next();
+    void ensureSuperAdminBootstrapped().then(() => next()).catch(next);
+  });
+}
 app.use(express.json({ limit: '25mb' }));
 app.use('/api', rateLimit({
   windowMs: 60_000,
@@ -338,13 +360,16 @@ export interface AuthenticatedRequest extends Request {
     tenantId?: string;
     role?: string;
     isSuperAdmin?: boolean;
+    isDemo?: boolean;
+    accessExpiresAt?: number;
     permissions?: string[];
   };
 }
 const supportSessions = new Map<string, number>();
-const authSessions = new Map<string, { id:string; uid:string; email:string; name:string; role:string; tenantId:string; expiresAt:number; lastActivityAt:number }>();
+const authSessions = new Map<string, { id:string; uid:string; email:string; name:string; role:string; tenantId:string; expiresAt:number; lastActivityAt:number; isDemo?:boolean }>();
 const SUPPORT_SESSION_MS = 60 * 60 * 1000;
 const AUTH_SESSION_MS = 8 * 60 * 60 * 1000;
+const DEMO_SESSION_TTL_MS = resolveDemoSessionTtlMs(process.env.PUBLIC_DEMO_SESSION_TTL_HOURS);
 const OWNER_INACTIVITY_EXPIRY_MS = 5 * 60_000 + 30_000;
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 30 * 1000;
@@ -416,7 +441,7 @@ const maskPhone=(value:string)=>`${value.slice(0,Math.max(0,value.length-4)).rep
 async function authGuard(req: Request, res: Response, next: NextFunction) {
   const authReq = req as AuthenticatedRequest;
   let identity: { uid: string; email?: string; name?: string } | null = null;
-  let requestSession: { id:string; uid:string; email:string; name:string; role:string; tenantId:string; expiresAt:number; lastActivityAt:number } | undefined;
+  let requestSession: { id:string; uid:string; email:string; name:string; role:string; tenantId:string; expiresAt:number; lastActivityAt:number; isDemo?:boolean } | undefined;
   const authHeader = authReq.header('authorization') || '';
   const xUserUid = authReq.header('x-user-uid');
 
@@ -434,9 +459,10 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
     let session=authSessions.get(rawToken);
     if (!session && pool && rawToken.startsWith('ojix-')) {
       const restored=await pool.query(
-        `SELECT s.id,s.user_uid,s.tenant_id,s.expires_at,s.last_activity_at,m.email,m.role,u.full_name
+        `SELECT s.id,s.user_uid,s.tenant_id,s.expires_at,s.last_activity_at,m.email,m.role,u.full_name,o.slug
          FROM authentication_sessions s
          JOIN org_memberships m ON m.user_uid=s.user_uid AND m.organization_id=s.tenant_id AND m.status='active'
+         JOIN organizations o ON o.id=s.tenant_id
          LEFT JOIN user_accounts u ON u.id=s.user_uid
          WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>NOW(6) LIMIT 1`,
         [crypto.createHash('sha256').update(rawToken).digest('hex')]
@@ -444,13 +470,16 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
       if (restored.rowCount) {
         const row=restored.rows[0];
         const dummy=DUMMY_ACCOUNTS.find(account=>account.uid===row.user_uid);
-        session={id:row.id,uid:row.user_uid,email:row.email||dummy?.email||'',name:row.full_name||dummy?.name||row.email||row.user_uid,role:row.role,tenantId:row.tenant_id,expiresAt:new Date(row.expires_at).getTime(),lastActivityAt:new Date(row.last_activity_at).getTime()};
+        const isDemo=publicDemoEnabled()&&row.slug==='ojix-public-demo'&&row.user_uid==='user-viewer'&&row.role==='viewer'&&row.tenant_id===process.env.PUBLIC_DEMO_TENANT_ID?.trim();
+        const expiresAt=new Date(row.expires_at).getTime();
+        // Durable demo-session rehydration preserves the same hard expiry.
+        session={id:row.id,uid:row.user_uid,email:isDemo?'demo.viewer@ojix-public-demo.invalid':row.email||dummy?.email||'',name:isDemo?'OJIX Demo Admin (Read only)':row.full_name||dummy?.name||row.email||row.user_uid,role:row.role,tenantId:row.tenant_id,expiresAt,lastActivityAt:new Date(row.last_activity_at).getTime(),isDemo};
         authSessions.set(rawToken,session);
       }
     }
     requestSession=session;
-    if (session && session.expiresAt > Date.now()) {
-      if(['owner','super_admin'].includes(session.role)&&Date.now()-session.lastActivityAt>OWNER_INACTIVITY_EXPIRY_MS){if(pool)await pool.query("UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason='Inactivity timeout' WHERE id=? AND revoked_at IS NULL",[session.uid,session.id]);authSessions.delete(rawToken);return res.status(401).json({error:'Your session has expired due to inactivity. Please log in again.',code:'SESSION_INACTIVITY_EXPIRED'});}
+    if (session && demoSessionIsActive(session.expiresAt)) {
+      if(!session.isDemo&&['owner','super_admin'].includes(session.role)&&Date.now()-session.lastActivityAt>OWNER_INACTIVITY_EXPIRY_MS){if(pool)await pool.query("UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason='Inactivity timeout' WHERE id=? AND revoked_at IS NULL",[session.uid,session.id]);authSessions.delete(rawToken);return res.status(401).json({error:'Your session has expired due to inactivity. Please log in again.',code:'SESSION_INACTIVITY_EXPIRED'});}
       if(pool){const durable=await pool.query('SELECT id FROM authentication_sessions WHERE id=? AND revoked_at IS NULL AND expires_at>NOW(6)',[session.id]);if(!durable.rowCount){authSessions.delete(rawToken);return res.status(401).json({error:'Session has been revoked or expired.'});}if(session.role!=='owner')await pool.query('UPDATE authentication_sessions SET last_activity_at=NOW(6) WHERE id=?',[session.id]);}
       identity={uid:session.uid,email:session.email,name:session.name};
     }
@@ -481,6 +510,7 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
 
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const requestedWorkspace = String(authReq.header('x-ojix-workspace-id') || requestSession?.tenantId || '').trim();
+  if(requestSession?.isDemo&&!isDemoTenantRequest(true,requestSession.tenantId,requestedWorkspace))return res.status(403).json({error:'Demo sessions are restricted to their isolated synthetic workspace.',code:'DEMO_TENANT_MISMATCH'});
   const membership = requestedWorkspace
     ? await pool.query('SELECT organization_id, role, email, status FROM org_memberships WHERE user_uid=? AND organization_id=? LIMIT 1',[identity.uid,requestedWorkspace])
     : await pool.query('SELECT organization_id, role, email, status FROM org_memberships WHERE user_uid=? ORDER BY created_at LIMIT 1',[identity.uid]);
@@ -501,8 +531,11 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
     tenantId: membership.rows[0].organization_id,
     role: membership.rows[0].role,
     isSuperAdmin,
+    isDemo:Boolean(requestSession?.isDemo&&membership.rows[0].organization_id===requestSession.tenantId&&membership.rows[0].role==='viewer'),
+    accessExpiresAt:requestSession?.isDemo?requestSession.expiresAt:undefined,
   };
   const effectivePermissions=new Set(DEFAULT_ROLE_PERMISSIONS[membership.rows[0].role as keyof typeof DEFAULT_ROLE_PERMISSIONS]||[]);
+  if(authReq.user.isDemo)for(const permission of demoReadPermissions())effectivePermissions.add(permission as any);
   try{
     const overrides=await pool.query('SELECT resource,action,allowed FROM workspace_permission_overrides WHERE tenant_id=? AND role=?',[membership.rows[0].organization_id,membership.rows[0].role]);
     for(const row of overrides.rows){const permission=`${row.resource}.${row.action}`;if(Boolean(row.allowed))effectivePermissions.add(permission as any);else effectivePermissions.delete(permission as any);}
@@ -521,7 +554,7 @@ async function authGuard(req: Request, res: Response, next: NextFunction) {
       // Keep the existing deployment usable until migration 033 is applied;
       // server-side role defaults still enforce access, while configuration APIs report migration readiness.
     }
-    if(!hasPermission(membership.rows[0].role,target.resource,target.action,override))return res.status(403).json({error:`Permission denied for ${target.resource}.${target.action}.`,code:'PERMISSION_DENIED',requiredPermission:`${target.resource}.${target.action}`,currentRole:membership.rows[0].role});
+    if(!(isDemoReadPermissionAllowed(Boolean(authReq.user.isDemo),target.resource,target.action))&&!hasPermission(membership.rows[0].role,target.resource,target.action,override))return res.status(403).json({error:`Permission denied for ${target.resource}.${target.action}.`,code:'PERMISSION_DENIED',requiredPermission:`${target.resource}.${target.action}`,currentRole:membership.rows[0].role});
   }
   next();
 }
@@ -783,6 +816,7 @@ app.get('/api/consultant/reports/:id/export',authGuard,asyncRoute(async(req,res)
   res.setHeader('Content-Disposition',`attachment; filename="ojix-report-v${report.version_number}.json"`);res.json(safe);
 }));
 app.post('/api/consultant/reports/:id/share',authGuard,asyncRoute(async(req,res)=>{
+  if(!isDemoExternalShareAllowed(Boolean(req.user?.isDemo)))return res.status(403).json({error:'External report sharing is disabled in Demo Mode.'});
   if(!['consultant','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Read-only report sharing is not available for this role.'});const scope=consultantReportScope(req.user);const rows=await pool!.query(`SELECT r.* FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE r.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!rows.rowCount)return res.status(404).json({error:'Report not found.'});if(rows.rows[0].approval_status!=='approved')return res.status(409).json({error:'Only approved reports can be shared.'});const token=crypto.randomBytes(32).toString('hex'),tokenHash=crypto.createHash('sha256').update(token).digest('hex'),id=crypto.randomUUID();const expiry=Number(req.body?.expiresInDays||30);if(!Number.isInteger(expiry)||expiry<1||expiry>365)return res.status(400).json({error:'Share expiry must be from 1 to 365 days.'});await pool!.query('INSERT INTO consultant_report_shares (id,tenant_id,report_id,token_hash,expires_at,created_by_uid) VALUES (?,?,?,?,DATE_ADD(NOW(6),INTERVAL ? DAY),?)',[id,req.user?.tenantId,req.params.id,tokenHash,expiry,req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_shared','consultant_report',req.params.id,{shareId:id,version:rows.rows[0].version_number,expiresInDays:expiry});res.status(201).json({id,url:`/shared/reports/${token}`,expiresInDays:expiry});
 }));
 app.get('/api/consultant/shares',authGuard,asyncRoute(async(req,res)=>{
@@ -991,7 +1025,7 @@ async function audit(userId: string, tenantId: string | undefined, action: strin
   await pool.query('INSERT INTO audit_events (id, actor_uid, tenant_id, action, entity_type, entity_id, details) VALUES (?,?,?,?,?,?,?)', [crypto.randomUUID(), userId, tenantId || null, action, entityType, entityId, JSON.stringify(details)]);
 }
 
-app.get('/health', asyncRoute(async (_req, res) => {
+const databaseHealthHandler = asyncRoute(async (_req, res) => {
   const common = {
     service: 'ojix-property-api',
     version: '0.1.0',
@@ -1021,13 +1055,18 @@ app.get('/health', asyncRoute(async (_req, res) => {
       errorCode,
     });
   }
-}));
+});
+app.get('/health', databaseHealthHandler);
+app.get('/api/health', databaseHealthHandler);
 
 app.get('/healthz', (_req, res) => {
   res.status(200).send('OK');
 });
+app.get('/api/healthz', (_req, res) => {
+  res.status(200).send('OK');
+});
 
-app.get('/readyz', asyncRoute(async (_req, res) => {
+const databaseReadinessHandler = asyncRoute(async (_req, res) => {
   if (!pool) return res.status(503).json({ status: 'not_ready', error: 'Database pool not initialized' });
   try {
     const dbRes = await pool.query(`SELECT VERSION() AS database_version,
@@ -1045,7 +1084,9 @@ app.get('/readyz', asyncRoute(async (_req, res) => {
   } catch (err: any) {
     res.status(503).json({ status: 'not_ready', error: process.env.NODE_ENV === 'production' ? 'Database readiness check failed.' : err.message });
   }
-}));
+});
+app.get('/readyz', databaseReadinessHandler);
+app.get('/api/readyz', databaseReadinessHandler);
 
 
 /* ==========================================================================
@@ -1056,20 +1097,32 @@ app.get('/api/auth/dummy-accounts', (_req, res) => {
   res.json({ accounts: DUMMY_ACCOUNTS });
 });
 
-const publicDemoRoles = ['owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer'] as const;
-const publicDemoEnabled = () => process.env.PUBLIC_DEMO_LOGIN_ENABLED === 'true' && Boolean(process.env.PUBLIC_DEMO_TENANT_ID?.trim());
+const publicDemoRoles = ['viewer'] as const;
+const publicDemoDatabaseIsolated = () => isDedicatedDemoDatabase(process.env.DATABASE_URL, process.env.PUBLIC_DEMO_DATABASE_NAME);
+const publicDemoEnabled = () => process.env.PUBLIC_DEMO_LOGIN_ENABLED === 'true'
+  && Boolean(process.env.PUBLIC_DEMO_TENANT_ID?.trim())
+  && publicDemoDatabaseIsolated();
 const localDemoEnabled = () => process.env.NODE_ENV === 'development' && process.env.LOCAL_TEST_LOGIN_BYPASS === 'true';
 app.get('/api/auth/demo/status', (_req, res) => {
   const mode = publicDemoEnabled() ? 'public' : localDemoEnabled() ? 'local' : 'disabled';
-  res.json({ enabled: mode !== 'disabled', mode, roles: mode === 'disabled' ? [] : publicDemoRoles });
+  res.json({ enabled: mode !== 'disabled', mode, roles: mode === 'public' ? ['viewer'] : mode === 'local' ? publicDemoRoles : [], defaultRole: 'viewer', sessionTtlHours: Number(process.env.PUBLIC_DEMO_SESSION_TTL_HOURS || 8) });
+});
+// The public demo API is deployed against its own synthetic-only database. It
+// never sends OTPs, registers accounts, resets passwords, or changes shared demo
+// credentials. Normal production auth remains unchanged on the production API.
+app.use('/api/auth', (req, res, next) => {
+  if (!publicDemoEnabled()) return next();
+  if (!isDemoAuthRouteAllowed(req.path)) return res.status(404).json({ error: 'Only demo access and active session endpoints are available in the public demo service.' });
+  next();
 });
 app.post('/api/auth/demo/login', loginOtpRequestRateLimit, asyncRoute(async (req, res) => {
   const mode = publicDemoEnabled() ? 'public' : localDemoEnabled() ? 'local' : 'disabled';
   if (mode === 'disabled') return res.status(404).json({ error: 'Not found.' });
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const parsed = z.object({ role: z.enum(publicDemoRoles) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Choose one of the available demo workspace roles.' });
-  const role = parsed.data.role;
+  const parsed = z.object({ role: z.enum(publicDemoRoles).optional() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid demo request.' });
+  // Public access always receives a dedicated read-only Viewer membership.
+  const role = resolveDemoWorkspaceRole(mode === 'public', parsed.data.role);
   const target = DUMMY_ACCOUNTS.find(account => account.role === role && !account.isSuperAdmin);
   if (!target) return res.status(404).json({ error: 'No seeded demo identity is available for that role.' });
 
@@ -1087,19 +1140,20 @@ app.post('/api/auth/demo/login', loginOtpRequestRateLimit, asyncRoute(async (req
     membership = await pool.query("SELECT organization_id,role,status,'local-demo' AS slug FROM org_memberships WHERE user_uid=? ORDER BY (role='super_admin') DESC,created_at LIMIT 1", [target.uid]);
   }
   if (!membership.rowCount || membership.rows[0].status !== 'active') return res.status(403).json({ error: 'The seeded demo workspace role is not active. Check the demo database seed.' });
-  if (membership.rows[0].role !== role) return res.status(403).json({ error: 'The seeded demo identity does not match the selected role.' });
+  if (membership.rows[0].role !== role) return res.status(403).json({ error: 'The seeded demo identity does not match the required workspace role.' });
   const tenantId = String(membership.rows[0].organization_id);
   const demoEmail = mode === 'public' ? `demo.${role}@ojix-public-demo.invalid` : target.email;
-  const demoName = mode === 'public' ? `OJIX Demo ${role.replace('_',' ')}` : target.name;
-  const sessionMs = role === 'support' ? SUPPORT_SESSION_MS : AUTH_SESSION_MS;
+  const demoName = mode === 'public' ? 'OJIX Demo Admin (Read only)' : target.name;
+  const sessionMs = mode === 'public' ? DEMO_SESSION_TTL_MS : (role === 'support' ? SUPPORT_SESSION_MS : AUTH_SESSION_MS);
   const token = `ojix-${crypto.randomBytes(32).toString('base64url')}`;
-  const expiresAt = Date.now() + sessionMs;
+  const expiresAt = mode === 'public' ? demoSessionExpiresAt(Date.now(), sessionMs) : Date.now() + sessionMs;
   const sessionId = crypto.randomUUID();
-  authSessions.set(token, { id: sessionId, uid: target.uid, email: demoEmail, name: demoName, role, tenantId, expiresAt, lastActivityAt: Date.now() });
+  authSessions.set(token, { id: sessionId, uid: target.uid, email: demoEmail, name: demoName, role, tenantId, expiresAt, lastActivityAt: Date.now(), isDemo: true });
   await pool.query('INSERT INTO authentication_sessions (id,tenant_id,user_uid,token_hash,expires_at,ip_address,user_agent) VALUES (?,?,?,?,?,?,?)', [sessionId, tenantId, target.uid, crypto.createHash('sha256').update(token).digest('hex'), new Date(expiresAt), req.ip || null, String(req.header('user-agent') || '').slice(0,500) || null]);
   if (role === 'support') supportSessions.set(target.uid, expiresAt);
   await audit(target.uid, tenantId, 'auth.demo_login', 'user_account', target.uid, { role, mode, syntheticDataOnly: true, otpBypassed: true });
-  res.status(201).json({ token, user: { ...target, email: demoEmail, name: demoName, role, tenantId, isSuperAdmin: false, permissions: [...(DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] || [])], accessExpiresAt: new Date(expiresAt).toISOString() }, message: `Synthetic demo session started as ${demoName}.` });
+  const permissions = mode === 'public' ? demoReadPermissions() : [...(DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] || [])];
+  res.status(201).json({ token, user: { ...target, email: demoEmail, name: demoName, designation: 'Read-only Demo Admin', role, tenantId, isSuperAdmin: false, isDemo: true, permissions, accessExpiresAt: new Date(expiresAt).toISOString() }, message: `Synthetic demo session started as ${demoName}.` });
 }));
 
 const registrationNameSchema=z.string().trim().min(2,'Name must contain at least 2 characters.').max(50,'Name must be 50 characters or fewer.').regex(/^[\p{L}]+(?:[ '\-][\p{L}]+)*$/u,'Use letters, spaces, hyphens or apostrophes only.');
@@ -1406,12 +1460,13 @@ app.get('/api/auth/me', authGuard, asyncRoute(async (req, res) => {
   res.json({
     user: {
       ...meta,
-      ...(publicDemoIdentity ? { email: `demo.${publicDemoIdentity.role}@ojix-public-demo.invalid`, name: `OJIX Demo ${publicDemoIdentity.role.replace('_',' ')}`, designation: `Demo ${publicDemoIdentity.role.replace('_',' ')}`, avatar: 'OJ' } : {}),
+      ...(publicDemoIdentity ? { email: 'demo.owner@ojix-public-demo.invalid', name: 'OJIX Demo Workspace Owner', designation: 'Demo Workspace Owner', avatar: 'OJ' } : {}),
       role: u?.role || meta.role,
       isSuperAdmin: Boolean(u?.isSuperAdmin),
+      isDemo: Boolean(u?.isDemo),
       permissions: u?.permissions || [],
       tenantId: u?.tenantId,
-      accessExpiresAt: u?.role === 'support' ? new Date(supportSessions.get(u.uid) || 0).toISOString() : undefined
+      accessExpiresAt: u?.isDemo && u.accessExpiresAt ? new Date(u.accessExpiresAt).toISOString() : u?.role === 'support' ? new Date(supportSessions.get(u.uid) || 0).toISOString() : undefined
     }
   });
 }));
@@ -2317,12 +2372,86 @@ app.post('/api/properties/:id/analyze', authGuard, writeGuard, asyncRoute(async 
   res.json({ summary, findings, dataStatus: 'Starter analysis uses completeness checks and only imported spatial layers. No live government record verification is performed.' });
 }));
 
-const maxBytes = Number(process.env.MAX_UPLOAD_MB || 25) * 1024 * 1024;
+const maxBytes = resolveMultipartFileLimit();
 const upload = multer({ storage: multer.diskStorage({ destination: (_req,_file,cb)=>cb(null,uploadDir), filename: (_req,file,cb)=>cb(null, `${crypto.randomUUID()}${path.extname(file.originalname).slice(0,12)}`) }), limits: { fileSize: maxBytes, files: 10 }, fileFilter: (_req,file,cb) => {
   const allowed = ['application/pdf','image/jpeg','image/png','image/tiff'];
   if (!allowed.includes(file.mimetype)) return cb(new Error('Only PDF, JPEG, PNG and TIFF files are allowed.'));
   cb(null, true);
 } });
+
+const allowedDocumentTypes = new Set(['sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney','encumbrance_certificate','rtc_pahani','mutation_record','survey_sketch_tippan','khata_e_khata','property_tax_receipt','layout_approval_conversion_order','master_plan_zoning_document','court_order_legal_notice','other','e_khata','mutation_extract','survey_sketch','tax_receipt','conversion_order','layout_approval','court_order']);
+const allowedDocumentMimeTypes = new Set(['application/pdf','image/jpeg','image/png','image/tiff']);
+app.post('/api/properties/:id/documents/direct-upload', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  if (!documentStorage.createSignedUploadUrl || documentStorage.provider === 'local') {
+    return res.status(503).json({ error: 'Direct uploads require configured private Supabase Storage or Google Cloud Storage.' });
+  }
+  const parsed = z.object({ originalFilename: z.string().trim().min(1).max(255), mimeType: z.string().trim().min(1).max(120), sizeBytes: z.number().int().positive(), documentType: z.string().trim().optional(), customDocumentType: z.string().trim().max(255).optional(), classificationConfidence: z.number().min(0).max(1).optional() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Provide a valid filename, MIME type, and positive file size.' });
+  const input = parsed.data;
+  const safeFilename = path.basename(input.originalFilename.replace(/\\/g, '/'));
+  const documentType = input.documentType || '';
+  if (!allowedDocumentMimeTypes.has(input.mimeType)) return res.status(400).json({ error: 'Only PDF, JPEG, PNG and TIFF files are allowed.' });
+  if (documentType && !allowedDocumentTypes.has(documentType)) return res.status(400).json({ error: 'Unsupported document type.' });
+  if (documentType === 'other' && !input.customDocumentType) return res.status(400).json({ error: 'Enter a custom document type for other documents.' });
+  if (input.sizeBytes > resolveDirectUploadLimit()) return res.status(413).json({ error: `File exceeds the ${Math.floor(resolveDirectUploadLimit() / 1024 / 1024)} MB direct upload limit.` });
+  const property = await pool.query('SELECT id FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
+  if (!property.rowCount) return res.status(404).json({ error: 'Property not found.' });
+  const documentId = crypto.randomUUID();
+  const objectKey = buildTenantObjectKey({ tenantId: req.user?.tenantId || 'unknown-tenant', propertyId: req.params.id, documentId, originalFilename: safeFilename });
+  const provider = documentStorage.provider;
+  const storageKey = `${provider}:${objectKey}`;
+  const expiresInSeconds = provider === 'supabase' ? 7200 : 300;
+  const signed = await documentStorage.createSignedUploadUrl(storageKey, input.mimeType, input.sizeBytes, expiresInSeconds);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.status(201).json({ documentId, upload: signed, expiresInSeconds, provider, maxBytes: resolveDirectUploadLimit() });
+}));
+
+app.post('/api/properties/:id/documents/direct-upload/:docId/complete', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const parsed = z.object({ originalFilename: z.string().trim().min(1).max(255), mimeType: z.string().trim().min(1).max(120), sizeBytes: z.number().int().positive(), documentType: z.string().trim().optional(), customDocumentType: z.string().trim().max(255).optional(), classificationConfidence: z.number().min(0).max(1).optional() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Provide the upload metadata returned during upload preparation.' });
+  const input = parsed.data;
+  const safeFilename = path.basename(input.originalFilename.replace(/\\/g, '/'));
+  if (!allowedDocumentMimeTypes.has(input.mimeType) || input.sizeBytes > resolveDirectUploadLimit()) return res.status(400).json({ error: 'Upload metadata does not satisfy the configured file policy.' });
+  if (input.documentType && !allowedDocumentTypes.has(input.documentType)) return res.status(400).json({ error: 'Unsupported document type.' });
+  if (input.documentType === 'other' && !input.customDocumentType) return res.status(400).json({ error: 'Enter a custom document type for other documents.' });
+  if (input.classificationConfidence != null && (!Number.isFinite(input.classificationConfidence) || input.classificationConfidence < 0 || input.classificationConfidence > 1)) return res.status(400).json({ error: 'Classification confidence must be between 0 and 1.' });
+  const property = await pool.query('SELECT id FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
+  if (!property.rowCount) return res.status(404).json({ error: 'Property not found.' });
+  const objectKey = buildTenantObjectKey({ tenantId: req.user?.tenantId || 'unknown-tenant', propertyId: req.params.id, documentId: req.params.docId, originalFilename: safeFilename });
+  const storageKey = `${documentStorage.provider}:${objectKey}`;
+  if (!isRemoteStorageKey(storageKey) || !documentStorage.getObject) return res.status(503).json({ error: 'Configured private storage cannot verify direct uploads.' });
+  const content = await documentStorage.getObject(storageKey).catch(() => null);
+  if (!content) return res.status(409).json({ error: 'Uploaded object was not found. Upload the file to its signed URL, then retry completion.' });
+  if (content.byteLength !== input.sizeBytes) {
+    await documentStorage.delete?.(storageKey).catch(() => {});
+    return res.status(400).json({ error: 'Uploaded object size does not match the authorized upload.' });
+  }
+  if (detectedDocumentMimeType(content) !== input.mimeType) {
+    await documentStorage.delete?.(storageKey).catch(() => {});
+    return res.status(400).json({ error: 'Uploaded file content does not match the authorized document type.' });
+  }
+  const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+  const duplicate = await pool.query(`SELECT id,original_filename,created_at FROM documents WHERE tenant_id=? AND property_id=? AND sha256=? AND governance_status<>'quarantined' ORDER BY created_at DESC LIMIT 1`, [req.user?.tenantId, req.params.id, sha256]);
+  if (duplicate.rowCount) {
+    await documentStorage.delete?.(storageKey).catch(() => {});
+    return res.status(409).json({ error: `Duplicate document rejected: ${safeFilename} has already been uploaded to this application.`, code: 'DUPLICATE_DOCUMENT', duplicate: duplicate.rows[0] });
+  }
+  const documentType = input.documentType || 'other';
+  const confidence = input.classificationConfidence ?? (input.documentType ? 1 : 0);
+  const initialExtracted = pendingDocumentFields(String(req.params.docId), documentType, confidence);
+  const status = process.env.OCR_WORKER_TOKEN ? 'queued' : 'manual_review';
+  await pool.query(`INSERT INTO documents
+    (id,tenant_id,property_id,doc_type,doc_type_custom,classification_confidence,classification_source,manual_review_status,original_filename,storage_key,mime_type,size_bytes,sha256,processing_status,extracted_text,extracted_fields,uploaded_by_uid)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [req.params.docId,req.user?.tenantId,req.params.id,documentType,input.customDocumentType||'',confidence,input.documentType?'manual':'automatic','required',safeFilename,storageKey,input.mimeType,input.sizeBytes,sha256,status,'',JSON.stringify(initialExtracted),req.user?.uid||'unknown']);
+  if (status === 'queued') {
+    await pool.query(`INSERT INTO document_processing_jobs (id,tenant_id,property_id,document_id,requested_by_uid,status,processing_stage) VALUES (?,?,?,?,?,'queued','queued')`, [crypto.randomUUID(),req.user?.tenantId,req.params.id,req.params.docId,req.user?.uid||'unknown']);
+  }
+  await audit(req.user?.uid||'unknown',req.user?.tenantId,'document.uploaded','property',req.params.id,{count:1,documentTypes:[documentType],uploadMode:'direct-to-cloud'});
+  const saved = await pool.query('SELECT id,original_filename,mime_type,size_bytes,sha256,doc_type,doc_type_custom,classification_confidence,classification_source,manual_review_status,processing_status,extracted_fields,created_at FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[req.params.docId,req.params.id,req.user?.tenantId]);
+  res.status(201).json({ items: saved.rows, uploadMode: 'direct-to-cloud' });
+}));
 
 export const FORBIDDEN_PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -2402,7 +2531,6 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
   if (!property.rowCount) return res.status(404).json({ error: 'Property not found.' });
   const files = (req.files || []) as Express.Multer.File[];
   const requestedDocumentType = String(req.body?.documentType || '').trim();
-  const allowedDocumentTypes = new Set(['sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney','encumbrance_certificate','rtc_pahani','mutation_record','survey_sketch_tippan','khata_e_khata','property_tax_receipt','layout_approval_conversion_order','master_plan_zoning_document','court_order_legal_notice','other','e_khata','mutation_extract','survey_sketch','tax_receipt','conversion_order','layout_approval','court_order']);
   if (requestedDocumentType && !allowedDocumentTypes.has(requestedDocumentType)) return res.status(400).json({ error: 'Unsupported document type.' });
   if (!files.length) return res.status(400).json({ error: 'No files received. Use multipart form field "files".' });
   let metadata: Array<{documentType?:string;customDocumentType?:string;classificationConfidence?:number|null;manualReview?:boolean}> = [];
@@ -2701,6 +2829,14 @@ app.get('/api/properties/:id/documents/:docId/file', authGuard, asyncRoute(async
   if (access === 'forbidden') return res.status(403).json({error:'This role cannot access confidential document files.'});
 
   if (isRemoteStorageKey(String(doc.storage_key))) {
+    if(req.user?.isDemo){
+      if(!documentStorage.getObject)return res.status(503).json({error:'Authenticated demo document preview is unavailable.'});
+      const content=await documentStorage.getObject(String(doc.storage_key));
+      res.setHeader('Content-Type',doc.mime_type||'application/octet-stream');
+      res.setHeader('Content-Disposition',`inline; filename="${encodeURIComponent(doc.original_filename)}"`);
+      res.setHeader('Cache-Control','private, no-store');
+      return res.end(content);
+    }
     const signedUrl = await documentStorage.createSignedUrl(String(doc.storage_key), 60);
     if (!signedUrl) return res.status(503).json({ error: 'Cloud document storage is not configured.' });
     res.setHeader('Cache-Control', 'private, no-store');
@@ -2742,6 +2878,11 @@ app.post('/api/properties/:id/documents/:docId/signed-url', authGuard, asyncRout
   const access = documentFileAccess({ role: req.user?.role, propertyStatus, reviewStatus: docResult.rows[0].review_status });
   if (access === 'not_found') return res.status(404).json({error:'Approved evidence not found.'});
   if (access === 'forbidden') return res.status(403).json({error:'This role cannot access confidential document files.'});
+
+  if(req.user?.isDemo){
+    res.setHeader('Cache-Control','private, no-store');
+    return res.json({url:`/api/properties/${encodeURIComponent(req.params.id)}/documents/${encodeURIComponent(req.params.docId)}/file`,expiresInSeconds:null,provider:'authenticated_demo_proxy',note:'Demo documents are streamed through the authenticated workspace API and cannot be shared externally.'});
+  }
 
   const configuredTtl = Number(process.env.SIGNED_URL_TTL_SECONDS || 300);
   const requestedTtl = Number(req.body?.expiresInSeconds || configuredTtl);
@@ -4348,7 +4489,7 @@ const webDistCandidates = [
   path.resolve(process.cwd(), 'apps/web/dist'),
 ];
 const webDistPath = webDistCandidates.find(p => fs.existsSync(p));
-if (webDistPath) {
+if (webDistPath && !process.env.VERCEL) {
   app.use(express.static(webDistPath));
   app.get('*', (req: Request, res: Response, next: NextFunction) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
@@ -4359,7 +4500,7 @@ if (webDistPath) {
 }
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `File exceeds ${process.env.MAX_UPLOAD_MB || 25} MB limit.` : err.message });
+  if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? process.env.VERCEL ? 'Multipart uploads on Vercel are limited by the 4.5 MB function request payload cap. Use the direct-to-cloud upload flow for larger documents.' : `File exceeds ${process.env.MAX_UPLOAD_MB || 25} MB limit.` : err.message });
   if (err instanceof OtpDeliveryError) return res.status(503).json({ error: err.message, code:err.code });
   if (err?.message?.includes('Only PDF')) return res.status(400).json({ error: err.message });
   console.error(err);
@@ -4367,15 +4508,12 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 let server: any;
-if (process.env.NODE_ENV !== 'test' || process.env.TEST_API_SERVER === 'true') {
+if (!process.env.VERCEL && (process.env.NODE_ENV !== 'test' || process.env.TEST_API_SERVER === 'true')) {
   void (async () => {
     const smtpIssues=getSmtpConfigurationIssues();
     if(smtpIssues.length)console.warn(`[smtp] Email OTP delivery is unavailable; configure: ${smtpIssues.join(', ')}.`);
     else console.info('[smtp] SMTP settings passed local validation; provider connectivity is checked when sending.');
-    if (pool) {
-      const bootstrap = await bootstrapSuperAdmin(pool as unknown as import('./super-admin-bootstrap.js').BootstrapPool);
-      if (bootstrap.configured) console.log(`Super Admin bootstrap ready (${bootstrap.created ? 'created' : 'account preserved'}).`);
-    }
+    if (pool) await ensureSuperAdminBootstrapped();
     server = app.listen(port, () => console.log(`OJIX Property API listening on port ${port}`));
   })().catch(error => {
     console.error('OJIX API startup failed:', error instanceof Error ? error.message : 'Unknown configuration error.');
@@ -4384,3 +4522,5 @@ if (process.env.NODE_ENV !== 'test' || process.env.TEST_API_SERVER === 'true') {
   async function shutdown() { server?.close(); if (pool) await pool.end(); process.exit(0); }
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }
+
+export default app;

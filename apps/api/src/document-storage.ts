@@ -14,6 +14,7 @@ export interface DocumentStorage {
   readonly provider: StorageProviderName;
   put(input: { localPath: string; objectKey: string; mimeType: string }): Promise<StoredDocument>;
   createSignedUrl(storageKey: string, expiresInSeconds: number): Promise<string | null>;
+  createSignedUploadUrl?(storageKey: string, mimeType: string, sizeBytes: number, expiresInSeconds: number): Promise<{ url: string; method: 'PUT' | 'POST'; headers: Record<string, string>; fields?: Record<string, string> }>;
   getObject?(storageKey: string): Promise<Buffer>;
   delete?(storageKey: string): Promise<void>;
   canDelete?(storageKey: string): boolean;
@@ -21,13 +22,14 @@ export interface DocumentStorage {
 
 type GcsFileLike = {
   save(data: Buffer, options?: Record<string, unknown>): Promise<unknown>;
+  generateSignedPostPolicyV4(options: Record<string, unknown>): Promise<[{ url: string; fields: Record<string, string> }, unknown]>;
   getSignedUrl(options: { version: 'v4'; action: 'read'; expires: number }): Promise<[string]>;
   download(): Promise<[Buffer]>;
   delete(options?: { ignoreNotFound?: boolean }): Promise<unknown>;
 };
 
 export type GcsStorageClient = {
-  bucket(name: string): { file(name: string): GcsFileLike };
+  bucket(name: string): { file(name: string): GcsFileLike; name?: string };
 };
 
 const STORAGE_KEY_PREFIX: Record<RemoteStorageProviderName, string> = {
@@ -129,6 +131,27 @@ export class SupabaseDocumentStorage implements DocumentStorage {
     return signedPath.startsWith('http') ? signedPath : `${this.baseUrl.replace(/\/$/, '')}/storage/v1${signedPath.startsWith('/') ? '' : '/'}${signedPath}`;
   }
 
+  async createSignedUploadUrl(storageKey: string, mimeType: string, _sizeBytes: number, _expiresInSeconds: number): Promise<{ url: string; method: 'PUT'; headers: Record<string, string> }> {
+    if (!storageKey.startsWith('supabase:')) throw new Error('Storage key does not belong to Supabase.');
+    const key = normalizeObjectKey(storageKey.slice('supabase:'.length));
+    const response = await this.fetchImpl(`${this.baseUrl.replace(/\/$/, '')}/storage/v1/object/upload/sign/${encodeURIComponent(this.bucket)}/${key}`, {
+      method: 'POST',
+      headers: this.headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ upsert: false }),
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 500);
+      throw new Error(`Supabase signed upload URL creation failed (${response.status}): ${detail}`);
+    }
+    const payload = await response.json() as { signedURL?: string; signedUrl?: string; token?: string };
+    const signedPath = payload.signedURL || payload.signedUrl;
+    const url = signedPath
+      ? signedPath.startsWith('http') ? signedPath : `${this.baseUrl.replace(/\/$/, '')}/storage/v1${signedPath.startsWith('/') ? '' : '/'}${signedPath}`
+      : payload.token ? `${this.baseUrl.replace(/\/$/, '')}/storage/v1/object/upload/sign/${encodeURIComponent(this.bucket)}/${key}?token=${encodeURIComponent(payload.token)}` : '';
+    if (!url) throw new Error('Supabase did not return a signed upload URL.');
+    return { url, method: 'PUT', headers: { 'Content-Type': mimeType, 'x-upsert': 'false' } };
+  }
+
   async getObject(storageKey: string): Promise<Buffer> {
     const signedUrl = await this.createSignedUrl(storageKey, 120);
     const response = await this.fetchImpl(signedUrl, { signal: AbortSignal.timeout(120_000) });
@@ -182,6 +205,26 @@ export class GcsDocumentStorage implements DocumentStorage {
     return url;
   }
 
+  async createSignedUploadUrl(storageKey: string, mimeType: string, sizeBytes: number, expiresInSeconds: number): Promise<{ url: string; method: 'POST'; headers: Record<string, string>; fields: Record<string, string> }> {
+    if (!storageKey.startsWith('gcs:')) throw new Error('Storage key does not belong to Google Cloud Storage.');
+    if (!Number.isInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > 900) {
+      throw new Error('GCS signed URL expiry must be between 1 and 900 seconds.');
+    }
+    if (!Number.isInteger(sizeBytes) || sizeBytes < 1) throw new Error('GCS signed upload size must be a positive integer.');
+    const objectKey = normalizeObjectKey(storageKey.slice('gcs:'.length));
+    const [policy] = await this.bucket.file(objectKey).generateSignedPostPolicyV4({
+      expires: Date.now() + expiresInSeconds * 1000,
+      fields: { key: objectKey, 'Content-Type': mimeType, 'x-goog-if-generation-match': '0' },
+      conditions: [
+        ['eq', '$key', objectKey],
+        ['eq', '$Content-Type', mimeType],
+        ['eq', '$x-goog-if-generation-match', '0'],
+        ['content-length-range', sizeBytes, sizeBytes],
+      ],
+    });
+    return { url: policy.url, method: 'POST', headers: {}, fields: policy.fields };
+  }
+
   async getObject(storageKey: string): Promise<Buffer> {
     if (!storageKey.startsWith('gcs:')) throw new Error('Storage key does not belong to Google Cloud Storage.');
     const objectKey = normalizeObjectKey(storageKey.slice('gcs:'.length));
@@ -210,6 +253,12 @@ export class RoutedDocumentStorage implements DocumentStorage {
 
   put(input: { localPath: string; objectKey: string; mimeType: string }) {
     return this.active.put(input);
+  }
+
+  createSignedUploadUrl(storageKey: string, mimeType: string, sizeBytes: number, expiresInSeconds: number) {
+    const provider = this.providerFor(storageKey);
+    if (!provider?.createSignedUploadUrl) throw new Error(`Direct uploads are not supported by storage provider: ${storageProviderForKey(storageKey)}.`);
+    return provider.createSignedUploadUrl(storageKey, mimeType, sizeBytes, expiresInSeconds);
   }
 
   private providerFor(storageKey: string): DocumentStorage | null {
