@@ -9,6 +9,7 @@ import multer from 'multer';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import mysql from 'mysql2/promise';
 import { z } from 'zod';
@@ -82,11 +83,19 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
 const port = Number(process.env.PORT || 4000);
 const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
-const uploadDir = resolveUploadDirectory();
+let uploadDir = resolveUploadDirectory();
 const documentStorage = createDocumentStorage();
 
-
-fs.mkdirSync(uploadDir, { recursive: true });
+try {
+  fs.mkdirSync(uploadDir, { recursive: true });
+} catch (error) {
+  uploadDir = path.join(os.tmpdir(), 'ojix-uploads');
+  try {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  } catch {
+    // Read-only filesystem fallback; do not crash startup
+  }
+}
 
 function pendingDocumentFields(_documentId: string, documentType: string, classificationConfidence: number): ExtractedDocumentFields {
   return {

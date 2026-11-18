@@ -8,7 +8,16 @@ export const VERCEL_MULTIPART_FILE_BYTES = 4 * 1024 * 1024;
 
 export function resolveUploadDirectory(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
   if (env.UPLOAD_DIR?.trim()) return path.resolve(cwd, env.UPLOAD_DIR.trim());
-  if (env.VERCEL) return path.join(os.tmpdir(), 'ojix-uploads');
+  if (
+    env.VERCEL ||
+    env.VERCEL_ENV ||
+    env.AWS_LAMBDA_FUNCTION_NAME ||
+    env.LAMBDA_TASK_ROOT ||
+    cwd.startsWith('/var/task') ||
+    cwd.startsWith('/vercel')
+  ) {
+    return path.join(os.tmpdir(), 'ojix-uploads');
+  }
   return path.resolve(cwd, 'uploads');
 }
 

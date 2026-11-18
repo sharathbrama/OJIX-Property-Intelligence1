@@ -58,6 +58,16 @@ This audit document details the comprehensive functional fix and stabilization a
   - Updated `PropertiesPage` tab logic to include `complete`, `approved`, and `closed` under "Completed".
   - Added synthetic 4th property `OJ-2026-MYS-004` (Mysuru, Residential Layout) with `status: 'ready_for_review'` to seed data so all 4 tabs ("All applications", "In review", "Ready for review", "Completed") and both districts ("Bengaluru Urban", "Mysuru") have live records.
 
+### Issue E: Vercel Lambda Serverless Crash (HTTP 500) on `/var/task/uploads`
+- **Symptom:** On Vercel preview deployment, accessing any API endpoint returned:
+  - `API unavailable: Health check failed (HTTP 500).`
+  - `The API returned an invalid JSON response (HTTP 500).`
+- **Root Cause:** In Vercel's AWS Lambda execution environment, the task root `/var/task` is strictly read-only. `server.ts` executed `fs.mkdirSync(uploadDir)` synchronously at module initialization time where `uploadDir` resolved to `/var/task/uploads`. This threw unhandled `ENOENT: no such file or directory, mkdir '/var/task/uploads'`, immediately terminating the Node.js process with exit status 1 before handling requests.
+- **Resolution:**
+  - Updated `upload-config.ts` to detect Lambda/Vercel serverless environments (`VERCEL_ENV`, `AWS_LAMBDA_FUNCTION_NAME`, `LAMBDA_TASK_ROOT`, or `/var/task` path) and route uploads exclusively to the writable `/tmp` directory (`os.tmpdir()`).
+  - Added safe `try / catch` fallback around `fs.mkdirSync` during startup in `apps/api/src/server.ts`.
+  - Normalized root `package.json` `"engines": { "node": "22.x" }` to prevent Vercel `invalid_engines_value` build errors.
+
 ---
 
 ## 3. Audited Pages & Functionality Matrix
