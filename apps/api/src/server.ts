@@ -1100,7 +1100,7 @@ const parcelReferenceSchema = z.object({
   notes: z.string().max(2000).optional().default('')
 });
 
-async function validateLocationHierarchy(data: { district:string;taluk:string;hobli:string;village:string;districtId?:string|null;talukId?:string|null;hobliId?:string|null;villageId?:string|null }) {
+async function validateLocationHierarchy(data: { district?: string | null; taluk?: string | null; hobli?: string | null; village?: string | null; districtId?: string | null; talukId?: string | null; hobliId?: string | null; villageId?: string | null }) {
   if (!pool) throw new Error('Database not configured.');
   const ids = [data.districtId, data.talukId, data.hobliId, data.villageId];
   if (ids.every(id => !id)) return { valid: true as const }; // Legacy text-only API compatibility.
@@ -1116,7 +1116,8 @@ async function validateLocationHierarchy(data: { district:string;taluk:string;ho
   );
   if (!result.rowCount) return { valid: false as const, error: 'The selected District, Taluk, Hobli and Village combination is invalid or inactive.' };
   const row = result.rows[0];
-  if ([row.district, row.taluk, row.hobli, row.village].some((name, index) => name !== [data.district, data.taluk, data.hobli, data.village][index])) {
+  const names = [data.district || '', data.taluk || '', data.hobli || '', data.village || ''];
+  if ([row.district, row.taluk, row.hobli, row.village].some((name, index) => name !== names[index])) {
     return { valid: false as const, error: 'Location names do not match the selected reference records.' };
   }
   return { valid: true as const };

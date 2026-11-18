@@ -361,6 +361,28 @@ function createSeedProperties(): MockProperty[] {
       assigned_viewer_uid: 'user-viewer', archived_at: null,
       created_at: baseTime, updated_at: baseTime,
     },
+    {
+      id: uuid(), tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-MYS-004', name: 'Chamundi Hill Residential Layout',
+      review_purpose: 'property_purchase_sale', primary_document_type: 'sale_deed',
+      property_identifier: '', property_identifier_type: '',
+      property_type: 'residential', village: 'Alanahalli', hobli: 'Varuna',
+      taluk: 'Mysuru', district: 'Mysuru',
+      district_id: null, taluk_id: null, hobli_id: null, village_id: null,
+      survey_number: '45', subdivision: '2B',
+      extent: '3200 sq ft', extent_value: 3200, extent_unit: 'sq_ft',
+      boundary_north: 'Site No. 44', boundary_south: 'Main Road',
+      boundary_east: 'Site No. 46', boundary_west: 'Cross Road',
+      address: 'Plot 45/2B, Alanahalli Village, Mysuru 570028',
+      latitude: 12.2958, longitude: 76.6852, coordinate_source: 'manual',
+      coordinate_confidence: 0.88, coordinate_captured_at: baseTime,
+      identity_state: 'verified', notes: 'Title documents and mutation extracts validated',
+      status: 'ready_for_review', workflow_priority: 'normal', due_date: '2026-12-10',
+      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
+      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
+      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      created_at: baseTime, updated_at: baseTime,
+    },
   ];
 }
 

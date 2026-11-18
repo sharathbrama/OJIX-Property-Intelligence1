@@ -2042,7 +2042,7 @@ export default function App() {
                 currentUser={currentUser}
                 onNavigate={navigate}
               />
-            ) : currentUser.role === "viewer" && !currentUser.isDemo ? (
+            ) : currentUser.role === "viewer" ? (
               <ClientDashboard
                 properties={properties}
                 loading={loading}
@@ -2093,7 +2093,7 @@ export default function App() {
                 overview={overview}
                 properties={properties}
                 loading={loading}
-                onCreate={() => { if (!currentUser.isDemo) setShowCreate(true); }}
+                onCreate={() => setShowCreate(true)}
                 onOpen={openProperty}
                 onProperties={() => navigate("properties")}
                 currentUser={currentUser}
@@ -2105,7 +2105,7 @@ export default function App() {
               query={query}
               setQuery={setQuery}
               loading={loading}
-              onCreate={() => { if (!currentUser.isDemo) setShowCreate(true); }}
+              onCreate={() => setShowCreate(true)}
               onOpen={openProperty}
               currentUser={currentUser}
             />
@@ -2168,7 +2168,7 @@ export default function App() {
             />
           )}
           {page === "legal-research" && (
-            <LegalResearchView apiUrl={API} onOpenProperty={openPropertyById} readOnly={Boolean(currentUser.isDemo)} />
+            <LegalResearchView apiUrl={API} onOpenProperty={openPropertyById} readOnly={currentUser.role === "viewer"} />
           )}
           {page === "source-registry" && (
             <SourceRegistryView
@@ -2304,14 +2304,14 @@ export default function App() {
           </div>
         </div>
       )}
-      {showCreate && !currentUser.isDemo && (
+      {showCreate && (
         <CreatePropertyModal
           onClose={() => setShowCreate(false)}
           onSubmit={createProperty}
           busy={busy}
         />
       )}
-      {showEdit && selected && !currentUser.isDemo && (
+      {showEdit && selected && (
         <CreatePropertyModal
           initialProperty={selected}
           onClose={() => setShowEdit(false)}
@@ -6000,25 +6000,18 @@ function PropertiesPage({
   currentUser: UserAccount;
 }) {
   const isViewer = currentUser.role === "viewer";
-  const canCreate = ![
-    "lawyer",
-    "analyst",
-    "viewer",
-    "operations",
-    "consultant",
-    "data_steward",
-    "support",
-  ].includes(currentUser.role);
+  const canCreate = ["owner", "admin", "super_admin", "operations"].includes(currentUser.role);
   const [statusFilter, setStatusFilter] = useState("all");
   const [districtFilter, setDistrictFilter] = useState("all");
   const [sort, setSort] = useState("updated_desc");
   const [pageNumber, setPageNumber] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const isCompleted = (s: string) => s === "complete" || s === "approved" || s === "closed";
   const districts = Array.from(
     new Set(properties.map((p) => p.district).filter(Boolean)),
   ).sort();
   const filteredProperties = properties
-    .filter((p) => statusFilter === "all" || p.status === statusFilter)
+    .filter((p) => statusFilter === "all" ? true : statusFilter === "complete" ? isCompleted(p.status) : p.status === statusFilter)
     .filter((p) => districtFilter === "all" || p.district === districtFilter)
     .sort((a, b) =>
       sort === "name_asc"
@@ -6128,7 +6121,7 @@ function PropertiesPage({
         >
           Completed{" "}
           <span>
-            {properties.filter((p) => p.status === "complete").length}
+            {properties.filter((p) => isCompleted(p.status)).length}
           </span>
         </button>
       </nav>
