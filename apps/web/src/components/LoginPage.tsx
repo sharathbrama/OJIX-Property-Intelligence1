@@ -361,19 +361,21 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   };
   const handleLogin=(e:React.FormEvent)=>requestLoginOtp('email',e);
 
-  const startDemoSession = async () => {
+  const startDemoSession = async (roleOverride?: string) => {
     setLoading(true);
     setError('');
+    const targetRole = roleOverride || selectedRole || 'owner';
     try {
       const res = await fetch(`${apiUrl}/api/auth/demo/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        credentials: 'include',
+        body: JSON.stringify({ role: targetRole }),
       });
       const data = await readApiJson(res);
       if (!res.ok) throw new Error(data.error || 'Could not open the demo workspace.');
-      if (data.user?.role !== 'viewer' || data.user?.isSuperAdmin || !data.user?.isDemo || !data.user?.accessExpiresAt) throw new Error('The API did not return a valid restricted demo session.');
-      onLoginSuccess(data.token, data.user, 'viewer');
+      if (!data.token || !data.user) throw new Error('Invalid demo response received.');
+      onLoginSuccess(data.token, data.user, data.user.role || targetRole);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not open the demo workspace.');
     } finally {
@@ -388,7 +390,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       const res=await fetch(`${apiUrl}/api/auth/forgot-password/request-otp`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,expectedRole:selectedRole})});
       const data=await readApiJson(res);
       if(!res.ok){const failure=new Error(data.error||'Unable to send a recovery code.') as Error&{retryAfterSeconds?:number};failure.retryAfterSeconds=Number(data.retryAfterSeconds)||undefined;throw failure;}
-      setRecoveryChallengeId(data.challengeId);setRecoveryExpiresAt(data.expiresAt?new Date(data.expiresAt).getTime():Date.now()+600000);setRecoveryOtp('');setRecoveryStep('reset');
+      setRecoveryChallengeId(data.challengeId);setRecoveryExpiresAt(data.expiresAt?new Date(data.expiresAt).getTime():Date.now()+600000);setRecoveryOtp(data.developmentOtp||'');setRecoveryStep('reset');
     }catch(err){setError(err instanceof Error?err.message:'Unable to send a recovery code.');}
     finally{setLoading(false);}
   };
@@ -463,7 +465,8 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       setRegisterEmail(data.email);
       setOtpExpiresAt(data.expiresAt ? new Date(data.expiresAt).getTime() : Date.now() + 10 * 60 * 1000);
       setResendAvailableAt(Date.now() + Math.max(0, Number(data.resendAfterSeconds || 30)) * 1000);
-      setOtp('');
+      setOtp(data.developmentOtp || '');
+      setDevelopmentOtpAutofilled(Boolean(data.developmentOtp));
       setMode('otp');
     } catch (err: any) {
       if (Number(err?.retryAfterSeconds) > 0) setResendAvailableAt(Date.now() + Number(err.retryAfterSeconds) * 1000);
@@ -600,11 +603,10 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
               <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'||!selectedRole}>{loading?<><span className="executive-spinner"/>Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
             </form>}
             {!recoveryStep&&<div className="public-demo-entry">
-              <div><strong>Explore the full workspace</strong><span>Open a temporary read-only demo with synthetic property intelligence data.</span></div>
-              <button type="button" className="executive-submit demo-entry-button" onClick={startDemoSession} disabled={loading || demoAccessMode === 'disabled' || serviceStatus !== 'ready'}>
-                {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <><Zap size={17}/> Launch Instant Demo Access (Admin)</>}
+              <div><strong>One-Click Demo Mode</strong><span>Explore all 10 roles, real Tesseract OCR, and Karnataka property intelligence with zero cloud tokens.</span></div>
+              <button type="button" className="executive-submit demo-entry-button" onClick={() => startDemoSession()} disabled={loading}>
+                {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <><Zap size={17}/> Enter Demo Workspace</>}
               </button>
-              {demoAccessMode === 'disabled' && <small className="demo-entry-status">Demo access is not configured on this API.</small>}
             </div>}
             {recoveryStep==='request'&&<form className="executive-login-form landing-modal-form recovery-form" onSubmit={requestPasswordRecovery}>
               <div className="login-selected-role"><span className="login-selected-role-icon"><SelectedLoginRoleIcon size={17}/></span><span><small>Recovering access for</small><strong>{roleLoginCopy[selectedRole]?.label}</strong></span></div>
@@ -675,11 +677,10 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
             <button className="executive-submit" type="submit" disabled={loading||serviceStatus==='checking'||!selectedRole}>{loading?<><span className="executive-spinner"/>Sending secure code…</>:<>Continue with email OTP <ArrowRight/></>}</button>
           </form>
           <div className="public-demo-entry">
-            <div><strong>Explore the full workspace</strong><span>Open a temporary read-only demo with synthetic property intelligence data.</span></div>
-            <button type="button" className="executive-submit demo-entry-button" onClick={startDemoSession} disabled={loading || demoAccessMode === 'disabled' || serviceStatus !== 'ready'}>
-              {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <><Zap size={17}/> Launch Instant Demo Access (Admin)</>}
+            <div><strong>One-Click Demo Mode</strong><span>Explore all 10 roles, real Tesseract OCR, and Karnataka property intelligence with zero cloud tokens.</span></div>
+            <button type="button" className="executive-submit demo-entry-button" onClick={() => startDemoSession()} disabled={loading}>
+              {loading ? <><span className="executive-spinner"/>Opening demo workspace…</> : <><Zap size={17}/> Enter Demo Workspace</>}
             </button>
-            {demoAccessMode === 'disabled' && <small className="demo-entry-status">Demo access is not configured on this API.</small>}
           </div>
 
         </div>

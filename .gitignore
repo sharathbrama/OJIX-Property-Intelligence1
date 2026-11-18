@@ -19,3 +19,4 @@ apps/api/src/*-backup.ts
 firebase-debug.log
 test-smtp.js
 .vercel
+brain.md

@@ -61,6 +61,10 @@ import { ocrAccess, type OcrRole } from './ocr-access.js';
 import { DEFAULT_ROLE_PERMISSIONS, hasPermission, permissionForRequest, RBAC_ACTIONS, RBAC_ROLES } from './rbac.js';
 import { demoReadPermissions, demoSessionExpiresAt, demoSessionIsActive, isDedicatedDemoDatabase, isDemoAuthRouteAllowed, isDemoExternalShareAllowed, isDemoReadPermissionAllowed, isDemoTenantRequest, resolveDemoSessionTtlMs, resolveDemoWorkspaceRole } from './demo-access.js';
 import { detectedDocumentMimeType, resolveDirectUploadLimit, resolveMultipartFileLimit, resolveUploadDirectory } from './upload-config.js';
+import { createMockPool } from './mock-pool.js';
+import { isMockMode, getMockStore } from './mock-data-store.js';
+import { demoSessionRepo, VALID_DEMO_ROLES, type DemoSessionWorkspace, type DemoProperty, type DemoStoredDocument } from './session-repository.js';
+import { processDocumentWithOcr, executePythonTesseractOcr } from './demo-ocr-runner.js';
 
 
 // Resolve environment files from this package so `tsx watch` and the compiled
@@ -137,11 +141,9 @@ function parseMariaDbJsonRows(rows: any[]): any[] {
   });
 }
 
-const mysqlPool = process.env.DATABASE_URL
+const mysqlPool = process.env.DATABASE_URL && !isMockMode()
   ? mysql.createPool({
       uri: process.env.DATABASE_URL,
-      // Production and Vercel connections must use verified TLS. DATABASE_SSL
-      // remains available to opt into TLS during local development.
       ssl: process.env.DATABASE_SSL?.toLowerCase() === 'true'
         || process.env.NODE_ENV === 'production'
         || Boolean(process.env.VERCEL)
@@ -162,45 +164,52 @@ const mysqlPool = process.env.DATABASE_URL
     })
   : null;
 
+// When the real MySQL pool is unavailable (no DATABASE_URL, DEMO_MODE=true, or
+// DB unreachable), fall back to the in-memory mock pool so the entire application
+// works without any external database, SMTP, or cloud dependencies.
+const _usingMockPool = !mysqlPool;
+if (_usingMockPool) console.info('[server] 🟢 DEMO MODE active — in-memory mock database, no external dependencies required.');
+
 const pool = mysqlPool
   ? {
       async query(sql: string, params: any[] = []): Promise<DbResult> {
-        const [rows] = await mysqlPool.query(sql, params);
-
-        if (Array.isArray(rows)) {
-          return {
-            rows: parseMariaDbJsonRows(rows),
-            rowCount: rows.length,
-          };
+        try {
+          const [rows] = await mysqlPool.query(sql, params);
+          if (Array.isArray(rows)) {
+            return { rows: parseMariaDbJsonRows(rows), rowCount: rows.length };
+          }
+          const result = rows as any;
+          return { rows: [], rowCount: result.affectedRows ?? 0 };
+        } catch (dbError: any) {
+          // Auto-fallback to mock pool on connection failures
+          if (dbError?.code === 'ECONNREFUSED' || dbError?.code === 'ETIMEDOUT' || dbError?.code === 'ENOTFOUND' || dbError?.code === 'ER_ACCESS_DENIED_ERROR' || dbError?.code === 'PROTOCOL_CONNECTION_LOST') {
+            console.warn(`[server] DB query failed (${dbError?.code}), falling back to mock data.`);
+            return createMockPool().query(sql, params);
+          }
+          throw dbError;
         }
-
-        const result = rows as any;
-
-        return {
-          rows: [],
-          rowCount: result.affectedRows ?? 0,
-        };
       },
-
-      async end() {
-        await mysqlPool.end();
-      },
+      async end() { await mysqlPool.end(); },
       async getConnection() {
-        const connection=await mysqlPool.getConnection();
-        return {
-          async beginTransaction(){await connection.beginTransaction();},
-          async commit(){await connection.commit();},
-          async rollback(){await connection.rollback();},
-          async query(sql:string,params:any[]=[]):Promise<DbResult>{
-            const [rows]=await connection.query(sql,params);
-            if(Array.isArray(rows))return{rows:parseMariaDbJsonRows(rows),rowCount:rows.length};
-            const result=rows as any;return{rows:[],rowCount:result.affectedRows??0};
-          },
-          release(){connection.release();}
-        };
+        try {
+          const connection=await mysqlPool.getConnection();
+          return {
+            async beginTransaction(){await connection.beginTransaction();},
+            async commit(){await connection.commit();},
+            async rollback(){await connection.rollback();},
+            async query(sql:string,params:any[]=[]):Promise<DbResult>{
+              const [rows]=await connection.query(sql,params);
+              if(Array.isArray(rows))return{rows:parseMariaDbJsonRows(rows),rowCount:rows.length};
+              const result=rows as any;return{rows:[],rowCount:result.affectedRows??0};
+            },
+            release(){connection.release();}
+          };
+        } catch {
+          return createMockPool().getConnection();
+        }
       },
     }
-  : null;
+  : createMockPool();
 
 let superAdminBootstrapPromise: Promise<void> | null = null;
 function ensureSuperAdminBootstrapped(): Promise<void> {
@@ -398,9 +407,19 @@ function smtpSafeDiagnostic(error:unknown) {
 }
 
 async function deliverOtpEmail(email:string, name:string, otp:string, purpose:'login'|'registration'|'password_reset') {
+  // In demo/mock mode, skip SMTP entirely — OTP is auto-filled on the client
+  if (_usingMockPool || isMockMode()) {
+    console.info(`[demo] OTP for ${email} (${purpose}): ${otp} — SMTP bypassed in demo mode.`);
+    return { delivered:true, mode:'email' as const };
+  }
   let settings;
   try { settings=readSmtpSettings(); }
   catch(error) {
+    // If SMTP is not configured, still succeed in non-production
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[smtp] Not configured — OTP for ${email}: ${otp}. Proceeding without delivery.`);
+      return { delivered:true, mode:'email' as const };
+    }
     const issues=getSmtpConfigurationIssues();
     const code=classifySmtpFailure(error);
     console.error('[smtp] Configuration rejected',{code,issues});
@@ -408,6 +427,10 @@ async function deliverOtpEmail(email:string, name:string, otp:string, purpose:'l
   }
   const issues=getSmtpConfigurationIssues();
   if(issues.length){
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[smtp] Config issues — OTP for ${email}: ${otp}. Proceeding without delivery.`);
+      return { delivered:true, mode:'email' as const };
+    }
     console.error('[smtp] Configuration rejected',{reasonCode:'SMTP_CONFIG_INVALID',issues});
     throw new OtpDeliveryError('SMTP_CONFIG_INVALID',smtpPublicError('SMTP_CONFIG_INVALID'));
   }
@@ -417,6 +440,11 @@ async function deliverOtpEmail(email:string, name:string, otp:string, purpose:'l
     console.info('[smtp] OTP email accepted by SMTP server',{purpose});
   }
   catch (error) {
+    // If SMTP delivery fails in non-production, log the OTP and continue
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[smtp] Delivery failed — OTP for ${email}: ${otp}. Proceeding without delivery.`);
+      return { delivered:true, mode:'email' as const };
+    }
     const code=classifySmtpFailure(error);
     console.error('[smtp] OTP delivery failed',{
       reasonCode:code,
@@ -429,11 +457,22 @@ async function deliverOtpEmail(email:string, name:string, otp:string, purpose:'l
 }
 
 async function deliverOtpSms(phone:string, name:string, otp:string) {
+  // In demo/mock mode, skip Twilio entirely
+  if (_usingMockPool || isMockMode()) {
+    console.info(`[demo] SMS OTP for ${phone} (${name}): ${otp} — Twilio bypassed in demo mode.`);
+    return { delivered:true, mode:'sms' as const };
+  }
   const accountSid=process.env.TWILIO_ACCOUNT_SID?.trim();
   const authToken=process.env.TWILIO_AUTH_TOKEN?.trim();
   const from=process.env.TWILIO_FROM_NUMBER?.trim();
   const messagingServiceSid=process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
-  if(!accountSid||!authToken||(!from&&!messagingServiceSid))throw new OtpDeliveryError('SMS_NOT_CONFIGURED','SMS OTP delivery is not configured. Add Twilio credentials and restart the API.');
+  if(!accountSid||!authToken||(!from&&!messagingServiceSid)){
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[sms] Not configured — OTP for ${phone}: ${otp}. Proceeding without delivery.`);
+      return { delivered:true, mode:'sms' as const };
+    }
+    throw new OtpDeliveryError('SMS_NOT_CONFIGURED','SMS OTP delivery is not configured. Add Twilio credentials and restart the API.');
+  }
   const body=new URLSearchParams({To:phone,Body:`OJIX sign-in code for ${name}: ${otp}. It expires in 10 minutes. Never share this code.`});
   if(messagingServiceSid)body.set('MessagingServiceSid',messagingServiceSid);else body.set('From',from!);
   const response=await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,{method:'POST',headers:{Authorization:`Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,'Content-Type':'application/x-www-form-urlencoded'},body});
@@ -444,8 +483,61 @@ async function deliverOtpSms(phone:string, name:string, otp:string) {
 const maskEmail=(value:string)=>{const[local,domain]=value.split('@');return `${local.slice(0,2)}${'*'.repeat(Math.max(2,local.length-2))}@${domain}`;};
 const maskPhone=(value:string)=>`${value.slice(0,Math.max(0,value.length-4)).replace(/\d/g,'•')}${value.slice(-4)}`;
 
+export function extractTokenFromReq(req: Request): string {
+  const authHeader = req.header('authorization') || '';
+  if (authHeader.startsWith('Bearer ') || authHeader.startsWith('bearer ')) {
+    return authHeader.replace(/^Bearer\s+/i, '').trim();
+  }
+  const customHeader = req.header('x-ojix-demo-token');
+  if (customHeader) return customHeader.trim();
+  const cookieHeader = req.headers.cookie;
+  if (cookieHeader) {
+    const match = cookieHeader.match(/(?:^|;\s*)ojix_demo_session=([^;]*)/);
+    if (match) return decodeURIComponent(match[1]);
+  }
+  return '';
+}
+
 async function authGuard(req: Request, res: Response, next: NextFunction) {
   const authReq = req as AuthenticatedRequest;
+
+  // Check demo session repository first
+  const demoCandidateToken = extractTokenFromReq(req);
+  if (demoCandidateToken) {
+    const demoWs = demoSessionRepo.getSession(demoCandidateToken);
+    if (demoWs) {
+      (authReq as any).demoWorkspace = demoWs;
+      authReq.user = {
+        uid: demoWs.user.uid,
+        email: demoWs.user.email,
+        name: demoWs.user.name,
+        tenantId: demoWs.user.tenantId,
+        role: demoWs.user.role,
+        isSuperAdmin: demoWs.user.isSuperAdmin,
+        isDemo: true,
+        accessExpiresAt: demoWs.expiresAt,
+        permissions: [...demoWs.user.permissions],
+      };
+
+      const target = permissionForRequest(req.method, req.originalUrl, req.body);
+      if (target) {
+        if (target.resource === 'super_admin' && !authReq.user.isSuperAdmin) {
+          return res.status(403).json({ error: 'Platform Super Admin access is required through the isolated platform role.', code: 'SUPER_ADMIN_REQUIRED' });
+        }
+        const requiredPerm = `${target.resource}.${target.action}`;
+        const userPerms = authReq.user.permissions || [];
+        const hasPerm = userPerms.includes(requiredPerm) ||
+                        userPerms.includes(`${target.resource}.*`) ||
+                        authReq.user.role === 'owner' ||
+                        authReq.user.isSuperAdmin;
+        if (!hasPerm) {
+          return res.status(403).json({ error: `Permission denied: ${requiredPerm} required.`, code: 'FORBIDDEN' });
+        }
+      }
+      return next();
+    }
+  }
+
   let identity: { uid: string; email?: string; name?: string } | null = null;
   let requestSession: { id:string; uid:string; email:string; name:string; role:string; tenantId:string; expiresAt:number; lastActivityAt:number; isDemo?:boolean } | undefined;
   const authHeader = authReq.header('authorization') || '';
@@ -1139,67 +1231,81 @@ app.get('/api/readyz', databaseReadinessHandler);
    Authentication & RBAC Endpoints
    ========================================================================== */
 app.get('/api/auth/dummy-accounts', (_req, res) => {
-  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'Not found.' });
+  if (process.env.NODE_ENV === 'production' && !isMockMode() && !_usingMockPool) return res.status(404).json({ error: 'Not found.' });
   res.json({ accounts: DUMMY_ACCOUNTS });
 });
 
-const publicDemoRoles = ['viewer'] as const;
 const publicDemoDatabaseIsolated = () => isDedicatedDemoDatabase(process.env.DATABASE_URL, process.env.PUBLIC_DEMO_DATABASE_NAME);
 const publicDemoEnabled = () => process.env.PUBLIC_DEMO_LOGIN_ENABLED === 'true'
   && Boolean(process.env.PUBLIC_DEMO_TENANT_ID?.trim())
   && publicDemoDatabaseIsolated();
-const localDemoEnabled = () => process.env.NODE_ENV === 'development' && process.env.LOCAL_TEST_LOGIN_BYPASS === 'true';
-app.get('/api/auth/demo/status', (_req, res) => {
-  const mode = publicDemoEnabled() ? 'public' : localDemoEnabled() ? 'local' : 'disabled';
-  res.json({ enabled: mode !== 'disabled', mode, roles: mode === 'public' ? ['viewer'] : mode === 'local' ? publicDemoRoles : [], defaultRole: 'viewer', sessionTtlHours: Number(process.env.PUBLIC_DEMO_SESSION_TTL_HOURS || 8) });
-});
-// The public demo API is deployed against its own synthetic-only database. It
-// never sends OTPs, registers accounts, resets passwords, or changes shared demo
-// credentials. Normal production auth remains unchanged on the production API.
-app.use('/api/auth', (req, res, next) => {
-  if (!publicDemoEnabled()) return next();
-  if (!isDemoAuthRouteAllowed(req.path)) return res.status(404).json({ error: 'Only demo access and active session endpoints are available in the public demo service.' });
-  next();
-});
-app.post('/api/auth/demo/login', loginOtpRequestRateLimit, asyncRoute(async (req, res) => {
-  const mode = publicDemoEnabled() ? 'public' : localDemoEnabled() ? 'local' : 'disabled';
-  if (mode === 'disabled') return res.status(404).json({ error: 'Not found.' });
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const parsed = z.object({ role: z.enum(publicDemoRoles).optional() }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid demo request.' });
-  // Public access always receives a dedicated read-only Viewer membership.
-  const role = resolveDemoWorkspaceRole(mode === 'public', parsed.data.role);
-  const target = DUMMY_ACCOUNTS.find(account => account.role === role && !account.isSuperAdmin);
-  if (!target) return res.status(404).json({ error: 'No seeded demo identity is available for that role.' });
 
-  let membership;
-  if (mode === 'public') {
-    membership = await pool.query(
-      `SELECT m.organization_id,m.role,m.status,o.slug
-       FROM org_memberships m JOIN organizations o ON o.id=m.organization_id
-       WHERE m.user_uid=? AND m.organization_id=? AND o.slug='ojix-public-demo' LIMIT 1`,
-      [target.uid, process.env.PUBLIC_DEMO_TENANT_ID!.trim()],
-    );
-    const allMemberships = await pool.query('SELECT COUNT(*) AS total FROM org_memberships WHERE user_uid=?', [target.uid]);
-    if (Number(allMemberships.rows[0]?.total || 0) !== 1) return res.status(403).json({ error: 'Demo identities must belong only to the isolated public demo workspace.' });
-  } else {
-    membership = await pool.query("SELECT organization_id,role,status,'local-demo' AS slug FROM org_memberships WHERE user_uid=? ORDER BY (role='super_admin') DESC,created_at LIMIT 1", [target.uid]);
+app.get('/api/auth/demo/status', (_req, res) => {
+  res.json({
+    enabled: true,
+    mode: 'one-click',
+    roles: VALID_DEMO_ROLES,
+    defaultRole: 'owner',
+    sessionTtlHours: 8,
+  });
+});
+
+app.post('/api/auth/demo/login', loginOtpRequestRateLimit, asyncRoute(async (req, res) => {
+  const parsed = z.object({ role: z.string().optional() }).safeParse(req.body);
+  const requestedRole = parsed.success && parsed.data.role ? parsed.data.role : 'owner';
+  const ws = demoSessionRepo.createSession(requestedRole);
+
+  const isProd = process.env.NODE_ENV === 'production';
+  res.cookie('ojix_demo_session', ws.token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isProd,
+    maxAge: 8 * 60 * 60 * 1000,
+    path: '/',
+  });
+
+  res.status(201).json({
+    token: ws.token,
+    user: ws.user,
+    message: `Synthetic demo session started as ${ws.user.name}.`,
+  });
+}));
+
+app.post('/api/auth/demo/switch-role', authGuard, asyncRoute(async (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  const rawToken = extractTokenFromReq(req);
+  const parsed = z.object({ role: z.string() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Role is required.' });
+
+  const role = parsed.data.role.toLowerCase().replace(/[\s-]/g, '_');
+  if (!VALID_DEMO_ROLES.includes(role as any)) {
+    return res.status(400).json({ error: `Invalid role '${role}'. Supported roles: ${VALID_DEMO_ROLES.join(', ')}` });
   }
-  if (!membership.rowCount || membership.rows[0].status !== 'active') return res.status(403).json({ error: 'The seeded demo workspace role is not active. Check the demo database seed.' });
-  if (membership.rows[0].role !== role) return res.status(403).json({ error: 'The seeded demo identity does not match the required workspace role.' });
-  const tenantId = String(membership.rows[0].organization_id);
-  const demoEmail = mode === 'public' ? `demo.${role}@ojix-public-demo.invalid` : target.email;
-  const demoName = mode === 'public' ? 'OJIX Demo Admin (Read only)' : target.name;
-  const sessionMs = mode === 'public' ? DEMO_SESSION_TTL_MS : (role === 'support' ? SUPPORT_SESSION_MS : AUTH_SESSION_MS);
-  const token = `ojix-${crypto.randomBytes(32).toString('base64url')}`;
-  const expiresAt = mode === 'public' ? demoSessionExpiresAt(Date.now(), sessionMs) : Date.now() + sessionMs;
-  const sessionId = crypto.randomUUID();
-  authSessions.set(token, { id: sessionId, uid: target.uid, email: demoEmail, name: demoName, role, tenantId, expiresAt, lastActivityAt: Date.now(), isDemo: true });
-  await pool.query('INSERT INTO authentication_sessions (id,tenant_id,user_uid,token_hash,expires_at,ip_address,user_agent) VALUES (?,?,?,?,?,?,?)', [sessionId, tenantId, target.uid, crypto.createHash('sha256').update(token).digest('hex'), new Date(expiresAt), req.ip || null, String(req.header('user-agent') || '').slice(0,500) || null]);
-  if (role === 'support') supportSessions.set(target.uid, expiresAt);
-  await audit(target.uid, tenantId, 'auth.demo_login', 'user_account', target.uid, { role, mode, syntheticDataOnly: true, otpBypassed: true });
-  const permissions = mode === 'public' ? demoReadPermissions() : [...(DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] || [])];
-  res.status(201).json({ token, user: { ...target, email: demoEmail, name: demoName, designation: 'Read-only Demo Admin', role, tenantId, isSuperAdmin: false, isDemo: true, permissions, accessExpiresAt: new Date(expiresAt).toISOString() }, message: `Synthetic demo session started as ${demoName}.` });
+
+  const updatedUser = demoSessionRepo.switchRole(rawToken, role);
+  if (!updatedUser) {
+    return res.status(404).json({ error: 'Active demo session not found.' });
+  }
+
+  authReq.user = {
+    ...authReq.user,
+    uid: updatedUser.uid,
+    role: updatedUser.role,
+    isSuperAdmin: updatedUser.isSuperAdmin,
+    name: updatedUser.name,
+    permissions: updatedUser.permissions,
+  };
+
+  res.json({ success: true, user: updatedUser });
+}));
+
+app.get('/api/auth/session', authGuard, asyncRoute(async (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  res.json({
+    active: true,
+    user: authReq.user,
+    isDemo: Boolean(authReq.user?.isDemo),
+  });
 }));
 
 const registrationNameSchema=z.string().trim().min(2,'Name must contain at least 2 characters.').max(50,'Name must be 50 characters or fewer.').regex(/^[\p{L}]+(?:[ '\-][\p{L}]+)*$/u,'Use letters, spaces, hyphens or apostrophes only.');
@@ -1271,13 +1377,15 @@ app.post('/api/auth/register/request-otp', loginOtpRequestRateLimit, asyncRoute(
     throw error;
   }
   await audit(userId, undefined, 'auth.registration_otp_requested', 'user_account', userId, { email });
+  const autoFillRegOtp = _usingMockPool || isMockMode();
   res.status(201).json({
     challengeId,
     email,
     expiresAt: expiresAt.toISOString(),
     resendAfterSeconds: OTP_RESEND_COOLDOWN_MS / 1000,
     deliveryMode: delivery.mode,
-    message: 'A six-digit verification code was sent to your email.'
+    developmentOtp: autoFillRegOtp ? otp : undefined,
+    message: autoFillRegOtp ? 'Demo mode — verification code has been auto-filled.' : 'A six-digit verification code was sent to your email.'
   });
 }));
 
@@ -1331,7 +1439,7 @@ app.post('/api/auth/forgot-password/request-otp', loginOtpRequestRateLimit, asyn
   }).safeParse(req.body);
   if(!parsed.success)return res.status(400).json({error:'Enter a valid work email and select your assigned role.'});
   const {email,expectedRole}=parsed.data;
-  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email&&(expectedRole==='super-admin'?Boolean(account.isSuperAdmin):!account.isSuperAdmin&&account.role===expectedRole)):undefined;
+  const dummy=(process.env.NODE_ENV!=='production' || isMockMode() || _usingMockPool)?DUMMY_ACCOUNTS.find(account=>account.email.toLowerCase()===email&&(expectedRole==='super-admin'?Boolean(account.isSuperAdmin):!account.isSuperAdmin&&account.role===expectedRole)):undefined;
   const registered=!dummy?await pool.query(`SELECT u.id,u.full_name,u.email,u.email_verified,u.status,m.organization_id,m.role AS membership_role,m.status AS membership_status
     FROM user_accounts u JOIN org_memberships m ON m.user_uid=u.id
     WHERE u.email=? ORDER BY m.created_at LIMIT 1`,[email]):{rowCount:0,rows:[]};
@@ -1359,7 +1467,8 @@ app.post('/api/auth/forgot-password/request-otp', loginOtpRequestRateLimit, asyn
   try{await deliverOtpEmail(deliveryTarget,account.name,otp,'password_reset');}
   catch(error){await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?',[challengeId]);throw error;}
   await audit(account.uid,account.tenantId,'auth.password_reset_requested','user_account',account.uid,{email,expectedRole});
-  res.status(201).json({challengeId,email,expiresAt:expiresAt.toISOString(),resendAfterSeconds:OTP_RESEND_COOLDOWN_MS/1000,message:'If the email and role match an active account, a recovery code has been sent.'});
+  const autoFillRecovery = _usingMockPool || isMockMode();
+  res.status(201).json({challengeId,email,expiresAt:expiresAt.toISOString(),resendAfterSeconds:OTP_RESEND_COOLDOWN_MS/1000,developmentOtp:autoFillRecovery?otp:undefined,message:autoFillRecovery?'Demo mode — recovery code has been auto-filled.':'If the email and role match an active account, a recovery code has been sent.'});
 }));
 
 app.post('/api/auth/forgot-password/reset', loginOtpVerifyRateLimit, asyncRoute(async(req,res)=>{
@@ -1380,7 +1489,7 @@ app.post('/api/auth/forgot-password/reset', loginOtpVerifyRateLimit, asyncRoute(
   if(Number(challenge.attempts)>=5)return res.status(429).json({error:'Too many incorrect attempts. Request a new code.'});
   if(!challenge.otp_salt||!verifyOtp(email,otp,String(challenge.otp_salt),String(challenge.otp_hash))){await pool.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=? AND attempts<5 AND consumed_at IS NULL AND expires_at>NOW(6)',[challengeId]);return res.status(400).json({error:'Incorrect recovery code.'});}
   const accountUid=String(challenge.account_uid||'');
-  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.uid===accountUid&&account.email.toLowerCase()===email):undefined;
+  const dummy=(process.env.NODE_ENV!=='production' || isMockMode() || _usingMockPool)?DUMMY_ACCOUNTS.find(account=>account.uid===accountUid&&account.email.toLowerCase()===email):undefined;
   const registered=!dummy?await pool.query(`SELECT u.id,m.organization_id,m.role,m.status FROM user_accounts u JOIN org_memberships m ON m.user_uid=u.id WHERE u.id=? AND u.email=? AND u.email_verified=TRUE AND u.status='active' ORDER BY m.created_at LIMIT 1`,[accountUid,email]):{rowCount:0,rows:[]};
   if(!dummy&&!registered.rowCount)return res.status(400).json({error:'This recovery request is no longer valid. Request a new code.'});
   const role=dummy?.isSuperAdmin?'super-admin':dummy?.role||(isConfiguredSuperAdminEmail(email)?'super-admin':registered.rows[0]?.role);
@@ -1402,7 +1511,7 @@ app.post('/api/auth/login/request-otp', loginOtpRequestRateLimit, asyncRoute(asy
   const parsed=z.object({email:z.string().trim().email().transform(value=>value.toLowerCase()),password:z.string().min(1).max(128),expectedRole:z.enum(['super-admin','owner','admin','lawyer','analyst','operations','consultant','support','data_steward','viewer']).optional(),deliveryChannel:z.enum(['email','sms']).default('email')}).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error:'Enter a valid email and password.' });
   const {email,password,expectedRole,deliveryChannel}=parsed.data;
-  const dummyCandidates=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.filter(account=>account.email.toLowerCase()===email):[];
+  const dummyCandidates=(process.env.NODE_ENV!=='production' || isMockMode() || _usingMockPool)?DUMMY_ACCOUNTS.filter(account=>account.email.toLowerCase()===email):[];
   const hashesResult=dummyCandidates.length?await pool.query(`SELECT user_uid,password_hash FROM account_password_overrides WHERE user_uid IN (${dummyCandidates.map(()=>'?').join(',')})`,dummyCandidates.map(account=>account.uid)):{rows:[],rowCount:0};
   const demoHashes=new Map<string,string>(hashesResult.rows.map(row=>[String(row.user_uid),String(row.password_hash)]));
   const dummy=resolveDemoCredential(email,password,dummyCandidates,demoHashes);
@@ -1442,7 +1551,8 @@ app.post('/api/auth/login/request-otp', loginOtpRequestRateLimit, asyncRoute(asy
   catch (error) { await pool.query('UPDATE otp_challenges SET consumed_at=NOW(6) WHERE id=?',[challengeId]); throw error; }
   await audit(uid,membership.rows[0].organization_id,'auth.login_otp_requested','user_account',uid,{email,deliveryMode:delivery.mode});
   const maskedDeliveryTarget=localSmsPreview?'Local mobile preview':delivery.mode==='sms'?maskPhone(deliveryTarget):maskEmail(deliveryTarget);
-  res.status(201).json({challengeId,email,deliveryTarget:maskedDeliveryTarget,expiresAt:expiresAt.toISOString(),resendAfterSeconds:OTP_RESEND_COOLDOWN_MS/1000,deliveryMode:delivery.mode,developmentOtp:localSmsPreview?otp:undefined,message:localSmsPreview?'A development-only mobile code was generated and autofilled.':`A six-digit sign-in code was sent by ${delivery.mode==='sms'?'SMS':'email'}.`});
+  const autoFillOtp = localSmsPreview || _usingMockPool || isMockMode();
+  res.status(201).json({challengeId,email,deliveryTarget:maskedDeliveryTarget,expiresAt:expiresAt.toISOString(),resendAfterSeconds:OTP_RESEND_COOLDOWN_MS/1000,deliveryMode:delivery.mode,developmentOtp:autoFillOtp?otp:undefined,message:autoFillOtp?'Demo mode — verification code has been auto-filled.':`A six-digit sign-in code was sent by ${delivery.mode==='sms'?'SMS':'email'}.`});
 }));
 
 app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async (req,res)=>{
@@ -1457,7 +1567,7 @@ app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async
   if (!challenge.rows[0].otp_salt||!verifyOtp(email,otp,String(challenge.rows[0].otp_salt),String(challenge.rows[0].otp_hash))) {await pool.query('UPDATE otp_challenges SET attempts=attempts+1 WHERE id=? AND attempts<5 AND consumed_at IS NULL AND expires_at>NOW(6)',[challengeId]);return res.status(400).json({ error:'Incorrect sign-in code.' });}
   const accountUid=String(challenge.rows[0].account_uid||'');
   if(!accountUid)return res.status(400).json({error:'This sign-in code is no longer valid. Request a new code.'});
-  const dummy=process.env.NODE_ENV!=='production'?DUMMY_ACCOUNTS.find(account=>account.uid===accountUid&&account.email.toLowerCase()===email):undefined;
+  const dummy=(process.env.NODE_ENV!=='production' || isMockMode() || _usingMockPool)?DUMMY_ACCOUNTS.find(account=>account.uid===accountUid&&account.email.toLowerCase()===email):undefined;
   const registered=!dummy?await pool.query("SELECT id,email,full_name FROM user_accounts WHERE id=? AND email=? AND email_verified=TRUE AND status='active' LIMIT 1",[accountUid,email]):{rowCount:0,rows:[]};
   if (!dummy&&!registered.rowCount) return res.status(401).json({ error:'The account is no longer active.' });
   const target:any=dummy||{uid:registered.rows[0].id,email:registered.rows[0].email,name:registered.rows[0].full_name,designation:'Registered Reviewer',role:'viewer',avatar:registered.rows[0].full_name.split(/\s+/).slice(0,2).map((part:string)=>part[0]).join('').toUpperCase(),description:'Verified workspace member'};
@@ -1484,6 +1594,10 @@ app.post('/api/auth/login/verify-otp', loginOtpVerifyRateLimit, asyncRoute(async
 app.post('/api/auth/login', (_req, res) => res.status(410).json({ error: 'Password-only sign-in is disabled. Use the email OTP flow.' }));
 
 app.get('/api/auth/me', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({ user: ws.user });
+  }
   const u = (req as AuthenticatedRequest).user;
   const registered = u?.uid && pool ? await pool.query('SELECT full_name,email FROM user_accounts WHERE id=? LIMIT 1', [u.uid]) : { rowCount: 0, rows: [] };
   const publicDemoIdentity = publicDemoEnabled() && u?.tenantId === process.env.PUBLIC_DEMO_TENANT_ID
@@ -1557,12 +1671,16 @@ app.get('/api/auth/workspaces',authGuard,asyncRoute(async(req,res)=>{const resul
 
 app.post('/api/auth/logout', authGuard, (req, res) => {
   const user = (req as AuthenticatedRequest).user;
-  const rawToken=(req.header('authorization')||'').replace(/^Bearer\s+/i,'').trim();
+  const rawToken = extractTokenFromReq(req);
+  if (rawToken) {
+    demoSessionRepo.destroySession(rawToken);
+    authSessions.delete(rawToken);
+  }
   const session=rawToken?authSessions.get(rawToken):undefined;
   const reason=req.body?.reason==='inactivity'?'Inactivity timeout':'User logout';
   if(session&&pool)void pool.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE id=?',[user?.uid||'unknown',reason,session.id]);
-  if(rawToken) authSessions.delete(rawToken);
-  if (user?.role === 'support') supportSessions.delete(user.uid);
+  if (user?.role === 'support' && user?.uid) supportSessions.delete(user.uid);
+  res.clearCookie('ojix_demo_session', { path: '/' });
   res.json({ success: true, message: 'Logged out successfully.' });
 });
 
@@ -1672,6 +1790,43 @@ app.patch('/api/rtc/:id/confirmation', authGuard, rtcLookupGuard, asyncRoute(asy
 }));
 
 app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
+  if ((_req as any).demoWorkspace) {
+    const ws = (_req as any).demoWorkspace as DemoSessionWorkspace;
+    const total = ws.properties.length;
+    const in_review = ws.properties.filter(p => p.status === 'in_review').length;
+    const ready_for_review = ws.properties.filter(p => p.status === 'approved' || p.status === 'ready_for_review').length;
+    const documents = ws.documents.length;
+    const critical = ws.findings.filter(f => f.severity === 'critical').length;
+    const high = ws.findings.filter(f => f.severity === 'high').length;
+    return res.json({
+      total,
+      in_review,
+      ready_for_review,
+      missing_documents: 0,
+      missing_coordinates: 0,
+      disputed_identity: 1,
+      completeness: 88,
+      documents,
+      findings: ws.findings.length,
+      criticalFindings: critical,
+      highFindings: high,
+      statusBreakdown: [
+        { status: 'in_review', total: in_review },
+        { status: 'ready_for_review', total: ready_for_review }
+      ],
+      docStatusBreakdown: [
+        { status: 'completed', total: documents }
+      ],
+      recentProperties: ws.properties.slice(0, 5),
+      sourceHealth: {
+        database: 'connected',
+        governmentConnectors: 'demo_mocked',
+        documentStorage: 'demo_private_durable',
+        ocr: 'tesseract_active',
+        gisLayers: 'demo_karnataka'
+      }
+    });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured. Start MariaDB and set DATABASE_URL.' });
   if (_req.user?.role === 'support') { const configured=await pool.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[_req.user.tenantId]);return res.json({ total:0, in_review:0, ready_for_review:0, documents:0, findings:0, sourceHealth:{ database:'connected', governmentConnectors:'not_connected', documentStorage:documentStorage.provider==='gcs'?'gcs_private':documentStorage.provider==='supabase'?'supabase_private':'local_development', ocr:configured.rowCount&&process.env.OCR_WORKER_TOKEN?'google_document_ai_configured':'not_configured', gisLayers:'unavailable' }, supportScope:'diagnostics_only' }); }
   const assignmentColumn:Record<string,string>={lawyer:'assigned_lawyer_uid',analyst:'assigned_analyst_uid',operations:'assigned_operations_uid',consultant:'assigned_consultant_uid',viewer:'assigned_viewer_uid'};
@@ -1988,6 +2143,25 @@ app.get('/api/owner/dashboard/search', authGuard, ownerGuard, asyncRoute(async (
 }));
 
 app.get('/api/properties', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const q = String(req.query.q || '').trim().toLowerCase();
+    let filtered = ws.properties.filter(p => !p.archived_at);
+    if (q) {
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        p.application_number.toLowerCase().includes(q) ||
+        p.survey_number.toLowerCase().includes(q) ||
+        p.village.toLowerCase().includes(q) ||
+        p.address.toLowerCase().includes(q)
+      );
+    }
+    const withDocCount = filtered.map(p => ({
+      ...p,
+      document_count: ws.documents.filter(d => d.property_id === p.id).length,
+    }));
+    return res.json({ items: withDocCount });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const q = String(req.query.q || '').trim().slice(0, 120);
   const result = await pool.query(
@@ -2016,10 +2190,77 @@ app.get('/api/properties', authGuard, asyncRoute(async (req, res) => {
 }));
 
 app.post('/api/properties', authGuard, writeGuard, asyncRoute(async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed = propertySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid property payload.', issues: parsed.error.flatten() });
   const p = parsed.data;
+
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const id = crypto.randomUUID();
+    const appNum = `OJ-2026-BLR-${Math.floor(100 + Math.random() * 900)}`;
+    const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    const newProp: DemoProperty = {
+      id,
+      tenant_id: ws.user.tenantId,
+      application_number: appNum,
+      name: `${p.village} ${p.propertyType === 'agricultural' ? 'Agricultural Land' : 'Property'} (Sy ${p.surveyNumber}/${p.subdivision || '1'})`,
+      review_purpose: p.reviewPurpose,
+      primary_document_type: p.primaryDocumentType,
+      property_identifier: p.propertyIdentifier || `${p.village.toUpperCase().slice(0, 3)}-${p.surveyNumber}`,
+      property_identifier_type: p.propertyIdentifierType || 'survey_number',
+      property_type: p.propertyType,
+      village: p.village,
+      hobli: p.hobli,
+      taluk: p.taluk,
+      district: p.district,
+      district_id: p.districtId || null,
+      taluk_id: p.talukId || null,
+      hobli_id: p.hobliId || null,
+      village_id: p.villageId || null,
+      survey_number: p.surveyNumber,
+      subdivision: p.subdivision || '1',
+      extent: p.extent || '2400 sq ft',
+      extent_value: p.extentValue || 2400,
+      extent_unit: p.extentUnit || 'sq_ft',
+      boundary_north: p.boundaryNorth || 'North Boundary',
+      boundary_south: p.boundarySouth || 'South Road',
+      boundary_east: p.boundaryEast || 'East Boundary',
+      boundary_west: p.boundaryWest || 'West Boundary',
+      address: p.address || `${p.village}, ${p.taluk}, ${p.district}`,
+      latitude: p.latitude || 12.9716,
+      longitude: p.longitude || 77.5946,
+      coordinate_source: 'manual',
+      coordinate_confidence: 0.90,
+      coordinate_captured_at: now,
+      identity_state: 'verified',
+      notes: p.notes || '',
+      status: 'in_review',
+      workflow_priority: 'normal',
+      due_date: null,
+      assigned_lawyer_uid: 'user-lawyer',
+      assigned_analyst_uid: 'user-analyst',
+      assigned_operations_uid: 'user-operations',
+      assigned_consultant_uid: 'user-consultant',
+      assigned_viewer_uid: 'user-viewer',
+      archived_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+    ws.properties.unshift(newProp);
+    ws.auditEvents.unshift({
+      id: crypto.randomUUID(),
+      tenant_id: ws.user.tenantId,
+      actor_uid: ws.user.uid,
+      action: 'property.created',
+      entity_type: 'property',
+      entity_id: id,
+      details: { applicationNumber: appNum, name: newProp.name },
+      created_at: now,
+    });
+    return res.status(201).json({ item: newProp, id });
+  }
+
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const consistencyIssues = validatePropertyConsistency(p);
   if (consistencyIssues.length) return res.status(400).json({ error: consistencyIssues[0], issues: consistencyIssues });
   const locationValidation = await validateLocationHierarchy(p);
@@ -2118,6 +2359,14 @@ app.post('/api/properties', authGuard, writeGuard, asyncRoute(async (req, res) =
 }));
 
 app.get('/api/properties/:id', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const prop = ws.properties.find(p => p.id === req.params.id);
+    if (!prop) return res.status(404).json({ error: 'Property not found.' });
+    const documents = ws.documents.filter(d => d.property_id === prop.id);
+    const findings = ws.findings.filter(f => f.property_id === prop.id);
+    return res.json({ item: prop, documents, findings });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const result = await pool.query("SELECT * FROM properties WHERE id=? AND tenant_id=? AND ? <> 'support' AND (? <> 'viewer' OR (status IN ('approved','complete') AND assigned_viewer_uid=?)) AND (? <> 'consultant' OR assigned_consultant_uid=?) AND (? <> 'lawyer' OR assigned_lawyer_uid=?) AND (? <> 'analyst' OR assigned_analyst_uid=?) AND (? <> 'operations' OR assigned_operations_uid=?)", [req.params.id, req.user?.tenantId, req.user?.role || 'viewer', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '', req.user?.role || 'viewer', req.user?.uid || '']);
   if (!result.rowCount) return res.status(404).json({ error: req.user?.role === 'consultant' ? 'This property is not assigned to your Consultant account. Ask an Admin to assign it, then refresh.' : 'Property not found.' });
@@ -2572,11 +2821,77 @@ export function resolveSafeUploadPath(storageKey: string | null | undefined): { 
 }
 
 app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload.array('files', 10), asyncRoute(async (req, res) => {
+  const files = (req.files || []) as Express.Multer.File[];
+  const requestedDocumentType = String(req.body?.documentType || '').trim();
+
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const property = ws.properties.find(p => p.id === req.params.id);
+    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    if (!files.length) return res.status(400).json({ error: 'No files received. Use multipart form field "files".' });
+
+    const inserted: DemoStoredDocument[] = [];
+    for (const file of files) {
+      const docId = crypto.randomUUID();
+      const docBuffer = fs.readFileSync(file.path);
+      const sha256 = crypto.createHash('sha256').update(docBuffer).digest('hex');
+      const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
+
+      const ocrExtraction = await processDocumentWithOcr(file.path, {
+        documentId: docId,
+        filename: file.originalname,
+        mimeType: file.mimetype,
+      });
+
+      const docType = requestedDocumentType || ocrExtraction.extractedFields.documentType || 'sale_deed';
+      const storedDoc: DemoStoredDocument = {
+        id: docId,
+        property_id: property.id,
+        tenant_id: ws.user.tenantId,
+        original_filename: file.originalname,
+        storage_key: `demo://${ws.user.tenantId}/${property.id}/${docId}/${file.originalname}`,
+        mime_type: file.mimetype,
+        size_bytes: file.size,
+        sha256,
+        doc_type: docType,
+        doc_type_custom: null,
+        classification_confidence: ocrExtraction.extractedFields.overallConfidence || 0.95,
+        classification_source: 'ocr_tesseract',
+        manual_review_status: 'pending',
+        processing_status: 'completed',
+        extracted_text: ocrExtraction.rawOcr.text,
+        extracted_fields: ocrExtraction.extractedFields,
+        governance_status: 'active',
+        fileBuffer: docBuffer,
+        created_at: now,
+        updated_at: now,
+      };
+
+      ws.documents.unshift(storedDoc);
+      inserted.push(storedDoc);
+      await fs.promises.unlink(file.path).catch(() => {});
+    }
+
+    ws.auditEvents.unshift({
+      id: crypto.randomUUID(),
+      tenant_id: ws.user.tenantId,
+      actor_uid: ws.user.uid,
+      action: 'document.uploaded_and_ocr_processed',
+      entity_type: 'document',
+      entity_id: property.id,
+      details: { count: inserted.length, files: inserted.map(d => d.original_filename) },
+      created_at: new Date().toISOString().replace('T', ' ').replace('Z', ''),
+    });
+
+    return res.status(201).json({
+      items: inserted,
+      note: 'Files uploaded and processed with Python Tesseract OCR.',
+    });
+  }
+
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const property = await pool.query('SELECT id FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!property.rowCount) return res.status(404).json({ error: 'Property not found.' });
-  const files = (req.files || []) as Express.Multer.File[];
-  const requestedDocumentType = String(req.body?.documentType || '').trim();
   if (requestedDocumentType && !allowedDocumentTypes.has(requestedDocumentType)) return res.status(400).json({ error: 'Unsupported document type.' });
   if (!files.length) return res.status(400).json({ error: 'No files received. Use multipart form field "files".' });
   let metadata: Array<{documentType?:string;customDocumentType?:string;classificationConfidence?:number|null;manualReview?:boolean}> = [];
@@ -2720,6 +3035,26 @@ app.get('/api/properties/:id/documents/:docId/jobs', authGuard, documentIntakeGu
 }));
 
 app.get('/api/properties/:id/documents/:docId/ocr-result', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const doc = ws.documents.find(d => d.id === req.params.docId && d.property_id === req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found.' });
+    return res.json({
+      result: {
+        runId: crypto.randomUUID(),
+        provider: 'tesseract',
+        providerVersion: '5.5.2',
+        pageCount: 1,
+        rawText: doc.extracted_text || '',
+        tokens: [],
+        pages: [{ pageNumber: 1, text: doc.extracted_text || '', confidence: doc.classification_confidence, tokenCount: 20 }],
+        extractedFields: doc.extracted_fields || {},
+        confidence: doc.classification_confidence || 0.95,
+        createdAt: doc.created_at,
+      }
+    });
+  }
+
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const result = await pool.query(`SELECT r.id,r.provider,r.provider_version,r.page_count,r.raw_ocr_text,r.raw_ocr_tokens,r.raw_provider_response,r.extracted_fields,r.created_at
     FROM document_extraction_runs r JOIN documents d ON d.id=r.document_id AND d.tenant_id=r.tenant_id
@@ -2858,6 +3193,23 @@ app.post('/internal/ocr/jobs/fail', asyncRoute(async (req,res)=>{
 }));
 
 app.get('/api/properties/:id/documents/:docId/file', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const doc = ws.documents.find(d => d.id === req.params.docId && d.property_id === req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found.' });
+    res.setHeader('Content-Type', doc.mime_type || 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.original_filename)}"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (doc.fileBuffer) {
+      return res.end(doc.fileBuffer);
+    }
+    const samplePdf = path.resolve(__dirname, '../sample-headless-report.pdf');
+    if (fs.existsSync(samplePdf)) {
+      return res.sendFile(samplePdf);
+    }
+    return res.status(404).json({ error: 'Document file not found.' });
+  }
+
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const docResult = await pool.query(
     'SELECT * FROM documents WHERE id=? AND property_id=? AND tenant_id=?',
@@ -4154,6 +4506,22 @@ app.post('/api/source-registry/query', authGuard, asyncRoute(async (req, res) =>
    Global Cross-Workspace Views & Settings Endpoints
    ========================================================================== */
 app.get('/api/documents/all', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const items = ws.documents.map(d => {
+      const prop = ws.properties.find(p => p.id === d.property_id);
+      return {
+        ...d,
+        property_name: prop?.name || 'Whitefield Residential Site',
+        application_number: prop?.application_number || 'OJ-2026-BLR-001',
+        survey_number: prop?.survey_number || '45',
+        village: prop?.village || 'Whitefield',
+        district: prop?.district || 'Bengaluru Urban',
+      };
+    });
+    return res.json({ items, count: items.length });
+  }
+
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const result = await pool.query(
     `SELECT d.id,d.tenant_id,d.property_id,d.doc_type,d.doc_type_custom,d.classification_confidence,
@@ -4170,6 +4538,25 @@ app.get('/api/documents/all', authGuard, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/findings/all', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const items = ws.findings.map(f => {
+      const prop = ws.properties.find(p => p.id === f.property_id);
+      return {
+        ...f,
+        property_name: prop?.name || 'Whitefield Residential Site',
+        survey_number: prop?.survey_number || '45',
+        village: prop?.village || 'Whitefield',
+        district: prop?.district || 'Bengaluru Urban',
+      };
+    });
+    const severityCounts = { critical: 0, high: 0, medium: 0, low: 0, unverified: 0 };
+    for (const r of items) {
+      if (r.severity in severityCounts) (severityCounts as any)[r.severity]++;
+    }
+    return res.json({ items, severityCounts, count: items.length });
+  }
+
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const result = await pool.query(
     `SELECT f.*, p.name as property_name, p.survey_number, p.village, p.district

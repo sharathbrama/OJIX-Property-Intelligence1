@@ -673,6 +673,33 @@ export default function App() {
     finally{setAuthChecking(false);}
   };
 
+  const switchDemoRole = async (targetRole: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await authFetch(`${API}/api/auth/demo/switch-role`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: targetRole }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to switch role.");
+      localStorage.setItem("ojix_user", JSON.stringify(data.user));
+      setCurrentUser(data.user);
+      const isPlatform = Boolean(data.user.isSuperAdmin && data.user.role === "super_admin");
+      setPortalMode(isPlatform ? "super-admin" : "workspace");
+      localStorage.setItem("ojix_portal_mode", isPlatform ? "super-admin" : "workspace");
+      const nextPage: AppPage = isPlatform ? "super-admin" : "overview";
+      setPage(nextPage);
+      updateBrowserUrl(nextPage, undefined, true);
+      setNotice(`Switched role to ${data.user.name} (${data.user.designation}).`);
+    } catch (err: any) {
+      setError(err.message || "Could not switch demo role.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const switchRole = async (targetUid: string) => {
     if (!import.meta.env.DEV) return;
     setBusy(true);
@@ -1716,7 +1743,35 @@ export default function App() {
           </div>
           {currentUser.isDemo && <div className="demo-mode-banner" role="region" aria-label="Demo Mode session controls">
             <span className="demo-mode-badge">DEMO MODE</span>
-            <span className="demo-mode-owner">Restricted demo access · read only</span>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", margin: "0 8px" }}>
+              <span style={{ fontSize: "11px", fontWeight: 700, color: "#94a3b8" }}>Role:</span>
+              <select
+                aria-label="Switch demo role"
+                value={currentUser.role}
+                onChange={(e) => void switchDemoRole(e.target.value)}
+                style={{
+                  background: "#0f172a",
+                  color: "#f8fafc",
+                  border: "1px solid #3b82f6",
+                  borderRadius: "4px",
+                  padding: "3px 8px",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                <option value="super_admin">1. Super Admin</option>
+                <option value="owner">2. Owner (Managing Partner)</option>
+                <option value="admin">3. Organization Admin</option>
+                <option value="lawyer">4. Lawyer (Legal Reviewer)</option>
+                <option value="analyst">5. Evidence Analyst</option>
+                <option value="operations">6. Document Operations</option>
+                <option value="consultant">7. Property Consultant</option>
+                <option value="support">8. Technical Support</option>
+                <option value="data_steward">9. Data Steward</option>
+                <option value="viewer">10. Client Reviewer (Viewer)</option>
+              </select>
+            </label>
             <span className="demo-mode-expiry">Expires in <strong aria-live="off">{demoTimeRemaining}</strong></span>
             <button type="button" onClick={() => handleLogout("manual")}>Exit Demo</button>
           </div>}
