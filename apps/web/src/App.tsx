@@ -556,8 +556,14 @@ export default function App() {
     }
     let active = true;
     setAuthChecking(true);
+    const timeoutId = window.setTimeout(() => {
+      if (active) {
+        setAuthChecking(false);
+      }
+    }, 4000);
     authFetch(`${API}/api/auth/me`)
       .then(async (response) => {
+        window.clearTimeout(timeoutId);
         const data = await response.json().catch(() => ({}));
         if (!response.ok)
           throw new Error(data.error || "Your session is no longer valid.");
@@ -567,6 +573,7 @@ export default function App() {
         if(data.user.tenantId){localStorage.setItem('ojix_workspace_id',data.user.tenantId);setActiveWorkspaceId(data.user.tenantId);}
       })
       .catch((sessionError) => {
+        window.clearTimeout(timeoutId);
         if (!active) return;
         if (String(sessionError?.message || "").toLowerCase().includes("inactiv")) {
           const message = "Your session has expired due to inactivity. Please log in again.";
@@ -580,10 +587,12 @@ export default function App() {
         setSelected(null);
       })
       .finally(() => {
+        window.clearTimeout(timeoutId);
         if (active) setAuthChecking(false);
       });
     return () => {
       active = false;
+      window.clearTimeout(timeoutId);
     };
   }, [authToken]);
 
@@ -1303,9 +1312,56 @@ export default function App() {
   }} />;
   if (authChecking) {
     return (
-      <div className="login-loading">
-        <LoaderCircle size={24} className="spin" />
-        <span>Validating secure session…</span>
+      <div style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: "#0f172a",
+        color: "#f8fafc",
+        gap: "18px",
+        fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif"
+      }}>
+        <div style={{
+          width: "48px",
+          height: "48px",
+          borderRadius: "12px",
+          background: "linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)",
+          color: "#fff",
+          display: "grid",
+          placeItems: "center",
+          fontWeight: 900,
+          fontSize: "22px",
+          boxShadow: "0 10px 25px -5px rgba(37, 99, 235, 0.4)"
+        }}>
+          O
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <LoaderCircle size={22} className="spin" style={{ color: "#38bdf8" }} />
+          <span style={{ fontSize: "14px", fontWeight: 600, color: "#cbd5e1" }}>Validating secure session…</span>
+        </div>
+        <button
+          onClick={() => {
+            localStorage.removeItem("ojix_auth_token");
+            localStorage.removeItem("ojix_user");
+            setAuthToken(null);
+            setCurrentUser(null);
+            setAuthChecking(false);
+          }}
+          style={{
+            marginTop: "8px",
+            background: "transparent",
+            border: "1px solid #334155",
+            borderRadius: "6px",
+            color: "#94a3b8",
+            padding: "6px 14px",
+            fontSize: "12px",
+            cursor: "pointer"
+          }}
+        >
+          Cancel &amp; Sign In
+        </button>
       </div>
     );
   }
