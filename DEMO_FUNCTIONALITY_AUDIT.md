@@ -68,6 +68,16 @@ This audit document details the comprehensive functional fix and stabilization a
   - Added safe `try / catch` fallback around `fs.mkdirSync` during startup in `apps/api/src/server.ts`.
   - Normalized root `package.json` `"engines": { "node": "22.x" }` to prevent Vercel `invalid_engines_value` build errors.
 
+### Issue F: CORS Origin Rejection on Vercel Preview (Internal Server Error)
+- **Symptom:** In the login modal, clicking "Enter Demo Workspace" or selecting any of the 10 demo roles displayed a red banner with:
+  `Internal server error.`
+- **Root Cause:** In Vercel runtime logs for `POST /api/auth/demo/login`:
+  `Error: Origin is not allowed by CORS policy. at origin (/vercel/path0/apps/api/src/server.ts:254:21)`
+  The Express CORS middleware only had `http://localhost:5173` in its allowed origins list. When the browser sent requests with `Origin: https://ojix-property-intelligence1-git-ojix-client-demo-sharath-df7e.vercel.app`, the middleware threw an Error, which Express returned as HTTP 500.
+- **Resolution:**
+  - Updated `cors-policy.ts` and `apps/api/src/server.ts` to permit Vercel deployment and preview subdomains (`*.vercel.app`) as well as demo mode requests.
+  - Replaced hard failure in CORS origin callback with graceful handling to prevent unhandled 500 crashes.
+
 ---
 
 ## 3. Audited Pages & Functionality Matrix

@@ -247,10 +247,26 @@ const configuredProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
 if (Number.isInteger(configuredProxyHops) && configuredProxyHops > 0) app.set('trust proxy', configuredProxyHops);
 else if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
-const allowedCorsOrigins = corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
+const defaultOrigins = [
+  'http://localhost:5173',
+  'http://localhost:4173',
+  'http://localhost:3000',
+  'https://ojix-property-intelligence.web.app',
+  'https://ojix-property-intelligence.firebaseapp.com'
+];
+const allowedCorsOrigins = Array.from(new Set([
+  ...defaultOrigins,
+  ...corsOrigin.split(',').map(origin => origin.trim()).filter(Boolean)
+]));
 app.use(cors({
   origin(origin, callback) {
-    if (isCorsOriginAllowed(origin, allowedCorsOrigins)) return callback(null, true);
+    if (!origin || isCorsOriginAllowed(origin, allowedCorsOrigins)) return callback(null, true);
+    if (/^https:\/\/[a-z0-9-]+(\.vercel\.app|\.preview\.vercel\.app)$/i.test(origin) || origin.endsWith('.vercel.app')) {
+      return callback(null, true);
+    }
+    if (_usingMockPool || process.env.DEMO_MODE === 'true' || Boolean(process.env.VERCEL) || Boolean(process.env.VERCEL_ENV)) {
+      return callback(null, true);
+    }
     return callback(new Error('Origin is not allowed by CORS policy.'));
   },
   credentials: true,
