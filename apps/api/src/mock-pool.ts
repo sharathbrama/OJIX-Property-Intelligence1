@@ -235,6 +235,25 @@ function handleQuery(sql: string, params: any[] = []): DbResult {
 
   // ─── Properties ───────────────────────────────────────────────────────
   if (normalizedSql.includes('from properties') && normalizedSql.includes('select')) {
+    if (normalizedSql.includes('group by status')) {
+      const tenantId = params[0] || DEFAULT_ORG_ID;
+      const props = store.findProperties(tenantId);
+      const counts: Record<string, number> = {};
+      props.forEach(p => { counts[p.status] = (counts[p.status] || 0) + 1; });
+      const rows = Object.entries(counts).map(([label, value]) => ({ label, value }));
+      if (!rows.length) rows.push({ label: 'in_review', value: 1 });
+      return { rows, rowCount: rows.length };
+    }
+    if (normalizedSql.includes('month') && normalizedSql.includes('group by')) {
+      return {
+        rows: [
+          { month: '2026-09', created: 2, completed: 1 },
+          { month: '2026-10', created: 3, completed: 2 },
+          { month: '2026-11', created: 4, completed: 2 },
+        ],
+        rowCount: 3
+      };
+    }
     if (normalizedSql.includes('where id=') && normalizedSql.includes('tenant_id=')) {
       const prop = store.findPropertyById(params[0], params[1]);
       if (prop) {
@@ -400,6 +419,15 @@ function handleQuery(sql: string, params: any[] = []): DbResult {
 
   // ─── Risk findings ────────────────────────────────────────────────────
   if (normalizedSql.includes('from risk_findings') && normalizedSql.includes('select')) {
+    if (normalizedSql.includes('group by') && (normalizedSql.includes('severity') || normalizedSql.includes('f.severity'))) {
+      const tenantId = params[0] || DEFAULT_ORG_ID;
+      const findings = store.findings.filter(f => f.tenant_id === tenantId);
+      const counts: Record<string, number> = {};
+      findings.forEach(f => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
+      const rows = Object.entries(counts).map(([label, value]) => ({ label, value }));
+      if (!rows.length) rows.push({ label: 'medium', value: 1 });
+      return { rows, rowCount: rows.length };
+    }
     if (normalizedSql.includes('count(*)')) {
       const count = store.findings.length;
       return { rows: [{ total: count, critical: 1, high: 2 }], rowCount: 1 };
@@ -518,9 +546,9 @@ function handleQuery(sql: string, params: any[] = []): DbResult {
 
   // ─── Workbench tasks ──────────────────────────────────────────────────
   if (normalizedSql.includes('from workbench_tasks')) {
-    if (normalizedSql.includes('count(*)')) {
+    if (normalizedSql.includes('count(*)') || normalizedSql.includes('sum(')) {
       const count = store.tasks.length;
-      return { rows: [{ total: count, my_count: count, pending: 1, in_progress: 1, under_review: 0, overdue: 0, completed: 1 }], rowCount: 1 };
+      return { rows: [{ total: count, my_count: count, pending: 2, in_progress: 1, under_review: 0, overdue: 0, completed: 3 }], rowCount: 1 };
     }
     const tenantId = params[0] || DEFAULT_ORG_ID;
     const tasks = store.tasks.filter(t => t.tenant_id === tenantId);

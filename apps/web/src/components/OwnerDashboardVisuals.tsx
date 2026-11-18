@@ -4,22 +4,36 @@ import { AlertTriangle, BarChart3, CalendarDays, Expand, MapPin, Minimize, PieCh
 
 const colors=['#274f88','#e87732','#2b956f','#8a6fc1','#d24f4f','#6a7b91'];
 const number=(value:unknown)=>Number(value||0);
-const label=(value:string)=>value.replace(/_/g,' ').replace(/\b\w/g,letter=>letter.toUpperCase());
+const label=(value:unknown)=>String(value||'').replace(/_/g,' ').replace(/\b\w/g,letter=>letter.toUpperCase());
 
 function Donut({data,centerLabel}:{data:any[];centerLabel:string}){
-  const total=data.reduce((sum,item)=>sum+number(item.value),0);let offset=0;
-  return <div className="owner-chart-donut"><svg viewBox="0 0 120 120" role="img" aria-label={`${centerLabel}: ${total}`}><circle cx="60" cy="60" r="43" fill="none" stroke="#edf1f5" strokeWidth="14"/>{data.map((item,index)=>{const value=number(item.value);const length=total?value/total*270.18:0;const dashOffset=-offset;offset+=length;return <circle key={item.label} cx="60" cy="60" r="43" fill="none" stroke={colors[index%colors.length]} strokeWidth="14" strokeDasharray={`${length} ${270.18-length}`} strokeDashoffset={dashOffset} transform="rotate(-90 60 60)"><title>{label(item.label)}: {value}</title></circle>})}<text x="60" y="57" textAnchor="middle" className="owner-chart-total">{total}</text><text x="60" y="72" textAnchor="middle" className="owner-chart-caption">{centerLabel}</text></svg><div className="owner-chart-legend">{data.map((item,index)=><span key={item.label}><i style={{background:colors[index%colors.length]}}/>{label(item.label)} <b>{number(item.value)}</b></span>)}</div></div>;
+  const safeData = (Array.isArray(data) ? data : []).map(item => ({
+    label: item?.label || item?.status || item?.severity || 'Unspecified',
+    value: number(item?.value ?? item?.count ?? 1),
+  }));
+  const total=safeData.reduce((sum,item)=>sum+number(item.value),0);let offset=0;
+  return <div className="owner-chart-donut"><svg viewBox="0 0 120 120" role="img" aria-label={`${centerLabel}: ${total}`}><circle cx="60" cy="60" r="43" fill="none" stroke="#edf1f5" strokeWidth="14"/>{safeData.map((item,index)=>{const value=number(item.value);const length=total?value/total*270.18:0;const dashOffset=-offset;offset+=length;return <circle key={`${item.label}-${index}`} cx="60" cy="60" r="43" fill="none" stroke={colors[index%colors.length]} strokeWidth="14" strokeDasharray={`${length} ${270.18-length}`} strokeDashoffset={dashOffset} transform="rotate(-90 60 60)"><title>{label(item.label)}: {value}</title></circle>})}<text x="60" y="57" textAnchor="middle" className="owner-chart-total">{total}</text><text x="60" y="72" textAnchor="middle" className="owner-chart-caption">{centerLabel}</text></svg><div className="owner-chart-legend">{safeData.map((item,index)=><span key={`${item.label}-${index}`}><i style={{background:colors[index%colors.length]}}/>{label(item.label)} <b>{number(item.value)}</b></span>)}</div></div>;
 }
 
 function Trend({data}:{data:any[]}){
-  const max=Math.max(1,...data.flatMap(item=>[number(item.created),number(item.completed)]));
-  const points=(key:'created'|'completed')=>data.map((item,index)=>`${20+(index*Math.max(1,260/Math.max(data.length-1,1)))},${120-number(item[key])/max*90}`).join(' ');
-  return <div className="owner-line-chart"><svg viewBox="0 0 300 145" role="img" aria-label="Monthly matter trends"><line x1="20" y1="120" x2="285" y2="120" stroke="#dfe5ed"/><polyline points={points('created')} fill="none" stroke="#274f88" strokeWidth="3"/><polyline points={points('completed')} fill="none" stroke="#2b956f" strokeWidth="3"/>{data.map((item,index)=>{const x=20+(index*Math.max(1,260/Math.max(data.length-1,1)));return <g key={item.month}><circle cx={x} cy={120-number(item.created)/max*90} r="4" fill="#274f88"><title>{item.month}: {item.created} created</title></circle><circle cx={x} cy={120-number(item.completed)/max*90} r="4" fill="#2b956f"><title>{item.month}: {item.completed} completed</title></circle><text x={x} y="138" textAnchor="middle">{String(item.month).slice(5)}</text></g>})}</svg><div className="owner-chart-legend"><span><i style={{background:'#274f88'}}/>Created</span><span><i style={{background:'#2b956f'}}/>Completed</span></div></div>;
+  const safeData = (Array.isArray(data) ? data : []).map((item, idx) => ({
+    month: item?.month ? String(item.month) : `M${idx + 1}`,
+    created: number(item?.created),
+    completed: number(item?.completed),
+  }));
+  const max=Math.max(1,...safeData.flatMap(item=>[number(item.created),number(item.completed)]));
+  const points=(key:'created'|'completed')=>safeData.map((item,index)=>`${20+(index*Math.max(1,260/Math.max(safeData.length-1,1)))},${120-number(item[key])/max*90}`).join(' ');
+  return <div className="owner-line-chart"><svg viewBox="0 0 300 145" role="img" aria-label="Monthly matter trends"><line x1="20" y1="120" x2="285" y2="120" stroke="#dfe5ed"/><polyline points={points('created')} fill="none" stroke="#274f88" strokeWidth="3"/><polyline points={points('completed')} fill="none" stroke="#2b956f" strokeWidth="3"/>{safeData.map((item,index)=>{const x=20+(index*Math.max(1,260/Math.max(safeData.length-1,1)));return <g key={`${item.month}-${index}`}><circle cx={x} cy={120-number(item.created)/max*90} r="4" fill="#274f88"><title>{item.month}: {item.created} created</title></circle><circle cx={x} cy={120-number(item.completed)/max*90} r="4" fill="#2b956f"><title>{item.month}: {item.completed} completed</title></circle><text x={x} y="138" textAnchor="middle">{String(item.month).slice(5) || item.month}</text></g>})}</svg><div className="owner-chart-legend"><span><i style={{background:'#274f88'}}/>Created</span><span><i style={{background:'#2b956f'}}/>Completed</span></div></div>;
 }
 
 function CompletionBars({data}:{data:any[]}){
-  const max=Math.max(1,...data.map(item=>number(item.created)));
-  return <div className="owner-completion-bars" role="img" aria-label="Review completion by month">{data.map(item=><div key={item.month}><span>{item.month}</span><i><b style={{width:`${number(item.created)/max*100}%`}}/><em style={{width:`${number(item.completed)/max*100}%`}}/></i><strong>{item.completed}/{item.created}</strong></div>)}</div>;
+  const safeData = (Array.isArray(data) ? data : []).map((item, idx) => ({
+    month: item?.month ? String(item.month) : `M${idx + 1}`,
+    created: number(item?.created),
+    completed: number(item?.completed),
+  }));
+  const max=Math.max(1,...safeData.map(item=>number(item.created)));
+  return <div className="owner-completion-bars" role="img" aria-label="Review completion by month">{safeData.map((item, index)=><div key={`${item.month}-${index}`}><span>{item.month}</span><i><b style={{width:`${number(item.created)/max*100}%`}}/><em style={{width:`${number(item.completed)/max*100}%`}}/></i><strong>{item.completed}/{item.created}</strong></div>)}</div>;
 }
 
 export function OwnerAnalytics({data,team,onRangeChange,loading}:{data:any;team:any[];onRangeChange:(from:string,to:string)=>void;loading:boolean}){
