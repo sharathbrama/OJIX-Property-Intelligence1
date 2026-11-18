@@ -325,7 +325,23 @@ const ADMIN_PAGES: AdminSection[] = [
   "admin-exports",
 ];
 const ROLE_PAGES: Record<UserRole, AppPage[]> = {
-  super_admin: ["overview", "super-admin"],
+  super_admin: [
+    "overview",
+    "super-admin",
+    "properties",
+    "property",
+    "all-documents",
+    "all-findings",
+    "all-maps",
+    "legal-research",
+    "source-registry",
+    "settings",
+    "workflow-guide",
+    "api-console",
+    "lawyer-workbench",
+    "consultant-reports",
+    ...ADMIN_PAGES,
+  ],
   owner: [
     "overview",
     "properties",
@@ -343,7 +359,20 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "lawyer-workbench",
     ...ADMIN_PAGES,
   ],
-  admin: ["overview", "settings", "lawyer-workbench", ...ADMIN_PAGES],
+  admin: [
+    "overview",
+    "properties",
+    "property",
+    "all-documents",
+    "all-findings",
+    "all-maps",
+    "legal-research",
+    "source-registry",
+    "settings",
+    "workflow-guide",
+    "lawyer-workbench",
+    ...ADMIN_PAGES,
+  ],
   lawyer: [
     "overview",
     "properties",
@@ -353,6 +382,7 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "legal-research",
     "lawyer-workbench",
     "consultant-issues",
+    "workflow-guide",
   ],
   analyst: [
     "overview",
@@ -362,8 +392,15 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "all-findings",
     "all-maps",
     "lawyer-workbench",
+    "workflow-guide",
   ],
-  operations: ["overview", "properties", "property", "all-documents"],
+  operations: [
+    "overview",
+    "properties",
+    "property",
+    "all-documents",
+    "workflow-guide",
+  ],
   consultant: [
     "overview",
     "properties",
@@ -375,8 +412,9 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "consultant-reports",
     "consultant-exports",
     "consultant-shared",
+    "workflow-guide",
   ],
-  support: ["overview"],
+  support: ["overview", "workflow-guide"],
   data_steward: [
     "overview",
     "properties",
@@ -384,8 +422,9 @@ const ROLE_PAGES: Record<UserRole, AppPage[]> = {
     "all-documents",
     "all-maps",
     "source-registry",
+    "workflow-guide",
   ],
-  viewer: ["overview", "properties", "property"],
+  viewer: ["overview", "properties", "property", "workflow-guide"],
 };
 const PAGE_PERMISSIONS: Partial<Record<AppPage,string>> = {
   overview:"dashboard.view",properties:"properties.view",property:"properties.view",
@@ -400,11 +439,12 @@ const PAGE_PERMISSIONS: Partial<Record<AppPage,string>> = {
   "admin-models":"admin.manage","admin-templates":"admin.manage","admin-exports":"admin.view",
 };
 const canAccessPage = (user: UserAccount, page: AppPage) => {
-  if(page==="super-admin")return Boolean(user.isSuperAdmin);
-  if(user.isDemo) return ["overview","properties","property","all-documents","all-findings","all-maps","legal-research","consultant-reports"].includes(page);
-  const required=PAGE_PERMISSIONS[page];
-  if(user.permissions?.length&&required)return user.permissions.includes(required);
-  return ROLE_PAGES[user.role]?.includes(page)??false;
+  if (page === "super-admin") return Boolean(user.isSuperAdmin || user.role === "super_admin");
+  const rolePages = ROLE_PAGES[user.role] || [];
+  if (rolePages.includes(page)) return true;
+  const required = PAGE_PERMISSIONS[page];
+  if (user.permissions?.length && required) return user.permissions.includes(required);
+  return false;
 };
 function routeFromPath(pathname: string): {
   page: AppPage;
