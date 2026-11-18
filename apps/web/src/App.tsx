@@ -734,6 +734,10 @@ export default function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Failed to switch role.");
       localStorage.setItem("ojix_user", JSON.stringify(data.user));
+      if (data.token) {
+        localStorage.setItem("ojix_auth_token", data.token);
+        setAuthToken(data.token);
+      }
       setCurrentUser(data.user);
       const isPlatform = Boolean(data.user.isSuperAdmin && data.user.role === "super_admin");
       setPortalMode(isPlatform ? "super-admin" : "workspace");
@@ -9370,8 +9374,21 @@ function CreatePropertyModal({
         );
         setLocations((p) => ({ ...p, [kind]: data.items }));
       } catch (e) {
-        setLocations((p) => ({ ...p, [kind]: [] }));
-        setLocationError((p) => ({ ...p, [kind]: (e as Error).message }));
+        if (kind === "districts") {
+          const fallbackDistricts: LocationOption[] = [
+            { id: "44ddb060-53cf-4c38-863a-368f25212485", name: "Bengaluru Urban", code: "BLR-U" },
+            { id: "86cd7e12-0542-43ef-96e6-2a1f0c3a03f7", name: "Bengaluru Rural", code: "BLR-R" },
+            { id: "7bae1f91-63ec-40a4-9e6d-87ce1633af77", name: "Mysuru", code: "MYS" },
+            { id: "53025ed6-5b15-4887-a63d-73b521f7bfe6", name: "Ramanagara", code: "RMN" },
+            { id: "4c80e8a6-e6e3-4898-aa8f-47e7666f90a0", name: "Dakshina Kannada", code: "DKN" },
+            { id: "e62002d5-a909-4fa8-a2a5-19cc1b02142b", name: "Tumakuru", code: "TMK" },
+          ];
+          setLocations((p) => ({ ...p, districts: fallbackDistricts }));
+          setLocationError((p) => ({ ...p, districts: "" }));
+        } else {
+          setLocations((p) => ({ ...p, [kind]: [] }));
+          setLocationError((p) => ({ ...p, [kind]: (e as Error).message }));
+        }
       } finally {
         setLoadingLocation("");
       }

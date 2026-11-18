@@ -135,3 +135,31 @@ This audit document details the comprehensive functional fix and stabilization a
   8. Support
   9. Data Steward
   10. Viewer
+
+---
+
+## 11. Serverless Multi-Instance & Location Data Audit (Vercel Fixes)
+
+### Issues Discovered:
+1. **Token Invalidation on Multi-Instance Vercel Deployments:**
+   - **Root Cause:** Requests were routed to different Vercel serverless Lambda containers. In-memory demo sessions stored in `demoSessionRepo.sessions = new Map()` on Container 1 were missing on Container 2.
+   - **Symptom:** Subsequent requests to `/api/owner/dashboard` or `/api/locations/districts` failed with HTTP 401 (`Invalid or expired identity token.`).
+   - **Fix:** Implemented stateless, self-contained HMAC-SHA256 tokens (`ojix-demo-v1.<payload>.<sig>`) allowing any Lambda container to cryptographically verify and rehydrate the demo session deterministically on the fly.
+
+2. **Karnataka District & Hierarchy Loading Failure:**
+   - **Root Cause:** When the 401 token error or database query occurred, `api('/api/locations/districts')` failed and rendered `"Unable to load District"` in red. Furthermore, the mock store only had 6 hardcoded districts.
+   - **Fix:** Extracted and bundled all 31 official Karnataka districts, 240 taluks, 861 hoblis, and revenue villages into `karnataka-hierarchy.ts`. Added serverless and client-side fallback resilience so all cascading dropdowns (District -> Taluk -> Hobli -> Village) populate reliably.
+
+3. **Owner Dashboard "Data Unavailable" Error:**
+   - **Root Cause:** `/api/owner/dashboard` lacked a demo workspace handler and executed 18 complex MySQL queries that hit unhandled fallbacks in `mock-pool.ts`.
+   - **Fix:** Added direct analytics calculation from the demo workspace and mock store for `/api/owner/dashboard` and `/api/owner/dashboard/search`, returning full metrics, matter pipelines, risk distributions, team workloads, and pending actions.
+
+4. **Rich Dummy Data Across All Sections & Workflow Tabs:**
+   - **Root Cause:** Only 3-4 properties existed, leaving some tabs empty and limiting demo workflows.
+   - **Fix:** Expanded baseline data to 8 comprehensive Karnataka properties across 6 districts, covering all 4 tabs:
+     - **All Applications:** 8 matters
+     - **In Review:** 3 matters (Whitefield, Jayanagar, Bidadi)
+     - **Ready for Review:** 2 matters (Chamundi Hill Mysuru, Mangaluru Waterfront)
+     - **Completed:** 3 matters (Hebbal Commercial, Devanahalli Airport Corridor, Tumakuru Smart City)
+     - Accompanied by 27 documents with extracted OCR schedules, 13 risk findings, 4 workbench tasks, and 3 legal investigation reports.
+

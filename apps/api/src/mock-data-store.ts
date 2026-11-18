@@ -12,6 +12,12 @@
  */
 
 import crypto from 'node:crypto';
+import {
+  KARNATAKA_DISTRICTS,
+  KARNATAKA_TALUKS,
+  KARNATAKA_HOBLIS,
+  KARNATAKA_VILLAGES,
+} from './karnataka-hierarchy.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -368,7 +374,7 @@ function createSeedProperties(): MockProperty[] {
       property_identifier: '', property_identifier_type: '',
       property_type: 'residential', village: 'Alanahalli', hobli: 'Varuna',
       taluk: 'Mysuru', district: 'Mysuru',
-      district_id: null, taluk_id: null, hobli_id: null, village_id: null,
+      district_id: '7bae1f91-63ec-40a4-9e6d-87ce1633af77', taluk_id: null, hobli_id: null, village_id: null,
       survey_number: '45', subdivision: '2B',
       extent: '3200 sq ft', extent_value: 3200, extent_unit: 'sq_ft',
       boundary_north: 'Site No. 44', boundary_south: 'Main Road',
@@ -378,6 +384,94 @@ function createSeedProperties(): MockProperty[] {
       coordinate_confidence: 0.88, coordinate_captured_at: baseTime,
       identity_state: 'verified', notes: 'Title documents and mutation extracts validated',
       status: 'ready_for_review', workflow_priority: 'normal', due_date: '2026-12-10',
+      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
+      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
+      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      created_at: baseTime, updated_at: baseTime,
+    },
+    {
+      id: uuid(), tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-RMN-005', name: 'Bidadi Industrial Development Parcel',
+      review_purpose: 'title_verification', primary_document_type: 'sale_deed',
+      property_identifier: 'BDD-IND-89', property_identifier_type: 'survey_number',
+      property_type: 'non_agricultural', village: 'Bidadi', hobli: 'Bidadi',
+      taluk: 'Ramanagara', district: 'Ramanagara',
+      district_id: '53025ed6-5b15-4887-a63d-73b521f7bfe6', taluk_id: null, hobli_id: null, village_id: null,
+      survey_number: '89', subdivision: '1',
+      extent: '3 acres 15 guntas', extent_value: 147015, extent_unit: 'sq_ft',
+      boundary_north: 'KIADB Industrial Layout', boundary_south: 'Highway Buffer',
+      boundary_east: 'Service Road', boundary_west: 'Sy No. 88',
+      address: 'Survey 89/1, Bidadi Industrial Area, Ramanagara 562109',
+      latitude: 12.7960, longitude: 77.3876, coordinate_source: 'manual',
+      coordinate_confidence: 0.91, coordinate_captured_at: baseTime,
+      identity_state: 'disputed', notes: 'Clarification required regarding conversion order dated 2017.',
+      status: 'clarification_required', workflow_priority: 'urgent', due_date: '2026-11-28',
+      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
+      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
+      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      created_at: baseTime, updated_at: baseTime,
+    },
+    {
+      id: uuid(), tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-BLR-006', name: 'Devanahalli Airport Corridor Farmland',
+      review_purpose: 'development_rights', primary_document_type: 'rtc',
+      property_identifier: 'DEV-AGRI-312', property_identifier_type: 'survey_number',
+      property_type: 'agricultural', village: 'Devanahalli', hobli: 'Kasaba',
+      taluk: 'Devanahalli', district: 'Bengaluru Rural',
+      district_id: '86cd7e12-0542-43ef-96e6-2a1f0c3a03f7', taluk_id: null, hobli_id: null, village_id: null,
+      survey_number: '312', subdivision: '4',
+      extent: '2 acres 10 guntas', extent_value: 98010, extent_unit: 'sq_ft',
+      boundary_north: 'NH 44 Airport Expressway', boundary_south: 'Sy 313',
+      boundary_east: 'Access canal', boundary_west: 'Sy 311',
+      address: 'Survey 312/4, Near Airport SEZ, Devanahalli 562110',
+      latitude: 13.2480, longitude: 77.7125, coordinate_source: 'manual',
+      coordinate_confidence: 0.94, coordinate_captured_at: baseTime,
+      identity_state: 'verified', notes: 'Title verified. Final report submitted and approved.',
+      status: 'complete', workflow_priority: 'normal', due_date: null,
+      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
+      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
+      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      created_at: baseTime, updated_at: baseTime,
+    },
+    {
+      id: uuid(), tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-DKN-007', name: 'Mangaluru Waterfront Commercial Plot',
+      review_purpose: 'commercial_lease', primary_document_type: 'sale_deed',
+      property_identifier: 'MNG-COM-55', property_identifier_type: 'survey_number',
+      property_type: 'non_agricultural', village: 'Mangaluru', hobli: 'Mangaluru',
+      taluk: 'Mangaluru', district: 'Dakshina Kannada',
+      district_id: '4c80e8a6-e6e3-4898-aa8f-47e7666f90a0', taluk_id: null, hobli_id: null, village_id: null,
+      survey_number: '55', subdivision: '1A',
+      extent: '8500 sq ft', extent_value: 8500, extent_unit: 'sq_ft',
+      boundary_north: 'Port Trust Road', boundary_south: 'Commercial Building',
+      boundary_east: 'Harbor canal', boundary_west: 'Service Lane',
+      address: 'Plot 55/1A, Bunder Road, Mangaluru 575001',
+      latitude: 12.8698, longitude: 74.8430, coordinate_source: 'manual',
+      coordinate_confidence: 0.89, coordinate_captured_at: baseTime,
+      identity_state: 'verified', notes: 'CRZ clearance documents attached. Ready for legal opinion.',
+      status: 'ready_for_review', workflow_priority: 'high', due_date: '2026-12-15',
+      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
+      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
+      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      created_at: baseTime, updated_at: baseTime,
+    },
+    {
+      id: uuid(), tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-TMK-008', name: 'Tumakuru Smart City Residential Layout',
+      review_purpose: 'purchase_due_diligence', primary_document_type: 'sale_deed',
+      property_identifier: 'TMK-RES-14', property_identifier_type: 'survey_number',
+      property_type: 'non_agricultural', village: 'Tumakuru', hobli: 'Kasaba',
+      taluk: 'Tumakuru', district: 'Tumakuru',
+      district_id: 'e62002d5-a909-4fa8-a2a5-19cc1b02142b', taluk_id: null, hobli_id: null, village_id: null,
+      survey_number: '14', subdivision: '2',
+      extent: '3600 sq ft', extent_value: 3600, extent_unit: 'sq_ft',
+      boundary_north: 'Site No. 13', boundary_south: '40 ft Ring Road',
+      boundary_east: 'Park buffer', boundary_west: 'Site No. 15',
+      address: 'Plot 14/2, Smart City Extension, Tumakuru 572101',
+      latitude: 13.3409, longitude: 77.1010, coordinate_source: 'manual',
+      coordinate_confidence: 0.96, coordinate_captured_at: baseTime,
+      identity_state: 'verified', notes: 'Completed title clearance. Encumbrance Certificate verified clean for 30 years.',
+      status: 'complete', workflow_priority: 'normal', due_date: null,
       assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
       assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
       assigned_viewer_uid: 'user-viewer', archived_at: null,
@@ -582,41 +676,6 @@ function createSeedReports(properties: MockProperty[]): MockReport[] {
   }
   return reports;
 }
-
-// ─── Karnataka Location Data ─────────────────────────────────────────────────
-
-const KARNATAKA_DISTRICTS = [
-  { id: uuid(), name: 'Bengaluru Urban', code: 'BLR-U', active: 1 },
-  { id: uuid(), name: 'Bengaluru Rural', code: 'BLR-R', active: 1 },
-  { id: uuid(), name: 'Mysuru', code: 'MYS', active: 1 },
-  { id: uuid(), name: 'Mangaluru', code: 'MNG', active: 1 },
-  { id: uuid(), name: 'Tumakuru', code: 'TMK', active: 1 },
-  { id: uuid(), name: 'Ramanagara', code: 'RMN', active: 1 },
-];
-
-const KARNATAKA_TALUKS = [
-  { id: uuid(), district_id: KARNATAKA_DISTRICTS[0].id, name: 'Bengaluru North', code: 'BLR-N' },
-  { id: uuid(), district_id: KARNATAKA_DISTRICTS[0].id, name: 'Bengaluru South', code: 'BLR-S' },
-  { id: uuid(), district_id: KARNATAKA_DISTRICTS[0].id, name: 'Bengaluru East', code: 'BLR-E' },
-  { id: uuid(), district_id: KARNATAKA_DISTRICTS[0].id, name: 'Anekal', code: 'ANK' },
-];
-
-const KARNATAKA_HOBLIS = [
-  { id: uuid(), taluk_id: KARNATAKA_TALUKS[0].id, name: 'Yeshwanthpur', code: 'YWP' },
-  { id: uuid(), taluk_id: KARNATAKA_TALUKS[0].id, name: 'Hesaraghatta', code: 'HSG' },
-  { id: uuid(), taluk_id: KARNATAKA_TALUKS[1].id, name: 'Bengaluru South', code: 'BLR-S' },
-  { id: uuid(), taluk_id: KARNATAKA_TALUKS[2].id, name: 'Varthur', code: 'VRT' },
-  { id: uuid(), taluk_id: KARNATAKA_TALUKS[2].id, name: 'K.R. Puram', code: 'KRP' },
-];
-
-const KARNATAKA_VILLAGES = [
-  { id: uuid(), hobli_id: KARNATAKA_HOBLIS[0].id, name: 'Hebbal' },
-  { id: uuid(), hobli_id: KARNATAKA_HOBLIS[2].id, name: 'Jayanagar' },
-  { id: uuid(), hobli_id: KARNATAKA_HOBLIS[3].id, name: 'Whitefield' },
-  { id: uuid(), hobli_id: KARNATAKA_HOBLIS[3].id, name: 'Marathahalli' },
-  { id: uuid(), hobli_id: KARNATAKA_HOBLIS[4].id, name: 'K.R. Puram' },
-  { id: uuid(), hobli_id: KARNATAKA_HOBLIS[1].id, name: 'Hesaraghatta' },
-];
 
 // ─── Mock Data Store Class ───────────────────────────────────────────────────
 

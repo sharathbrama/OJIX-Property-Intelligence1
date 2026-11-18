@@ -1308,21 +1308,30 @@ app.post('/api/auth/demo/switch-role', authGuard, asyncRoute(async (req, res) =>
     return res.status(400).json({ error: `Invalid role '${role}'. Supported roles: ${VALID_DEMO_ROLES.join(', ')}` });
   }
 
-  const updatedUser = demoSessionRepo.switchRole(rawToken, role);
-  if (!updatedUser) {
+  const result = demoSessionRepo.switchRole(rawToken, role);
+  if (!result) {
     return res.status(404).json({ error: 'Active demo session not found.' });
   }
 
   authReq.user = {
     ...authReq.user,
-    uid: updatedUser.uid,
-    role: updatedUser.role,
-    isSuperAdmin: updatedUser.isSuperAdmin,
-    name: updatedUser.name,
-    permissions: updatedUser.permissions,
+    uid: result.user.uid,
+    role: result.user.role,
+    isSuperAdmin: result.user.isSuperAdmin,
+    name: result.user.name,
+    permissions: result.user.permissions,
   };
 
-  res.json({ success: true, user: updatedUser });
+  const isProd = process.env.NODE_ENV === 'production';
+  res.cookie('ojix_demo_session', result.token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isProd,
+    maxAge: 8 * 60 * 60 * 1000,
+    path: '/',
+  });
+
+  res.json({ success: true, user: result.user, token: result.token });
 }));
 
 app.get('/api/auth/session', authGuard, asyncRoute(async (req, res) => {
@@ -1727,7 +1736,10 @@ app.use('/api/properties/:id/documents', authGuard, asyncRoute(async(req,res,nex
 app.use(['/api/findings', '/api/legal-research', '/api/properties/:id/workflow', '/api/properties/:id/title-chain', '/api/properties/:id/title-events', '/api/properties/:id/discrepancies', '/api/properties/:id/spatial-screening', '/api/properties/:id/due-diligence-snapshot'], authGuard, legalDecisionDataGuard);
 
 app.get('/api/locations/districts', authGuard, asyncRoute(async (_req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  if (_usingMockPool || isMockMode() || !pool) {
+    const store = getMockStore();
+    return res.json({ items: store.districts });
+  }
   const result = await pool.query('SELECT id, name, code FROM karnataka_districts WHERE active=1 ORDER BY name');
   res.json({ items: result.rows });
 }));
@@ -1949,8 +1961,6 @@ app.get('/api/overview', authGuard, asyncRoute(async (_req, res) => {
 }));
 
 app.get('/api/owner/dashboard', authGuard, ownerGuard, asyncRoute(async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
-  const tenantId = req.user?.tenantId;
   const boundedInt=(value:unknown,fallback:number,min:number,max:number)=>{const parsed=Number.parseInt(String(value??''),10);return Number.isFinite(parsed)?Math.max(min,Math.min(max,parsed)):fallback;};
   const findingsPage=boundedInt(req.query.findingsPage,1,1,10000),findingsPageSize=boundedInt(req.query.findingsPageSize,6,1,25);
   const activityPage=boundedInt(req.query.activityPage,1,1,10000),activityPageSize=boundedInt(req.query.activityPageSize,8,1,25);
@@ -1959,6 +1969,204 @@ app.get('/api/owner/dashboard', authGuard, ownerGuard, asyncRoute(async (req, re
   const defaultFrom=new Date(Date.now()-180*24*60*60_000).toISOString().slice(0,10);
   const from=dateValue(req.query.from,defaultFrom),to=dateValue(req.query.to,defaultTo);
   if(from>to)return res.status(400).json({error:'The analytics start date must be on or before the end date.'});
+
+  if ((req as any).demoWorkspace || _usingMockPool || isMockMode()) {
+    const ws = ((req as any).demoWorkspace as DemoSessionWorkspace) || demoSessionRepo.getSession('demo-fallback-sid');
+    const properties = ws?.properties || [];
+    const documents = ws?.documents || [];
+    const findings = ws?.findings || [];
+    const tasks = ws?.tasks || [];
+    const reports = ws?.reports || [];
+    const auditEvents = ws?.auditEvents || [];
+
+    const total = properties.length;
+    const openMatters = properties.filter(p => !['complete', 'closed', 'archived'].includes(p.status)).length;
+    const activeReviews = properties.filter(p => ['in_review', 'clarification_required'].includes(p.status)).length;
+    const readyForReview = properties.filter(p => p.status === 'ready_for_review').length;
+    const highAttnFindings = findings.filter(f => ['critical', 'high'].includes(f.severity)).length;
+    const pendingDocs = documents.filter(d => d.manual_review_status === 'pending' || d.processing_status !== 'completed').length;
+    const submittedReports = reports.filter(r => r.approval_status === 'submitted').length;
+
+    // Workflow list
+    const workflow = properties.map(p => {
+      const propDocs = documents.filter(d => d.property_id === p.id);
+      const propFindings = findings.filter(f => f.property_id === p.id);
+      const highestRisk = propFindings.find(f => f.severity === 'critical') ? 'critical' :
+                          propFindings.find(f => f.severity === 'high') ? 'high' :
+                          propFindings.find(f => f.severity === 'medium') ? 'medium' : 'low';
+      const stage = p.status === 'ready_for_review' ? 'Legal review' :
+                    (p.status === 'approved' || p.status === 'complete') ? 'Completed' :
+                    p.status === 'clarification_required' ? 'Clarification' : 'Evidence review';
+      const nextAct = p.status === 'ready_for_review' ? 'Complete legal review' :
+                      (p.status === 'approved' || p.status === 'complete') ? 'Prepare final submission' :
+                      p.status === 'clarification_required' ? 'Reconcile survey discrepancy' : 'Review pending documents';
+      return {
+        ...p,
+        document_count: propDocs.length,
+        pending_document_reviews: propDocs.filter(d => d.manual_review_status === 'pending').length,
+        risk_level: highestRisk,
+        coordinates_verified: 1,
+        missing_evidence: 0,
+        review_stage: stage,
+        next_action: nextAct,
+      };
+    });
+
+    // Distributions
+    const distMap = new Map<string, number>();
+    const talukMap = new Map<string, number>();
+    const villageMap = new Map<string, number>();
+    for (const p of properties) {
+      if (p.district) distMap.set(p.district, (distMap.get(p.district) || 0) + 1);
+      if (p.taluk) talukMap.set(p.taluk, (talukMap.get(p.taluk) || 0) + 1);
+      if (p.village) villageMap.set(p.village, (villageMap.get(p.village) || 0) + 1);
+    }
+
+    const distRows = Array.from(distMap.entries()).map(([label, value]) => ({ label, value }));
+    const talukRows = Array.from(talukMap.entries()).map(([label, value]) => ({ label, value }));
+    const villageRows = Array.from(villageMap.entries()).map(([label, value]) => ({ label, value }));
+
+    const findingsWithProp = findings.map(f => {
+      const prop = properties.find(p => p.id === f.property_id);
+      return {
+        ...f,
+        property_name: prop?.name || 'Property Parcel',
+        application_number: prop?.application_number || 'OJ-2026',
+        district: prop?.district || 'Bengaluru Urban',
+        assigned_owner: prop?.assigned_lawyer_uid || 'user-lawyer',
+        reviewer_state: f.evidence_status === 'confirmed' ? 'approved' : 'pending',
+        evidence_available: 1,
+      };
+    });
+
+    const pagedFindings = findingsWithProp.slice((findingsPage - 1) * findingsPageSize, findingsPage * findingsPageSize);
+    const pagedActivity = auditEvents.slice((activityPage - 1) * activityPageSize, activityPage * activityPageSize);
+
+    // Team workload
+    const workload = [
+      { user_uid: 'user-lawyer', email: 'demo.lawyer@ojix-demo.invalid', role: 'lawyer', name: 'Sharath — Senior Legal Reviewer', assigned_matters: 3, pending_reviews: 2, completed_tasks: 4, open_tasks: 1, overdue_task_count: 0, tasks_awaiting_review: 1, completed_task_count: 4, completion_pct: 80 },
+      { user_uid: 'user-analyst', email: 'demo.analyst@ojix-demo.invalid', role: 'analyst', name: 'Sharath — Evidence Analyst', assigned_matters: 3, pending_reviews: 2, completed_tasks: 5, open_tasks: 2, overdue_task_count: 1, tasks_awaiting_review: 0, completed_task_count: 5, completion_pct: 71 },
+      { user_uid: 'user-operations', email: 'demo.operations@ojix-demo.invalid', role: 'operations', name: 'Sharath — Document Operations', assigned_matters: 2, pending_reviews: 1, completed_tasks: 6, open_tasks: 1, overdue_task_count: 0, tasks_awaiting_review: 0, completed_task_count: 6, completion_pct: 86 },
+      { user_uid: 'user-consultant', email: 'demo.consultant@ojix-demo.invalid', role: 'consultant', name: 'Sharath — Property Consultant', assigned_matters: 2, pending_reviews: 1, completed_tasks: 3, open_tasks: 1, overdue_task_count: 0, tasks_awaiting_review: 0, completed_task_count: 3, completion_pct: 75 },
+    ];
+
+    // Reports formatted
+    const reportsFormatted = reports.map(r => {
+      const prop = properties.find(p => p.id === r.property_id);
+      return {
+        property_id: r.property_id,
+        application_number: prop?.application_number || 'OJ-2026',
+        property_name: prop?.name || 'Property Parcel',
+        status: prop?.status || 'in_review',
+        assigned_owner: 'user-lawyer',
+        due_date: prop?.due_date || null,
+        created_at: r.created_at,
+        report_id: r.id,
+        version_number: r.version_number,
+        report_title: r.title,
+        approval_status: r.approval_status,
+        action: r.approval_status === 'submitted' ? 'Submitted report awaiting legal review' : 'Report approved',
+      };
+    });
+
+    return res.json({
+      metrics: {
+        total_matters: total,
+        open_matters: openMatters,
+        active_reviews: activeReviews,
+        active_due_diligence: activeReviews,
+        ready_for_legal_review: readyForReview,
+        high_attention_findings: highAttnFindings,
+        overdue_tasks: 1,
+        documents_requiring_review: pendingDocs,
+        reports_awaiting_review: submittedReports,
+      },
+      readiness: {
+        total,
+        ready_for_legal_review: readyForReview,
+        under_review: activeReviews,
+        not_started: 0,
+        missing_evidence_matters: 0,
+        readiness_pct: 88,
+      },
+      distributions: {
+        districts: distRows,
+        taluks: talukRows,
+        villages: villageRows,
+      },
+      documentCategories: {
+        total_documents: documents.length,
+        pending_review: pendingDocs,
+        title_deeds: documents.filter(d => d.doc_type === 'sale_deed').length,
+        encumbrance_certificates: documents.filter(d => d.doc_type === 'ec').length,
+        survey_revenue_records: documents.filter(d => ['rtc', 'khata_certificate', 'tax_receipt'].includes(d.doc_type)).length,
+        other_documents: documents.filter(d => !['sale_deed', 'ec', 'rtc', 'khata_certificate', 'tax_receipt'].includes(d.doc_type)).length,
+        pending_title_deeds: 1,
+        pending_encumbrance_certificates: 1,
+        pending_survey_revenue_records: 1,
+        pending_other_documents: 0,
+      },
+      riskOverview: [
+        { label: 'critical', value: findings.filter(f => f.severity === 'critical').length },
+        { label: 'high', value: findings.filter(f => f.severity === 'high').length },
+        { label: 'medium', value: findings.filter(f => f.severity === 'medium').length },
+        { label: 'low', value: findings.filter(f => f.severity === 'low').length },
+      ],
+      workflow,
+      pendingActions: [
+        { id: 'documents', label: 'Pending document reviews', count: pendingDocs, priority: pendingDocs > 0 ? 'high' : 'normal', status: pendingDocs > 0 ? 'Action required' : 'Clear', nextAction: 'Review documents', target: 'all-documents' },
+        { id: 'approval', label: 'Matters awaiting approval', count: readyForReview, priority: readyForReview > 0 ? 'high' : 'normal', status: readyForReview > 0 ? 'Pending' : 'Clear', nextAction: 'Open legal review matters', target: 'overview' },
+        { id: 'evidence', label: 'Missing evidence', count: 0, priority: 'normal', status: 'Clear', nextAction: 'Inspect workflow', target: 'overview' },
+        { id: 'overdue', label: 'Overdue tasks', count: 1, priority: 'urgent', status: 'Overdue', nextAction: 'Resolve tasks', target: 'lawyer-workbench' },
+        { id: 'legal', label: 'Reports awaiting legal review', count: submittedReports, priority: submittedReports > 0 ? 'high' : 'normal', status: submittedReports > 0 ? 'Waiting' : 'Clear', nextAction: 'Review submitted reports', target: 'consultant-reports' },
+      ],
+      recentFindings: pagedFindings,
+      teamWorkload: workload,
+      reports: reportsFormatted,
+      recentActivity: pagedActivity,
+      pagination: {
+        findings: { page: findingsPage, pageSize: findingsPageSize, total: findings.length, totalPages: Math.max(1, Math.ceil(findings.length / findingsPageSize)) },
+        activity: { page: activityPage, pageSize: activityPageSize, total: auditEvents.length, totalPages: Math.max(1, Math.ceil(auditEvents.length / activityPageSize)) },
+      },
+      evidenceSourceStatus: [
+        { source: 'Bhoomi / RTC', status: 'source_matched', lastChecked: '2026-11-18 10:30:00', recordedSource: 'Karnataka Bhoomi Land Records' },
+        { source: 'Kaveri', status: 'verified', lastChecked: '2026-11-18 10:30:00', recordedSource: 'Kaveri 2.0 Stamps & Registration' },
+        { source: 'Registration / EC', status: 'verified', lastChecked: '2026-11-18 10:30:00', recordedSource: 'Kaveri EC Form 15' },
+        { source: 'GIS / Map Layers', status: 'verified_data_available', verifiedLayers: 12, latestSourceDate: '2026-11-15' },
+      ],
+      evidenceSources: {
+        connected_sources: 4,
+        verification_completed: 18,
+        verification_pending: 3,
+        failed_verification: 0,
+        last_synchronization: '2026-11-18 10:30:00',
+      },
+      analytics: {
+        from,
+        to,
+        mattersByStatus: [
+          { label: 'in_review', value: activeReviews },
+          { label: 'ready_for_review', value: readyForReview },
+          { label: 'complete', value: properties.filter(p => ['approved', 'complete'].includes(p.status)).length },
+        ],
+        monthlyTrends: [
+          { month: '2026-09', created: 3, completed: 1 },
+          { month: '2026-10', created: 3, completed: 1 },
+          { month: '2026-11', created: 2, completed: 1 },
+        ],
+        riskSeverity: [
+          { label: 'critical', value: findings.filter(f => f.severity === 'critical').length },
+          { label: 'high', value: findings.filter(f => f.severity === 'high').length },
+          { label: 'medium', value: findings.filter(f => f.severity === 'medium').length },
+          { label: 'low', value: findings.filter(f => f.severity === 'low').length },
+        ],
+        taskComparison: { pending: 2, completed: 5 },
+      },
+    });
+  }
+
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  const tenantId = req.user?.tenantId;
   const [metrics, workflow, recentFindings, workload, reports, activity, evidenceSources, readiness, districts, taluks, villages, documentCategories, riskOverview, sourceRegistryHistory, rtcHistory, verifiedLayers, activityCount, findingsCount] = await Promise.all([
     pool.query(`SELECT
       COUNT(*) AS total_matters,
@@ -2155,9 +2363,49 @@ app.get('/api/owner/dashboard', authGuard, ownerGuard, asyncRoute(async (req, re
 }));
 
 app.get('/api/owner/dashboard/search', authGuard, ownerGuard, asyncRoute(async (req,res)=>{
-  if(!pool)return res.status(503).json({error:'Database not configured.'});
-  const term=String(req.query.q||'').trim().slice(0,100);
+  const term=String(req.query.q||'').trim().toLowerCase().slice(0,100);
   if(term.length<2)return res.json({items:[]});
+
+  if ((req as any).demoWorkspace || _usingMockPool || isMockMode()) {
+    const ws = ((req as any).demoWorkspace as DemoSessionWorkspace) || demoSessionRepo.getSession('demo-fallback-sid');
+    const props = ws?.properties || [];
+    const docs = ws?.documents || [];
+    const matchedProps = props.filter(p =>
+      p.name.toLowerCase().includes(term) ||
+      p.application_number.toLowerCase().includes(term) ||
+      p.survey_number.toLowerCase().includes(term) ||
+      p.village.toLowerCase().includes(term) ||
+      p.district.toLowerCase().includes(term)
+    ).map(p => ({
+      type: 'property',
+      id: p.id,
+      property_id: p.id,
+      reference: p.application_number,
+      title: p.name,
+      subtitle: `${p.village} · ${p.taluk} · ${p.district}`,
+      updated_at: p.updated_at,
+    }));
+    const matchedDocs = docs.filter(d =>
+      d.original_filename.toLowerCase().includes(term) ||
+      d.doc_type.toLowerCase().includes(term)
+    ).map(d => {
+      const p = props.find(x => x.id === d.property_id);
+      return {
+        type: 'document',
+        id: d.id,
+        property_id: d.property_id,
+        reference: p?.application_number || 'DOC',
+        title: d.original_filename,
+        subtitle: `${d.doc_type} · ${p?.name || ''} · ${p?.district || ''}`,
+        updated_at: d.created_at,
+      };
+    });
+    return res.json({
+      items: [...matchedProps, ...matchedDocs].slice(0, 10),
+    });
+  }
+
+  if(!pool)return res.status(503).json({error:'Database not configured.'});
   const pattern=`%${term.replace(/[\\%_]/g,'\\$&')}%`;
   const [properties,documents]=await Promise.all([
     pool.query(`SELECT 'property' AS type,p.id,p.id AS property_id,p.application_number AS reference,p.name AS title,CONCAT_WS(' · ',NULLIF(p.village,''),NULLIF(p.taluk,''),NULLIF(p.district,'')) AS subtitle,p.updated_at
