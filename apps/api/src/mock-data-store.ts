@@ -302,13 +302,13 @@ function createSeedProperties(): MockProperty[] {
   const baseTime = '2026-09-15 10:00:00';
   return [
     {
-      id: uuid(), tenant_id: DEFAULT_ORG_ID,
-      application_number: 'OJ-2026-BLR-001', name: 'Whitefield Residential Site',
+      id: 'prop-blr-001', tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-BLR-001', name: 'Whitefield Residential Site (Sy 45/3A)',
       review_purpose: 'purchase_due_diligence', primary_document_type: 'sale_deed',
       property_identifier: 'WF-SITE-2026-01', property_identifier_type: 'site_number',
       property_type: 'non_agricultural', village: 'Whitefield', hobli: 'Varthur',
       taluk: 'Bengaluru East', district: 'Bengaluru Urban',
-      district_id: null, taluk_id: null, hobli_id: null, village_id: null,
+      district_id: '44ddb060-53cf-4c38-863a-368f25212485', taluk_id: null, hobli_id: null, village_id: null,
       survey_number: '45', subdivision: '3A',
       extent: '2400 sq ft', extent_value: 2400, extent_unit: 'sq_ft',
       boundary_north: 'Site No. 44 — K. Ramesh', boundary_south: '30 ft road',
@@ -316,21 +316,21 @@ function createSeedProperties(): MockProperty[] {
       address: 'No. 45/3A, 2nd Cross, Whitefield Main Road, Bengaluru 560066',
       latitude: 12.9698, longitude: 77.7500, coordinate_source: 'manual',
       coordinate_confidence: 0.85, coordinate_captured_at: baseTime,
-      identity_state: 'known', notes: 'Near ITPL junction, residential zoning confirmed',
-      status: 'in_review', workflow_priority: 'high', due_date: '2026-12-01',
-      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
-      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
-      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      identity_state: 'verified', notes: 'Near ITPL junction, residential zoning confirmed',
+      status: 'in_review', workflow_priority: 'high', due_date: '2026-12-05',
+      assigned_lawyer_uid: 'demo-user-lawyer', assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations', assigned_consultant_uid: 'demo-user-consultant',
+      assigned_viewer_uid: 'demo-user-viewer', archived_at: null,
       created_at: baseTime, updated_at: baseTime,
     },
     {
-      id: uuid(), tenant_id: DEFAULT_ORG_ID,
-      application_number: 'OJ-2026-BLR-002', name: 'Jayanagar Agricultural Land',
+      id: 'prop-blr-002', tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-BLR-002', name: 'Jayanagar Agricultural Land (Sy 112/5)',
       review_purpose: 'title_verification', primary_document_type: 'rtc',
-      property_identifier: '', property_identifier_type: '',
+      property_identifier: 'JN-AGRI-112', property_identifier_type: 'survey_number',
       property_type: 'agricultural', village: 'Jayanagar', hobli: 'Bengaluru South',
       taluk: 'Bengaluru South', district: 'Bengaluru Urban',
-      district_id: null, taluk_id: null, hobli_id: null, village_id: null,
+      district_id: '44ddb060-53cf-4c38-863a-368f25212485', taluk_id: null, hobli_id: null, village_id: null,
       survey_number: '112', subdivision: '5',
       extent: '1 acre 20 guntas', extent_value: 63600, extent_unit: 'sq_ft',
       boundary_north: 'Govt. Tank bed', boundary_south: 'Survey No. 113',
@@ -340,19 +340,19 @@ function createSeedProperties(): MockProperty[] {
       coordinate_confidence: 0.72, coordinate_captured_at: baseTime,
       identity_state: 'disputed', notes: 'Extent mismatch between RTC and sale deed',
       status: 'in_review', workflow_priority: 'critical', due_date: '2026-11-30',
-      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
-      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
-      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      assigned_lawyer_uid: 'demo-user-lawyer', assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations', assigned_consultant_uid: 'demo-user-consultant',
+      assigned_viewer_uid: 'demo-user-viewer', archived_at: null,
       created_at: baseTime, updated_at: baseTime,
     },
     {
-      id: uuid(), tenant_id: DEFAULT_ORG_ID,
-      application_number: 'OJ-2026-BLR-003', name: 'Hebbal Commercial Plot',
+      id: 'prop-blr-003', tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-BLR-003', name: 'Hebbal Commercial Plot (Sy 78/1)',
       review_purpose: 'investment_analysis', primary_document_type: 'khata_certificate',
       property_identifier: 'HBL-COM-2026-07', property_identifier_type: 'khata_number',
       property_type: 'non_agricultural', village: 'Hebbal', hobli: 'Yeshwanthpur',
       taluk: 'Bengaluru North', district: 'Bengaluru Urban',
-      district_id: null, taluk_id: null, hobli_id: null, village_id: null,
+      district_id: '44ddb060-53cf-4c38-863a-368f25212485', taluk_id: null, hobli_id: null, village_id: null,
       survey_number: '78', subdivision: '1',
       extent: '5000 sq ft', extent_value: 5000, extent_unit: 'sq_ft',
       boundary_north: 'Hebbal Flyover Road', boundary_south: 'Plot No. 79',
@@ -362,16 +362,16 @@ function createSeedProperties(): MockProperty[] {
       coordinate_confidence: 0.90, coordinate_captured_at: baseTime,
       identity_state: 'verified', notes: 'All documents consistent, commercial zoning',
       status: 'approved', workflow_priority: 'normal', due_date: null,
-      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
-      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
-      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      assigned_lawyer_uid: 'demo-user-lawyer', assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations', assigned_consultant_uid: 'demo-user-consultant',
+      assigned_viewer_uid: 'demo-user-viewer', archived_at: null,
       created_at: baseTime, updated_at: baseTime,
     },
     {
-      id: uuid(), tenant_id: DEFAULT_ORG_ID,
-      application_number: 'OJ-2026-MYS-004', name: 'Chamundi Hill Residential Layout',
+      id: 'prop-mys-004', tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-MYS-004', name: 'Chamundi Hill Residential Layout (Sy 45/2B)',
       review_purpose: 'property_purchase_sale', primary_document_type: 'sale_deed',
-      property_identifier: '', property_identifier_type: '',
+      property_identifier: 'MYS-ALN-45', property_identifier_type: 'survey_number',
       property_type: 'residential', village: 'Alanahalli', hobli: 'Varuna',
       taluk: 'Mysuru', district: 'Mysuru',
       district_id: '7bae1f91-63ec-40a4-9e6d-87ce1633af77', taluk_id: null, hobli_id: null, village_id: null,
@@ -384,14 +384,14 @@ function createSeedProperties(): MockProperty[] {
       coordinate_confidence: 0.88, coordinate_captured_at: baseTime,
       identity_state: 'verified', notes: 'Title documents and mutation extracts validated',
       status: 'ready_for_review', workflow_priority: 'normal', due_date: '2026-12-10',
-      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
-      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
-      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      assigned_lawyer_uid: 'demo-user-lawyer', assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations', assigned_consultant_uid: 'demo-user-consultant',
+      assigned_viewer_uid: 'demo-user-viewer', archived_at: null,
       created_at: baseTime, updated_at: baseTime,
     },
     {
-      id: uuid(), tenant_id: DEFAULT_ORG_ID,
-      application_number: 'OJ-2026-RMN-005', name: 'Bidadi Industrial Development Parcel',
+      id: 'prop-rmn-005', tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-RMN-005', name: 'Bidadi Industrial Development Parcel (Sy 89/1)',
       review_purpose: 'title_verification', primary_document_type: 'sale_deed',
       property_identifier: 'BDD-IND-89', property_identifier_type: 'survey_number',
       property_type: 'non_agricultural', village: 'Bidadi', hobli: 'Bidadi',
@@ -406,14 +406,14 @@ function createSeedProperties(): MockProperty[] {
       coordinate_confidence: 0.91, coordinate_captured_at: baseTime,
       identity_state: 'disputed', notes: 'Clarification required regarding conversion order dated 2017.',
       status: 'clarification_required', workflow_priority: 'urgent', due_date: '2026-11-28',
-      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
-      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
-      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      assigned_lawyer_uid: 'demo-user-lawyer', assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations', assigned_consultant_uid: 'demo-user-consultant',
+      assigned_viewer_uid: 'demo-user-viewer', archived_at: null,
       created_at: baseTime, updated_at: baseTime,
     },
     {
-      id: uuid(), tenant_id: DEFAULT_ORG_ID,
-      application_number: 'OJ-2026-BLR-006', name: 'Devanahalli Airport Corridor Farmland',
+      id: 'prop-blr-006', tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-BLR-006', name: 'Devanahalli Airport Corridor Farmland (Sy 312/4)',
       review_purpose: 'development_rights', primary_document_type: 'rtc',
       property_identifier: 'DEV-AGRI-312', property_identifier_type: 'survey_number',
       property_type: 'agricultural', village: 'Devanahalli', hobli: 'Kasaba',
@@ -428,14 +428,14 @@ function createSeedProperties(): MockProperty[] {
       coordinate_confidence: 0.94, coordinate_captured_at: baseTime,
       identity_state: 'verified', notes: 'Title verified. Final report submitted and approved.',
       status: 'complete', workflow_priority: 'normal', due_date: null,
-      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
-      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
-      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      assigned_lawyer_uid: 'demo-user-lawyer', assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations', assigned_consultant_uid: 'demo-user-consultant',
+      assigned_viewer_uid: 'demo-user-viewer', archived_at: null,
       created_at: baseTime, updated_at: baseTime,
     },
     {
-      id: uuid(), tenant_id: DEFAULT_ORG_ID,
-      application_number: 'OJ-2026-DKN-007', name: 'Mangaluru Waterfront Commercial Plot',
+      id: 'prop-dkn-007', tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-DKN-007', name: 'Mangaluru Waterfront Commercial Plot (Sy 55/1A)',
       review_purpose: 'commercial_lease', primary_document_type: 'sale_deed',
       property_identifier: 'MNG-COM-55', property_identifier_type: 'survey_number',
       property_type: 'non_agricultural', village: 'Mangaluru', hobli: 'Mangaluru',
@@ -450,14 +450,14 @@ function createSeedProperties(): MockProperty[] {
       coordinate_confidence: 0.89, coordinate_captured_at: baseTime,
       identity_state: 'verified', notes: 'CRZ clearance documents attached. Ready for legal opinion.',
       status: 'ready_for_review', workflow_priority: 'high', due_date: '2026-12-15',
-      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
-      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
-      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      assigned_lawyer_uid: 'demo-user-lawyer', assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations', assigned_consultant_uid: 'demo-user-consultant',
+      assigned_viewer_uid: 'demo-user-viewer', archived_at: null,
       created_at: baseTime, updated_at: baseTime,
     },
     {
-      id: uuid(), tenant_id: DEFAULT_ORG_ID,
-      application_number: 'OJ-2026-TMK-008', name: 'Tumakuru Smart City Residential Layout',
+      id: 'prop-tmk-008', tenant_id: DEFAULT_ORG_ID,
+      application_number: 'OJ-2026-TMK-008', name: 'Tumakuru Smart City Residential Layout (Sy 14/2)',
       review_purpose: 'purchase_due_diligence', primary_document_type: 'sale_deed',
       property_identifier: 'TMK-RES-14', property_identifier_type: 'survey_number',
       property_type: 'non_agricultural', village: 'Tumakuru', hobli: 'Kasaba',
@@ -472,9 +472,9 @@ function createSeedProperties(): MockProperty[] {
       coordinate_confidence: 0.96, coordinate_captured_at: baseTime,
       identity_state: 'verified', notes: 'Completed title clearance. Encumbrance Certificate verified clean for 30 years.',
       status: 'complete', workflow_priority: 'normal', due_date: null,
-      assigned_lawyer_uid: 'user-lawyer', assigned_analyst_uid: 'user-analyst',
-      assigned_operations_uid: 'user-operations', assigned_consultant_uid: 'user-consultant',
-      assigned_viewer_uid: 'user-viewer', archived_at: null,
+      assigned_lawyer_uid: 'demo-user-lawyer', assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations', assigned_consultant_uid: 'demo-user-consultant',
+      assigned_viewer_uid: 'demo-user-viewer', archived_at: null,
       created_at: baseTime, updated_at: baseTime,
     },
   ];
@@ -717,12 +717,20 @@ export class MockDataStore {
       });
     }
 
-    // Create memberships for all dummy accounts
+    // Create memberships for all dummy accounts across both default and demo tenants
     for (const [uid, role] of Object.entries(DEMO_ROLES)) {
       this.memberships.push({
         user_uid: uid,
         organization_id: DEFAULT_ORG_ID,
         email: 'mrsharath3126@gmail.com',
+        role,
+        status: 'active',
+        created_at: '2026-01-01 00:00:00',
+      });
+      this.memberships.push({
+        user_uid: uid.startsWith('demo-') ? uid : `demo-${uid}`,
+        organization_id: 'tenant-demo-workspace',
+        email: `demo.${role}@ojix.in`,
         role,
         status: 'active',
         created_at: '2026-01-01 00:00:00',
@@ -851,15 +859,15 @@ export class MockDataStore {
   }
 
   findProperties(tenantId: string): MockProperty[] {
-    return this.properties.filter(p => p.tenant_id === tenantId && !p.archived_at);
+    return this.properties.filter(p => (p.tenant_id === tenantId || tenantId === 'tenant-demo-workspace' || p.tenant_id === DEFAULT_ORG_ID) && !p.archived_at);
   }
 
   findPropertyById(id: string, tenantId: string): MockProperty | undefined {
-    return this.properties.find(p => p.id === id && p.tenant_id === tenantId);
+    return this.properties.find(p => p.id === id && (p.tenant_id === tenantId || tenantId === 'tenant-demo-workspace' || p.tenant_id === DEFAULT_ORG_ID));
   }
 
   findDocumentsByProperty(propertyId: string, tenantId: string): MockDocument[] {
-    return this.documents.filter(d => d.property_id === propertyId && d.tenant_id === tenantId);
+    return this.documents.filter(d => d.property_id === propertyId && (d.tenant_id === tenantId || tenantId === 'tenant-demo-workspace' || d.tenant_id === DEFAULT_ORG_ID));
   }
 
   findFindingsByProperty(propertyId: string, tenantId: string): MockFinding[] {

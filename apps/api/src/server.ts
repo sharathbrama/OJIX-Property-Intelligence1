@@ -64,7 +64,7 @@ import { demoReadPermissions, demoSessionExpiresAt, demoSessionIsActive, isDedic
 import { detectedDocumentMimeType, resolveDirectUploadLimit, resolveMultipartFileLimit, resolveUploadDirectory } from './upload-config.js';
 import { createMockPool } from './mock-pool.js';
 import { isMockMode, getMockStore } from './mock-data-store.js';
-import { demoSessionRepo, VALID_DEMO_ROLES, type DemoSessionWorkspace, type DemoProperty, type DemoStoredDocument } from './session-repository.js';
+import { demoSessionRepo, VALID_DEMO_ROLES, type DemoSessionWorkspace, type DemoProperty, type DemoStoredDocument, type DemoTask } from './session-repository.js';
 import { processDocumentWithOcr, executePythonTesseractOcr } from './demo-ocr-runner.js';
 
 
@@ -751,6 +751,54 @@ function viewerInternalDataGuard(req: Request, res: Response, next: NextFunction
 
 async function releasedMatterGuard(req: Request, res: Response, next: NextFunction) {
   const user = (req as AuthenticatedRequest).user;
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const prop = ws.properties.find(p => p.id === req.params.id);
+    if (!prop) return res.status(404).json({ error: 'Property not found.' });
+    if (['owner', 'admin', 'super_admin', 'support', 'data_steward'].includes(user?.role || '')) {
+      return next();
+    }
+    const uid = user?.uid || '';
+    if (user?.role === 'consultant') {
+      const isAssigned = prop.assigned_consultant_uid === uid ||
+        prop.assigned_consultant_uid === 'demo-user-consultant' ||
+        prop.assigned_consultant_uid === 'user-consultant';
+      if (!isAssigned) return res.status(404).json({ error: 'Assigned matter not found.' });
+      return next();
+    }
+    if (user?.role === 'viewer') {
+      const isReleased = ['approved', 'complete'].includes(prop.status);
+      const isAssigned = prop.assigned_viewer_uid === uid ||
+        prop.assigned_viewer_uid === 'demo-user-viewer' ||
+        prop.assigned_viewer_uid === 'user-viewer';
+      if (!isReleased || !isAssigned) {
+        return res.status(404).json({ error: 'Released matter not assigned to this Viewer.' });
+      }
+      return next();
+    }
+    if (user?.role === 'lawyer') {
+      const isAssigned = prop.assigned_lawyer_uid === uid ||
+        prop.assigned_lawyer_uid === 'demo-user-lawyer' ||
+        prop.assigned_lawyer_uid === 'user-lawyer';
+      if (!isAssigned) return res.status(404).json({ error: 'Assigned matter not found.' });
+      return next();
+    }
+    if (user?.role === 'analyst') {
+      const isAssigned = prop.assigned_analyst_uid === uid ||
+        prop.assigned_analyst_uid === 'demo-user-analyst' ||
+        prop.assigned_analyst_uid === 'user-analyst';
+      if (!isAssigned) return res.status(404).json({ error: 'Assigned matter not found.' });
+      return next();
+    }
+    if (user?.role === 'operations') {
+      const isAssigned = prop.assigned_operations_uid === uid ||
+        prop.assigned_operations_uid === 'demo-user-operations' ||
+        prop.assigned_operations_uid === 'user-operations';
+      if (!isAssigned) return res.status(404).json({ error: 'Assigned matter not found.' });
+      return next();
+    }
+    return next();
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   if (user?.role === 'consultant') {
     const assigned = await pool.query('SELECT id FROM properties WHERE id=? AND tenant_id=? AND assigned_consultant_uid=? LIMIT 1',[req.params.id,user.tenantId,user.uid]);
@@ -964,10 +1012,82 @@ async function recordWorkbenchActivity(tenantId: string, taskId: string, actorUi
   await audit(actorUid,tenantId,`workbench.${action}`,'workbench_task',taskId,details);
 }
 app.get('/api/workbench/members',authGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    return res.json({
+      items: [
+        { user_uid: 'demo-user-lawyer', role: 'lawyer', email: 'sharath.lawyer@ojix.in', full_name: 'Sharath — Senior Legal Reviewer' },
+        { user_uid: 'demo-user-analyst', role: 'analyst', email: 'sharath.analyst@ojix.in', full_name: 'Sharath — Evidence Analyst' },
+        { user_uid: 'demo-user-operations', role: 'operations', email: 'sharath.ops@ojix.in', full_name: 'Sharath — Document Operations' },
+      ]
+    });
+  }
   const result=await pool!.query("SELECT m.user_uid,m.role,m.email,COALESCE(u.full_name,m.email,m.user_uid) AS full_name FROM org_memberships m LEFT JOIN user_accounts u ON u.id=m.user_uid WHERE m.organization_id=? AND m.status='active' AND m.role IN ('owner','admin','lawyer','analyst') ORDER BY full_name",[req.user?.tenantId]);
   res.json({items:result.rows});
 }));
 app.get('/api/workbench/tasks',authGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const user = req.user;
+    const role = user?.role || '';
+    const uid = user?.uid || '';
+    let tasks = [...ws.tasks];
+
+    if (role === 'lawyer') {
+      tasks = tasks.filter(t => t.assigned_to_uid === uid || t.assigned_to_uid === 'demo-user-lawyer' || t.reviewer_uid === uid || t.reviewer_uid === 'demo-user-lawyer' || t.assigned_by_uid === uid);
+    } else if (role === 'analyst') {
+      tasks = tasks.filter(t => t.assigned_to_uid === uid || t.assigned_to_uid === 'demo-user-analyst' || t.reviewer_uid === uid);
+    } else if (role === 'operations') {
+      tasks = tasks.filter(t => t.assigned_to_uid === uid || t.assigned_to_uid === 'demo-user-operations');
+    }
+
+    const status = String(req.query.status || '');
+    if (status && status !== 'all') {
+      tasks = tasks.filter(t => t.status === status);
+    }
+    const category = String(req.query.category || '');
+    if (category) {
+      tasks = tasks.filter(t => t.category === category);
+    }
+    const priority = String(req.query.priority || '');
+    if (priority) {
+      tasks = tasks.filter(t => t.priority === priority);
+    }
+    const search = String(req.query.search || '').trim().toLowerCase();
+    if (search) {
+      tasks = tasks.filter(t =>
+        t.task_code.toLowerCase().includes(search) ||
+        t.title.toLowerCase().includes(search) ||
+        t.description.toLowerCase().includes(search)
+      );
+    }
+
+    const items = tasks.map(t => {
+      const p = ws.properties.find(x => x.id === t.property_id);
+      return {
+        ...t,
+        property_id: p?.id || t.property_id,
+        property_name: p?.name || 'Assigned Property',
+        application_number: p?.application_number || 'OJ-2026-BLR-001',
+        village: p?.village || 'Bengaluru',
+        survey_number: p?.survey_number || '45',
+        subdivision: p?.subdivision || '3A',
+        assignee_name: t.assigned_to_uid === 'demo-user-lawyer' ? 'Sharath — Senior Legal Reviewer' : t.assigned_to_uid === 'demo-user-analyst' ? 'Sharath — Evidence Analyst' : 'Sharath — Document Operations',
+        assigner_name: 'Sharath — Managing Partner',
+      };
+    });
+
+    const summary = {
+      total: ws.tasks.length,
+      my_count: items.length,
+      pending: items.filter(t => t.status === 'pending').length,
+      in_progress: items.filter(t => t.status === 'in_progress').length,
+      under_review: items.filter(t => t.status === 'under_review').length,
+      overdue: 0,
+      completed: items.filter(t => t.status === 'completed').length,
+    };
+
+    return res.json({ items, total: items.length, page: 1, limit: 50, summary });
+  }
   const scope=workbenchScope(req.user);const params:any[]=[...scope.params];const clauses=[scope.sql,'p.archived_at IS NULL'];
   const status=String(req.query.status||'');if(status&&status!=='all'&&workbenchStatuses.includes(status as any)){clauses.push('t.status=?');params.push(status);}
   const category=String(req.query.category||'');if(category){clauses.push('t.category=?');params.push(category);}
@@ -985,6 +1105,23 @@ app.get('/api/workbench/tasks',authGuard,asyncRoute(async(req,res)=>{
   res.json({items:rows.rows,total:Number(count.rows[0]?.total||0),page,limit,summary:summary.rows[0]});
 }));
 app.get('/api/workbench/tasks/:id',authGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const task = ws.tasks.find(t => t.id === req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found.' });
+    const p = ws.properties.find(x => x.id === task.property_id);
+    const item = {
+      ...task,
+      property_name: p?.name || 'Assigned Property',
+      application_number: p?.application_number || 'OJ-2026-BLR-001',
+      village: p?.village || 'Bengaluru',
+      survey_number: p?.survey_number || '45',
+      subdivision: p?.subdivision || '3A',
+      assignee_name: 'Sharath — Senior Reviewer',
+      assigner_name: 'Sharath — Managing Partner',
+    };
+    return res.json({ item, activity: [], comments: [] });
+  }
   const scope=workbenchScope(req.user);
   const task=await pool!.query(`SELECT t.*,p.name AS property_name,p.application_number,p.village,p.survey_number,p.subdivision,COALESCE(au.full_name,am.email,t.assigned_to_uid) AS assignee_name,COALESCE(bu.full_name,bm.email,t.assigned_by_uid) AS assigner_name FROM workbench_tasks t JOIN properties p ON p.id=t.property_id AND p.tenant_id=t.tenant_id LEFT JOIN org_memberships am ON am.organization_id=t.tenant_id AND am.user_uid=t.assigned_to_uid LEFT JOIN user_accounts au ON au.id=t.assigned_to_uid LEFT JOIN org_memberships bm ON bm.organization_id=t.tenant_id AND bm.user_uid=t.assigned_by_uid LEFT JOIN user_accounts bu ON bu.id=t.assigned_by_uid WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);
   if(!task.rowCount)return res.status(404).json({error:'Task not found.'});
@@ -995,10 +1132,20 @@ app.get('/api/workbench/tasks/:id',authGuard,asyncRoute(async(req,res)=>{
   res.json({item:task.rows[0],activity:activity.rows,comments:comments.rows});
 }));
 app.get('/api/workbench/tasks/:id/documents',authGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const task = ws.tasks.find(t => t.id === req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found.' });
+    const docs = ws.documents.filter(d => d.property_id === task.property_id);
+    return res.json({ items: docs });
+  }
   const scope=workbenchScope(req.user);const task=await pool!.query(`SELECT t.property_id FROM workbench_tasks t WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!task.rowCount)return res.status(404).json({error:'Task not found.'});
   const docs=await pool!.query("SELECT id,original_filename,doc_type,processing_status,created_at FROM documents WHERE property_id=? AND tenant_id=? AND governance_status='active' ORDER BY created_at DESC LIMIT 100",[task.rows[0].property_id,req.user?.tenantId]);res.json({items:docs.rows});
 }));
 app.post('/api/workbench/tasks/:id/evidence',authGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    return res.json({ success: true });
+  }
   const scope=workbenchScope(req.user);const task=await pool!.query(`SELECT t.id,t.property_id FROM workbench_tasks t WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!task.rowCount)return res.status(404).json({error:'Task not found.'});
   if(!['owner','admin','lawyer','analyst'].includes(req.user?.role||''))return res.status(403).json({error:'Evidence linking is not available for this role.'});
   const parsed=z.object({documentId:z.string().uuid()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Select a valid workspace document.'});
@@ -1006,6 +1153,31 @@ app.post('/api/workbench/tasks/:id/evidence',authGuard,asyncRoute(async(req,res)
   await pool!.query('UPDATE workbench_tasks SET linked_document_id=? WHERE id=? AND tenant_id=?',[parsed.data.documentId,req.params.id,req.user?.tenantId]);await recordWorkbenchActivity(req.user!.tenantId!,req.params.id,req.user!.uid,'evidence_linked',{documentId:parsed.data.documentId,filename:doc.rows[0].original_filename});res.json({success:true});
 }));
 app.post('/api/workbench/tasks',authGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const id = crypto.randomUUID();
+    const code = `OJX-${Date.now().toString(36).toUpperCase()}`;
+    const task: DemoTask = {
+      id,
+      tenant_id: ws.user.tenantId,
+      property_id: req.body.propertyId || ws.properties[0]?.id || 'prop-blr-001',
+      task_code: code,
+      title: req.body.title || 'Legal Due Diligence Task',
+      description: req.body.description || '',
+      category: req.body.category || 'legal',
+      priority: req.body.priority || 'medium',
+      status: 'pending',
+      due_date: req.body.dueDate || null,
+      assigned_to_uid: req.body.assignedToUid || 'demo-user-lawyer',
+      assigned_by_uid: req.user?.uid || 'demo-user-owner',
+      reviewer_uid: req.user?.uid || 'demo-user-owner',
+      checklist: (req.body.checklist || []).map((label: string, index: number) => ({ id: String(index + 1), label, done: false })),
+      created_at: new Date().toISOString().replace('T', ' ').replace('Z', ''),
+      updated_at: new Date().toISOString().replace('T', ' ').replace('Z', ''),
+    };
+    ws.tasks.unshift(task);
+    return res.status(201).json({ id, taskCode: code });
+  }
   if(!['owner','admin','lawyer'].includes(req.user?.role||''))return res.status(403).json({error:'Only a workspace administrator or legal reviewer can assign work.'});
   const parsed=z.object({propertyId:z.string().uuid(),title:z.string().trim().min(3).max(255),description:z.string().trim().max(5000).default(''),category:z.enum(workbenchCategories),priority:z.enum(['high','medium','low']).default('medium'),dueDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),assignedToUid:z.string().trim().min(1).max(191),reviewerUid:z.string().trim().max(191).optional(),linkedDocumentId:z.string().uuid().optional(),linkedFindingId:z.string().uuid().optional(),checklist:z.array(z.string().trim().min(1).max(255)).max(30).default([])}).safeParse(req.body);
   if(!parsed.success)return res.status(400).json({error:parsed.error.issues[0]?.message||'Invalid task details.'});
@@ -1019,6 +1191,24 @@ app.post('/api/workbench/tasks',authGuard,asyncRoute(async(req,res)=>{
   res.status(201).json({id,taskCode:code});
 }));
 app.patch('/api/workbench/tasks/:id',authGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const task = ws.tasks.find(t => t.id === req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found.' });
+    if (req.body.status) task.status = req.body.status;
+    if (req.body.priority) task.priority = req.body.priority;
+    if (req.body.dueDate !== undefined) task.due_date = req.body.dueDate;
+    if (req.body.assignedToUid) task.assigned_to_uid = req.body.assignedToUid;
+    if (req.body.checklistItemId && Array.isArray(task.checklist)) {
+      const item = task.checklist.find((x: any) => x.id === req.body.checklistItemId);
+      if (item) item.done = Boolean(req.body.checklistDone);
+    }
+    if (req.body.reviewDecision) {
+      task.status = req.body.reviewDecision === 'approve' ? 'completed' : 'in_progress';
+    }
+    task.updated_at = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    return res.json({ success: true });
+  }
   const scope=workbenchScope(req.user);const found=await pool!.query(`SELECT t.* FROM workbench_tasks t WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!found.rowCount)return res.status(404).json({error:'Task not found.'});
   const task=found.rows[0],isManager=['owner','admin'].includes(req.user?.role||''),isAssigned=task.assigned_to_uid===req.user?.uid,isReviewer=task.reviewer_uid===req.user?.uid||['owner','admin','lawyer'].includes(req.user?.role||'');
   const parsed=z.object({status:z.enum(workbenchStatuses).optional(),checklistItemId:z.string().max(40).optional(),checklistDone:z.boolean().optional(),priority:z.enum(['high','medium','low']).optional(),dueDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),assignedToUid:z.string().min(1).max(191).optional(),reviewDecision:z.enum(['approve','reject','corrections']).optional(),rationale:z.string().trim().max(1000).optional()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid task update.'});const c=parsed.data;
@@ -1031,6 +1221,9 @@ app.patch('/api/workbench/tasks/:id',authGuard,asyncRoute(async(req,res)=>{
   res.json({success:true});
 }));
 app.post('/api/workbench/tasks/:id/comments',authGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    return res.status(201).json({ success: true });
+  }
   const scope=workbenchScope(req.user);const task=await pool!.query(`SELECT t.id FROM workbench_tasks t WHERE t.id=? AND ${scope.sql}`,[req.params.id,...scope.params]);if(!task.rowCount)return res.status(404).json({error:'Task not found.'});const parsed=z.object({body:z.string().trim().min(1).max(3000)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Enter a comment of up to 3,000 characters.'});await pool!.query('INSERT INTO workbench_task_comments (id,tenant_id,task_id,author_uid,body) VALUES (?,?,?,?,?)',[crypto.randomUUID(),req.user?.tenantId,req.params.id,req.user?.uid,parsed.data.body]);await recordWorkbenchActivity(req.user!.tenantId!,req.params.id,req.user!.uid,'comment_added',{});res.status(201).json({success:true});
 }));
 
@@ -2420,13 +2613,48 @@ app.get('/api/properties', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
     const q = String(req.query.q || '').trim().toLowerCase();
+    const role = req.user?.role || '';
+    const uid = req.user?.uid || '';
     let filtered = ws.properties.filter(p => !p.archived_at);
+
+    if (role === 'viewer') {
+      filtered = filtered.filter(p =>
+        ['approved', 'complete'].includes(p.status) &&
+        (p.assigned_viewer_uid === uid || p.assigned_viewer_uid === 'demo-user-viewer' || p.assigned_viewer_uid === 'user-viewer')
+      );
+    } else if (role === 'consultant') {
+      filtered = filtered.filter(p =>
+        p.assigned_consultant_uid === uid ||
+        p.assigned_consultant_uid === 'demo-user-consultant' ||
+        p.assigned_consultant_uid === 'user-consultant'
+      );
+    } else if (role === 'lawyer') {
+      filtered = filtered.filter(p =>
+        p.assigned_lawyer_uid === uid ||
+        p.assigned_lawyer_uid === 'demo-user-lawyer' ||
+        p.assigned_lawyer_uid === 'user-lawyer'
+      );
+    } else if (role === 'analyst') {
+      filtered = filtered.filter(p =>
+        p.assigned_analyst_uid === uid ||
+        p.assigned_analyst_uid === 'demo-user-analyst' ||
+        p.assigned_analyst_uid === 'user-analyst'
+      );
+    } else if (role === 'operations') {
+      filtered = filtered.filter(p =>
+        p.assigned_operations_uid === uid ||
+        p.assigned_operations_uid === 'demo-user-operations' ||
+        p.assigned_operations_uid === 'user-operations'
+      );
+    }
+
     if (q) {
       filtered = filtered.filter(p =>
         p.name.toLowerCase().includes(q) ||
         p.application_number.toLowerCase().includes(q) ||
         p.survey_number.toLowerCase().includes(q) ||
         p.village.toLowerCase().includes(q) ||
+        p.district.toLowerCase().includes(q) ||
         p.address.toLowerCase().includes(q)
       );
     }
@@ -2511,11 +2739,11 @@ app.post('/api/properties', authGuard, writeGuard, asyncRoute(async (req, res) =
       status: 'in_review',
       workflow_priority: 'normal',
       due_date: null,
-      assigned_lawyer_uid: 'user-lawyer',
-      assigned_analyst_uid: 'user-analyst',
-      assigned_operations_uid: 'user-operations',
-      assigned_consultant_uid: 'user-consultant',
-      assigned_viewer_uid: 'user-viewer',
+      assigned_lawyer_uid: 'demo-user-lawyer',
+      assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations',
+      assigned_consultant_uid: 'demo-user-consultant',
+      assigned_viewer_uid: 'demo-user-viewer',
       archived_at: null,
       created_at: now,
       updated_at: now,
@@ -2699,6 +2927,55 @@ async function getWorkflowApprovalChecks(property: any, tenantId: string) {
 }
 
 app.get('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const property = ws.properties.find(p => p.id === req.params.id);
+    if (!property) return res.status(404).json({ error: 'Property not found.' });
+
+    const members = [
+      { uid: 'demo-user-lawyer', email: 'sharath.lawyer@ojix.in', role: 'lawyer', name: 'Sharath — Senior Legal Reviewer' },
+      { uid: 'demo-user-analyst', email: 'sharath.analyst@ojix.in', role: 'analyst', name: 'Sharath — Evidence Analyst' },
+      { uid: 'demo-user-operations', email: 'sharath.ops@ojix.in', role: 'operations', name: 'Sharath — Document Operations' },
+    ];
+
+    const propertyAuditEvents = ws.auditEvents
+      .filter(e => e.entity_id === property.id && e.action.includes('workflow'))
+      .map(e => ({
+        id: e.id,
+        property_id: property.id,
+        tenant_id: ws.user.tenantId,
+        actor_uid: e.actor_uid,
+        action: e.action,
+        status_before: e.details?.before?.status || property.status,
+        status_after: e.details?.after?.status || property.status,
+        reason: e.details?.reason || 'Workflow update',
+        created_at: e.created_at,
+      }));
+
+    const history = propertyAuditEvents.length > 0 ? propertyAuditEvents : [
+      {
+        id: 'hist-init-01',
+        property_id: property.id,
+        tenant_id: ws.user.tenantId,
+        actor_uid: 'demo-user-owner',
+        action: 'intake_initialized',
+        status_before: 'draft',
+        status_after: property.status,
+        reason: 'Initial application intake and workflow provisioning',
+        created_at: property.created_at,
+      }
+    ];
+
+    const docCount = ws.documents.filter(d => d.property_id === property.id).length;
+    const approvalChecks = {
+      ready: true,
+      blockers: [],
+      documentCount: docCount,
+      verifiedDocumentCount: docCount,
+    };
+
+    return res.json({ item: property, members, history, approvalChecks });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const property = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!property.rowCount) return res.status(404).json({ error: 'Property not found.' });
@@ -2713,9 +2990,72 @@ app.get('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res) =
 }));
 
 app.patch('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed = workflowUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid workflow update.', issues: parsed.error.flatten() });
+
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const property = ws.properties.find(p => p.id === req.params.id);
+    if (!property) return res.status(404).json({ error: 'Property not found.' });
+
+    const actorRole = req.user?.role || '';
+    const isGovernance = ['owner','admin'].includes(actorRole);
+    const isLegalReviewer = actorRole === 'lawyer';
+    if (!isGovernance && !isLegalReviewer) return res.status(403).json({ error: 'Workflow update is not available for this role.' });
+
+    const update = parsed.data;
+    const isLegalApproval = ['approved','complete'].includes(update.status);
+    if (isLegalApproval && !isLegalReviewer) {
+      return res.status(403).json({ error: 'Only the assigned Lawyer can record legal approval or release.' });
+    }
+    if (isLegalReviewer && (!isLegalApproval || (update.assignedLawyerUid && update.assignedLawyerUid !== req.user?.uid) || update.assignedAnalystUid || update.assignedOperationsUid)) {
+      return res.status(403).json({ error: 'Lawyers may only approve or release matters assigned to them; workspace assignment changes are restricted to Owner/Admin.' });
+    }
+
+    const before = {
+      status: property.status,
+      priority: property.workflow_priority,
+      dueDate: property.due_date,
+      assignedLawyerUid: property.assigned_lawyer_uid,
+      assignedAnalystUid: property.assigned_analyst_uid,
+      assignedOperationsUid: property.assigned_operations_uid,
+    };
+
+    property.status = update.status;
+    property.workflow_priority = update.priority;
+    property.due_date = update.dueDate || null;
+    if (isGovernance) {
+      if (update.assignedLawyerUid !== undefined) property.assigned_lawyer_uid = update.assignedLawyerUid || null;
+      if (update.assignedAnalystUid !== undefined) property.assigned_analyst_uid = update.assignedAnalystUid || null;
+      if (update.assignedOperationsUid !== undefined) property.assigned_operations_uid = update.assignedOperationsUid || null;
+    }
+    property.updated_at = new Date().toISOString().replace('T', ' ').replace('Z', '');
+
+    const after = {
+      status: property.status,
+      priority: property.workflow_priority,
+      dueDate: property.due_date,
+      assignedLawyerUid: property.assigned_lawyer_uid,
+      assignedAnalystUid: property.assigned_analyst_uid,
+      assignedOperationsUid: property.assigned_operations_uid,
+    };
+
+    const auditEvent = {
+      id: crypto.randomUUID(),
+      tenant_id: ws.user.tenantId,
+      actor_uid: req.user?.uid || 'demo-user-owner',
+      action: 'property.workflow_updated',
+      entity_type: 'property',
+      entity_id: property.id,
+      details: { before, after, reason: update.reason },
+      created_at: new Date().toISOString().replace('T', ' ').replace('Z', ''),
+    };
+    ws.auditEvents.unshift(auditEvent);
+
+    return res.json({ item: property });
+  }
+
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const actorRole = req.user?.role || '';
   const isGovernance = ['owner','admin'].includes(actorRole);
   const isLegalReviewer = actorRole === 'lawyer';
@@ -2781,6 +3121,35 @@ app.patch('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res)
 }));
 
 app.get('/api/properties/:id/parcels', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const property = ws.properties.find(p => p.id === req.params.id);
+    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    return res.json({
+      items: [
+        {
+          id: `parcel-${property.id}-1`,
+          property_id: property.id,
+          tenant_id: ws.user.tenantId,
+          sequence_no: 1,
+          is_primary: 1,
+          district: property.district,
+          taluk: property.taluk,
+          hobli: property.hobli,
+          village: property.village,
+          survey_number: property.survey_number,
+          subdivision: property.subdivision,
+          extent_raw: property.extent,
+          extent_value: property.extent_value,
+          extent_unit: property.extent_unit,
+          source_description: 'Revenue Record Extract',
+          fact_state: 'verified',
+          notes: property.notes,
+          created_at: property.created_at,
+        }
+      ]
+    });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const property = await pool.query('SELECT id FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!property.rowCount) return res.status(404).json({ error: 'Property not found.' });
@@ -2792,9 +3161,38 @@ app.get('/api/properties/:id/parcels', authGuard, asyncRoute(async (req, res) =>
 }));
 
 app.post('/api/properties/:id/parcels', authGuard, writeGuard, asyncRoute(async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const parsed = parcelReferenceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid parcel reference.', issues: parsed.error.flatten() });
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const property = ws.properties.find(p => p.id === req.params.id);
+    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    const p = parsed.data;
+    const id = crypto.randomUUID();
+    const item = {
+      id,
+      tenant_id: ws.user.tenantId,
+      property_id: property.id,
+      sequence_no: 2,
+      is_primary: 0,
+      district: p.district,
+      taluk: p.taluk,
+      hobli: p.hobli,
+      village: p.village,
+      survey_number: p.surveyNumber,
+      subdivision: p.subdivision,
+      extent_raw: p.extentRaw,
+      extent_value: p.extentValue ?? null,
+      extent_unit: p.extentUnit,
+      source_description: p.sourceDescription,
+      fact_state: p.factState,
+      notes: p.notes,
+      created_by_uid: req.user?.uid || 'demo-user-owner',
+      created_at: new Date().toISOString().replace('T', ' ').replace('Z', ''),
+    };
+    return res.status(201).json({ item });
+  }
+  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const property = await pool.query('SELECT id FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!property.rowCount) return res.status(404).json({ error: 'Property not found.' });
   const p = parsed.data;
@@ -3902,6 +4300,48 @@ const titleReviewSchema = z.object({
 });
 
 app.get('/api/properties/:id/title-chain', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const property = ws.properties.find(p => p.id === req.params.id);
+    if (!property) return res.status(404).json({ error: 'Property not found.' });
+
+    const rawEvents = (ws.titleEvents || []).filter(e => !e.property_id || e.property_id === property.id);
+    const events: TitleEvent[] = rawEvents.map((row: any, idx: number) => ({
+      id: row.id || `te-${idx + 1}`,
+      propertyId: property.id,
+      documentId: row.document_id || '',
+      sequenceOrder: idx + 1,
+      eventDate: row.event_year ? `${row.event_year}-01-01` : '2020-01-01',
+      registrationDate: row.event_year ? `${row.event_year}-01-15` : '2020-01-15',
+      deedType: row.event_type || 'sale_deed',
+      fromParties: [row.parties?.split(' to ')[0] || 'Prior Owner'],
+      toParties: [row.parties?.split(' to ')[1] || 'Current Owner'],
+      extentSqFt: property.extent_value || 2400,
+      extentRaw: property.extent || '2400 sq ft',
+      consideration: 4500000,
+      status: 'verified',
+      encumbranceStatus: 'none',
+    }));
+
+    const dag = buildTitleDAG(events);
+    const gaps = detectTitleGaps(events);
+
+    return res.json({
+      events,
+      dag,
+      gaps,
+      summary: {
+        totalEvents: events.length,
+        isAcyclic: dag.isAcyclic,
+        nodeCount: dag.nodes.length,
+        edgeCount: dag.edges.length,
+        gapCount: gaps.length,
+        verifiedCount: events.length,
+        disputedCount: 0,
+        unverifiedCount: 0,
+      },
+    });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const propertyRes = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!propertyRes.rowCount) return res.status(404).json({ error: 'Property not found.' });
@@ -4105,6 +4545,53 @@ app.post('/api/properties/:id/title-events/:eventId/review', authGuard, legalRev
 }));
 
 app.get('/api/properties/:id/spatial-screening', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const prop = ws.properties.find(p => p.id === req.params.id);
+    if (!prop) return res.status(404).json({ error: 'Property not found.' });
+    const findings = [
+      {
+        id: 'spatial-1',
+        layerType: 'swd_primary',
+        label: 'Primary SWD (Rajakaluve)',
+        distanceMeters: 45,
+        bufferRequiredMeters: 50,
+        status: 'buffer_warning',
+        notes: 'Parcel boundary is within 50m of primary Rajakaluve buffer zone.',
+      },
+      {
+        id: 'spatial-2',
+        layerType: 'waterbody',
+        label: 'Surveyed Lake Buffer',
+        distanceMeters: 120,
+        bufferRequiredMeters: 75,
+        status: 'clear',
+        notes: 'Outside 75m NGT lake buffer zone.',
+      }
+    ];
+    return res.json({
+      screeningStatus: 'screened',
+      message: 'Spatial screening completed against active Karnataka GIS layers.',
+      drainClearanceStatus: 'warning',
+      lakeClearanceStatus: 'clear',
+      findings,
+      cadastralParcelGeoJSON: {
+        type: 'Feature',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[
+            [prop.longitude || 77.5946, prop.latitude || 12.9716],
+            [(prop.longitude || 77.5946) + 0.001, prop.latitude || 12.9716],
+            [(prop.longitude || 77.5946) + 0.001, (prop.latitude || 12.9716) + 0.001],
+            [prop.longitude || 77.5946, (prop.latitude || 12.9716) + 0.001],
+            [prop.longitude || 77.5946, prop.latitude || 12.9716]
+          ]]
+        },
+        properties: { name: prop.name, surveyNumber: prop.survey_number }
+      },
+      georeferencedSnapshot: null,
+    });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query(
     'SELECT id, name, village, survey_number, latitude, longitude FROM properties WHERE id=? AND tenant_id=?',
@@ -4341,6 +4828,29 @@ app.get('/api/map/layers', authGuard, asyncRoute(async (_req, res) => {
 }));
 
 app.get('/api/properties/:id/discrepancies', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const p = ws.properties.find(x => x.id === req.params.id);
+    if (!p) return res.status(404).json({ error: 'Property not found.' });
+
+    const docs = ws.documents.filter(d => d.property_id === p.id);
+    const docItems = docs.map(r => ({
+      id: r.id,
+      originalFilename: r.original_filename,
+      classification: { documentType: r.doc_type || 'other' },
+      extractedFields: r.extracted_fields || {},
+    }));
+
+    const discrepancies = detectCrossDocumentDiscrepancies(docItems, p, {});
+    const riskSummary = calculateRiskScore(discrepancies.map(d => ({ severity: d.severity, points: d.points, code: d.code })));
+
+    return res.json({
+      propertyId: req.params.id,
+      discrepancies,
+      riskSummary,
+      count: discrepancies.length,
+    });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
@@ -4370,6 +4880,13 @@ app.get('/api/properties/:id/discrepancies', authGuard, asyncRoute(async (req, r
 }));
 
 app.post('/api/properties/:id/due-diligence-snapshot', authGuard, writeGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const p = ws.properties.find(x => x.id === req.params.id);
+    if (!p) return res.status(404).json({ error: 'Property not found.' });
+    const snapshotId = crypto.randomUUID();
+    return res.status(201).json({ snapshotId, success: true });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
