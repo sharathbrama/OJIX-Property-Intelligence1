@@ -522,6 +522,26 @@ function updateBrowserUrl(page: AppPage, propertyId?: string, replace = false) {
   );
 }
 
+const DEFAULT_DEMO_ACCOUNTS: UserAccount[] = [
+  { uid: 'demo-user-owner', email: 'owner@ojix.in', name: 'Sharath — Managing Partner', designation: 'Managing Partner', role: 'owner', avatar: 'RS', description: 'Workspace Owner' },
+  { uid: 'demo-user-admin', email: 'admin@ojix.in', name: 'Praveen Nair — Legal Admin', designation: 'Legal Operations Administrator', role: 'admin', avatar: 'PN', description: 'Firm Administrator' },
+  { uid: 'demo-user-lawyer', email: 'lawyer@ojix.in', name: 'Adv. Rajesh Iyer — Senior Counsel', designation: 'Senior Legal Reviewer', role: 'lawyer', avatar: 'AR', description: 'Senior Legal Counsel' },
+  { uid: 'demo-user-analyst', email: 'analyst@ojix.in', name: 'Priya Rao — Evidence Analyst', designation: 'Due Diligence Analyst', role: 'analyst', avatar: 'PR', description: 'Due Diligence Analyst' },
+  { uid: 'demo-user-operations', email: 'ops@ojix.in', name: 'Deepak Verma — Document Operations', designation: 'Document Intake Specialist', role: 'operations', avatar: 'DV', description: 'Document Operations' },
+  { uid: 'demo-user-consultant', email: 'consultant@ojix.in', name: 'Dr. Suresh Gowda — Property Consultant', designation: 'Property Consultant', role: 'consultant', avatar: 'SG', description: 'Property Consultant' },
+  { uid: 'demo-user-viewer', email: 'viewer@ojix.in', name: 'Rohan Mehta — Bank Officer', designation: 'Client Reviewer', role: 'viewer', avatar: 'RM', description: 'Client Reviewer' },
+  { uid: 'demo-user-super-admin', email: 'superadmin@ojix.in', name: 'Sharath — Super Admin', designation: 'Platform Administrator', role: 'super_admin', avatar: 'SA', description: 'Super Admin', isSuperAdmin: true },
+  { uid: 'demo-user-support', email: 'support@ojix.in', name: 'Kavita Menon — Technical Support', designation: 'Support Specialist', role: 'support', avatar: 'KM', description: 'Technical Support' },
+  { uid: 'demo-user-data-steward', email: 'datasteward@ojix.in', name: 'Arun Kumar — Data Steward', designation: 'Data Governance Steward', role: 'data_steward', avatar: 'AK', description: 'Data Steward' },
+  { uid: 'user-owner', email: 'mrsharath3126@gmail.com', name: 'Sharath — Owner', designation: 'Managing Partner', role: 'owner', avatar: 'RS', description: 'Workspace Owner' },
+  { uid: 'user-admin', email: 'mrsharath3126@gmail.com', name: 'Sharath — Admin', designation: 'Firm Administrator', role: 'admin', avatar: 'PN', description: 'Firm Administrator' },
+  { uid: 'user-lawyer', email: 'mrsharath3126@gmail.com', name: 'Sharath — Lawyer', designation: 'Senior Legal Reviewer', role: 'lawyer', avatar: 'AR', description: 'Senior Legal Counsel' },
+  { uid: 'user-analyst', email: 'mrsharath3126@gmail.com', name: 'Sharath — Analyst', designation: 'Due Diligence Analyst', role: 'analyst', avatar: 'PR', description: 'Due Diligence Analyst' },
+  { uid: 'user-operations', email: 'mrsharath3126@gmail.com', name: 'Sharath — Operations', designation: 'Document Intake Specialist', role: 'operations', avatar: 'DV', description: 'Document Operations' },
+  { uid: 'user-consultant', email: 'mrsharath3126@gmail.com', name: 'Sharath — Consultant', designation: 'Property Consultant', role: 'consultant', avatar: 'SG', description: 'Property Consultant' },
+  { uid: 'user-viewer', email: 'mrsharath3126@gmail.com', name: 'Sharath — Viewer', designation: 'Client Reviewer', role: 'viewer', avatar: 'RM', description: 'Client Reviewer' },
+];
+
 export default function App() {
   const isDedicatedLoginRoute = /^\/login(?:\/|$)/.test(window.location.pathname);
   const [publicDemoOpen, setPublicDemoOpen] = useState(() => /^\/demo\/?$/.test(window.location.pathname));
@@ -555,7 +575,7 @@ export default function App() {
     newPassword: "",
     confirmPassword: "",
   });
-  const [availableAccounts, setAvailableAccounts] = useState<UserAccount[]>([]);
+  const [availableAccounts, setAvailableAccounts] = useState<UserAccount[]>(() => DEFAULT_DEMO_ACCOUNTS);
   const [workspaces,setWorkspaces]=useState<WorkspaceChoice[]>([]);
   const [activeWorkspaceId,setActiveWorkspaceId]=useState(()=>localStorage.getItem('ojix_workspace_id')||'');
   const [sessionExpiredMessage, setSessionExpiredMessage] = useState(() =>
@@ -587,11 +607,12 @@ export default function App() {
   const [mobileNav, setMobileNav] = useState(false);
 
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
     fetch(`${API}/api/auth/dummy-accounts`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.accounts) setAvailableAccounts(data.accounts);
+        if (data.accounts && Array.isArray(data.accounts) && data.accounts.length > 0) {
+          setAvailableAccounts(data.accounts);
+        }
       })
       .catch(() => {});
   }, []);

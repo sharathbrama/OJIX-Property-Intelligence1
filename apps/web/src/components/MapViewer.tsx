@@ -725,7 +725,7 @@ export const MapViewer: React.FC<MapViewerProps> = ({ property, onGeometryUpdate
                   <div className={`gis-finding-card ${f.severity}`} key={`${f.code}-${i}`}>
                     <div className="finding-header">
                       <strong className="finding-code">{f.code}</strong>
-                      <span className={`severity-tag ${f.severity}`}>{f.severity.toUpperCase()}</span>
+                      <span className={`severity-tag ${f.severity || 'info'}`}>{(f.severity || 'info').toUpperCase()}</span>
                     </div>
                     <div className="finding-metrics">
                       <div className="metric-box">

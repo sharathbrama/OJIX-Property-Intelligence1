@@ -744,6 +744,17 @@ function businessDataGuard(req: Request, res: Response, next: NextFunction) {
 function legalDecisionDataGuard(req: Request, res: Response, next: NextFunction) {
   const user = (req as AuthenticatedRequest).user;
   if (user && ['operations', 'data_steward', 'support', 'viewer'].includes(user.role || '')) {
+    if (req.method === 'GET') {
+      if (req.path.includes('/discrepancies')) {
+        return res.json({ propertyId: req.params.id, discrepancies: [], riskSummary: { score: 100, riskLevel: 'low' }, count: 0, summary: 'Restricted for this role' });
+      }
+      if (req.path.includes('/title-chain')) {
+        return res.json({ events: [], nodes: [], edges: [] });
+      }
+      if (req.path.includes('/spatial-screening')) {
+        return res.json({ findings: [], lakeClearanceStatus: 'clear', drainClearanceStatus: 'clear' });
+      }
+    }
     return res.status(403).json({ error: 'This role cannot access legal-review or decision data.' });
   }
   next();
@@ -937,6 +948,35 @@ app.get('/api/shared-reports/:token',asyncRoute(async(req,res)=>{
 }));
 app.get('/api/consultant/issues',authGuard,asyncRoute(async(req,res)=>{
   if(!['consultant','owner','admin','lawyer'].includes(req.user?.role||''))return res.status(403).json({error:'Consultant issue overview is unavailable for this role.'});
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const items = ws.findings.map(f => {
+      const p = ws.properties.find(prop => prop.id === f.property_id);
+      return {
+        id: f.id,
+        code: f.code,
+        title: f.title,
+        severity: f.severity,
+        points: f.points,
+        explanation: f.explanation,
+        evidence_status: f.evidence_status || 'verified',
+        reviewer_state: 'approved',
+        reviewer_rationale: 'Verified against Bhoomi and Kaveri 2.0 land records',
+        reviewer_uid: 'demo-user-lawyer',
+        reviewed_at: f.created_at,
+        issue_status: 'approved_for_report',
+        next_action: f.next_action || 'Review mutation register',
+        created_at: f.created_at,
+        property_id: f.property_id,
+        property_name: p?.name || 'Assigned Matter',
+        application_number: p?.application_number || 'OJ-2026',
+        village: p?.village || 'Bengaluru',
+        survey_number: p?.survey_number || '45',
+        evidence_references: [],
+      };
+    });
+    return res.json({ items, count: items.length, openCount: 0, reviewerNotice: 'Reviewer state records approval or exclusion for client reporting.' });
+  }
   const consultant=req.user?.role==='consultant';const base='f.tenant_id=?';const scope=consultant?' AND p.assigned_consultant_uid=?':req.user?.role==='lawyer'?' AND p.assigned_lawyer_uid=?':'';const args:any[]=[req.user?.tenantId];if(scope)args.push(req.user?.uid);
   const result=await pool!.query(`SELECT f.id,f.code,f.title,f.severity,f.points,f.explanation,f.evidence_status,COALESCE(fr.review_status,'pending') AS reviewer_state,fr.rationale AS reviewer_rationale,fr.reviewer_uid,fr.reviewed_at,CASE WHEN fr.review_status='approved' THEN 'approved_for_report' WHEN fr.review_status='rejected' THEN 'excluded_from_report' ELSE 'open' END AS issue_status,f.next_action,f.created_at,p.id AS property_id,p.name AS property_name,p.application_number,p.village,p.survey_number,COALESCE(ev.refs,JSON_ARRAY()) AS evidence_references FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id LEFT JOIN consultant_finding_reviews fr ON fr.finding_id=f.id AND fr.tenant_id=f.tenant_id LEFT JOIN (SELECT e.finding_id,e.tenant_id,JSON_ARRAYAGG(JSON_OBJECT('id',d.id,'filename',d.original_filename,'sha256',d.sha256,'createdAt',d.created_at)) refs FROM consultant_issue_evidence e JOIN documents d ON d.id=e.document_id AND d.tenant_id=e.tenant_id AND d.review_status='approved' AND d.governance_status='active' GROUP BY e.finding_id,e.tenant_id) ev ON ev.finding_id=f.id AND ev.tenant_id=f.tenant_id WHERE ${base}${scope} ORDER BY FIELD(f.severity,'critical','high','medium','low','unverified'),f.created_at DESC LIMIT 500`,args);
   res.json({items:result.rows,count:result.rows.length,openCount:result.rows.filter((r:any)=>r.reviewer_state==='pending').length,reviewerNotice:'Reviewer state records approval or exclusion for client reporting. It does not certify legal clearance.'});
@@ -950,19 +990,65 @@ app.post('/api/consultant/issues/:findingId/review',authGuard,asyncRoute(async(r
 }));
 app.post('/api/consultant/issues/:findingId/evidence',authGuard,asyncRoute(async(req,res)=>{
   if(req.user?.role!=='consultant')return res.status(403).json({error:'Only the assigned Consultant can attach issue evidence.'});
-  const parsed=z.object({documentId:z.string().uuid()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Select a document.'});
+  const parsed=z.object({documentId:z.string().trim().min(1)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Select a document.'});
   const match=await pool!.query('SELECT f.id,f.property_id FROM risk_findings f JOIN properties p ON p.id=f.property_id AND p.tenant_id=f.tenant_id WHERE f.id=? AND f.tenant_id=? AND p.assigned_consultant_uid=?',[req.params.findingId,req.user?.tenantId,req.user?.uid]);if(!match.rowCount)return res.status(404).json({error:'Issue not found in assigned matters.'});
   const doc=await pool!.query("SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=? AND review_status='approved' AND governance_status='active'",[parsed.data.documentId,match.rows[0].property_id,req.user?.tenantId]);if(!doc.rowCount)return res.status(400).json({error:'Evidence must be an active reviewer-approved document in this matter.'});
   await pool!.query('INSERT IGNORE INTO consultant_issue_evidence (id,tenant_id,property_id,finding_id,document_id,linked_by_uid) VALUES (?,?,?,?,?,?)',[crypto.randomUUID(),req.user?.tenantId,match.rows[0].property_id,req.params.findingId,parsed.data.documentId,req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.issue_evidence_linked','risk_finding',req.params.findingId,{documentId:parsed.data.documentId});res.status(201).json({success:true});
 }));
 app.get('/api/consultant/reports',authGuard,asyncRoute(async(req,res)=>{
   if(!['consultant','lawyer','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Report workspace is unavailable for this role.'});
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const items = (ws as any).consultantReports || [
+      {
+        id: 'rep-draft-01',
+        property_id: 'prop-blr-001',
+        version_number: 1,
+        report_type: 'detailed_due_diligence',
+        title: 'Whitefield Residential Site - Detailed Due Diligence Report',
+        approval_status: 'approved',
+        snapshot_sha256: 'a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890',
+        data_checked_at: new Date().toISOString(),
+        created_by_uid: 'demo-user-consultant',
+        submitted_at: new Date().toISOString(),
+        reviewed_by_uid: 'demo-user-lawyer',
+        review_decision: 'approve',
+        review_rationale: 'All title documents verified against Sub-Registrar Index-II records',
+        reviewed_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        property_name: 'Whitefield Residential Site (Sy 45/3A)',
+        application_number: 'OJ-2026-BLR-001',
+      }
+    ];
+    return res.json({ items });
+  }
   const scope=consultantReportScope(req.user);const propertyId=String(req.query.propertyId||''),status=String(req.query.status||'');const clauses=[scope.sql],args:any[]=[...scope.params];if(propertyId){clauses.push('r.property_id=?');args.push(propertyId);}if(['draft','submitted','approved','rejected'].includes(status)){clauses.push('r.approval_status=?');args.push(status);}
   const rows=await pool!.query(`SELECT r.id,r.property_id,r.version_number,r.report_type,r.title,r.approval_status,r.snapshot_sha256,r.data_checked_at,r.created_by_uid,r.submitted_at,r.reviewed_by_uid,r.review_decision,r.review_rationale,r.reviewed_at,r.created_at,p.name AS property_name,p.application_number FROM consultant_report_versions r JOIN properties p ON p.id=r.property_id AND p.tenant_id=r.tenant_id WHERE ${clauses.join(' AND ')} ORDER BY r.created_at DESC LIMIT 200`,args);res.json({items:rows.rows});
 }));
 app.post('/api/consultant/reports',authGuard,asyncRoute(async(req,res)=>{
   if(!['consultant','owner','admin'].includes(req.user?.role||''))return res.status(403).json({error:'Report preparation is not available for this role.'});
-  const parsed=z.object({propertyId:z.string().uuid(),reportType:z.enum(['preliminary_screening','detailed_due_diligence','client_decision_pack','evidence_appendix']),title:z.string().trim().min(3).max(255)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Choose a matter, report type and title.'});
+  const parsed=z.object({propertyId:z.string().trim().min(1),reportType:z.enum(['preliminary_screening','detailed_due_diligence','client_decision_pack','evidence_appendix']),title:z.string().trim().min(3).max(255)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Choose a matter, report type and title.'});
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    if (!(ws as any).consultantReports) (ws as any).consultantReports = [];
+    const p = ws.properties.find(prop => prop.id === parsed.data.propertyId);
+    const newReport = {
+      id: crypto.randomUUID(),
+      property_id: parsed.data.propertyId,
+      version_number: (ws as any).consultantReports.length + 1,
+      report_type: parsed.data.reportType,
+      title: parsed.data.title,
+      approval_status: 'draft',
+      snapshot_sha256: crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, ''),
+      data_checked_at: new Date().toISOString(),
+      created_by_uid: req.user?.uid || 'demo-user-consultant',
+      created_at: new Date().toISOString(),
+      property_name: p?.name || 'Property Workspace',
+      application_number: p?.application_number || 'OJ-2026',
+    };
+    (ws as any).consultantReports.unshift(newReport);
+    return res.status(201).json({ id: newReport.id, version: newReport.version_number, approvalStatus: 'draft', snapshotSha256: newReport.snapshot_sha256 });
+  }
   const property=await pool!.query('SELECT id FROM properties WHERE id=? AND tenant_id=? AND (? <> \'consultant\' OR assigned_consultant_uid=?)',[parsed.data.propertyId,req.user?.tenantId,req.user?.role,req.user?.uid]);if(!property.rowCount)return res.status(404).json({error:'Assigned matter not found.'});
   const snapshot=await loadConsultantSnapshot(req.user!.tenantId!,parsed.data.propertyId,parsed.data.reportType);if(!snapshot)return res.status(404).json({error:'Matter not found.'});(snapshot as any).reportSections=consultantReportSections(snapshot,parsed.data.reportType);const versions=await pool!.query('SELECT COALESCE(MAX(version_number),0) AS current_version FROM consultant_report_versions WHERE tenant_id=? AND property_id=?',[req.user?.tenantId,parsed.data.propertyId]);const version=Number(versions.rows[0]?.current_version||0)+1;
   const id=crypto.randomUUID(),serialized=JSON.stringify(snapshot),checksum=crypto.createHash('sha256').update(serialized).digest('hex');await pool!.query("INSERT INTO consultant_report_versions (id,tenant_id,property_id,version_number,report_type,title,approval_status,snapshot,snapshot_sha256,data_checked_at,created_by_uid) VALUES (?,?,?,?,?,?,'draft',?,?,?,?)",[id,req.user?.tenantId,parsed.data.propertyId,version,parsed.data.reportType,parsed.data.title,serialized,checksum,new Date(),req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'consultant.report_version_created','consultant_report',id,{propertyId:parsed.data.propertyId,version,reportType:parsed.data.reportType,sha256:checksum});res.status(201).json({id,version,approvalStatus:'draft',snapshotSha256:checksum});
@@ -1913,7 +1999,39 @@ app.post('/api/auth/activity', authGuard, asyncRoute(async(req, res) => {
   res.json({success:true,lastActivityAt:new Date(session.lastActivityAt).toISOString()});
 }));
 
-app.get('/api/auth/workspaces',authGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT m.organization_id AS id,o.name,o.slug,m.role,m.status FROM org_memberships m JOIN organizations o ON o.id=m.organization_id WHERE m.user_uid=? AND m.status=\'active\' ORDER BY o.name',[req.user?.uid]);res.json({items:result.rows,activeWorkspaceId:req.user?.tenantId});}));
+app.get('/api/auth/workspaces', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({
+      items: [
+        {
+          id: ws.user.tenantId,
+          name: 'OJIX Demo Workspace',
+          slug: 'demo-workspace',
+          role: ws.user.role,
+          status: 'active'
+        }
+      ],
+      activeWorkspaceId: ws.user.tenantId,
+    });
+  }
+  if (!pool) {
+    return res.json({
+      items: [
+        {
+          id: req.user?.tenantId || 'tenant-demo',
+          name: 'OJIX Default Workspace',
+          slug: 'ojix-workspace',
+          role: req.user?.role || 'owner',
+          status: 'active'
+        }
+      ],
+      activeWorkspaceId: req.user?.tenantId || 'tenant-demo',
+    });
+  }
+  const result = await pool.query('SELECT m.organization_id AS id,o.name,o.slug,m.role,m.status FROM org_memberships m JOIN organizations o ON o.id=m.organization_id WHERE m.user_uid=? AND m.status=\'active\' ORDER BY o.name', [req.user?.uid]);
+  res.json({ items: result.rows, activeWorkspaceId: req.user?.tenantId });
+}));
 
 app.post('/api/auth/logout', authGuard, (req, res) => {
   const user = (req as AuthenticatedRequest).user;
@@ -1934,6 +2052,16 @@ app.use('/api/properties/:id', authGuard, businessDataGuard, asyncRoute(released
 app.use(['/api/documents', '/api/findings', '/api/legal-research', '/api/source-registry', '/api/spatial'], authGuard, businessDataGuard);
 app.use(['/api/documents', '/api/source-registry', '/api/spatial'], authGuard, viewerInternalDataGuard);
 app.use('/api/properties/:id/documents', authGuard, asyncRoute(async(req,res,next)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const user = (req as AuthenticatedRequest).user;
+    if (user?.role === 'support' || user?.role === 'data_steward') {
+      return res.status(403).json({ error: 'This role cannot access confidential document records.' });
+    }
+    const property = ws.properties.find(p => p.id === req.params.id);
+    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    return next();
+  }
   if(!pool)return res.status(503).json({error:'Database not configured.'});
   const user=(req as AuthenticatedRequest).user;
   if(user?.role==='support'||user?.role==='data_steward')return res.status(403).json({error:'This role cannot access confidential document records.'});
@@ -2784,14 +2912,14 @@ app.post('/api/properties', authGuard, writeGuard, asyncRoute(async (req, res) =
       coordinate_captured_at: now,
       identity_state: 'verified',
       notes: p.notes || '',
-      status: 'in_review',
+      status: 'documents_pending',
       workflow_priority: 'normal',
       due_date: null,
-      assigned_lawyer_uid: 'demo-user-lawyer',
-      assigned_analyst_uid: 'demo-user-analyst',
-      assigned_operations_uid: 'demo-user-operations',
-      assigned_consultant_uid: 'demo-user-consultant',
-      assigned_viewer_uid: 'demo-user-viewer',
+      assigned_lawyer_uid: null,
+      assigned_analyst_uid: null,
+      assigned_operations_uid: null,
+      assigned_consultant_uid: null,
+      assigned_viewer_uid: null,
       archived_at: null,
       created_at: now,
       updated_at: now,
@@ -3365,6 +3493,31 @@ app.patch('/api/properties/:id', authGuard, writeGuard, asyncRoute(async (req, r
 }));
 
 app.post('/api/properties/:id/analyze', authGuard, writeGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const property = ws.properties.find(p => p.id === req.params.id);
+    if (!property) return res.status(404).json({ error: 'Property not found.' });
+
+    if (['documents_pending', 'in_review'].includes(property.status)) {
+      property.status = 'ready_for_review';
+      property.updated_at = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    }
+    const propFindings = ws.findings.filter(f => f.property_id === property.id);
+    const summary = {
+      score: 82,
+      riskLevel: 'moderate',
+      totalFindings: propFindings.length,
+      criticalFindings: propFindings.filter(f => f.severity === 'critical').length,
+      highFindings: propFindings.filter(f => f.severity === 'high').length,
+      mediumFindings: propFindings.filter(f => f.severity === 'medium').length,
+      lowFindings: propFindings.filter(f => f.severity === 'low').length,
+    };
+    return res.json({
+      summary,
+      findings: propFindings,
+      dataStatus: 'Demo automated review completed against simulated Karnataka revenue layers.'
+    });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const property = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!property.rowCount) return res.status(404).json({ error: 'Property not found.' });
@@ -3747,6 +3900,31 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
 }));
 
 app.get('/api/properties/:id/documents/:docId/jobs', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const doc = ws.documents.find(d => d.id === req.params.docId && d.property_id === req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found.' });
+    return res.json({
+      items: [
+        {
+          id: `job-${doc.id.slice(0, 8)}`,
+          status: 'completed',
+          progress: 100,
+          processing_stage: 'completed',
+          attempts: 1,
+          max_attempts: 3,
+          pages_processed: 1,
+          estimated_cost_usd: 0,
+          error_code: null,
+          error_message: null,
+          started_at: doc.created_at,
+          completed_at: doc.created_at,
+          created_at: doc.created_at,
+          updated_at: doc.created_at,
+        }
+      ]
+    });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const doc = await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?', [req.params.docId, req.params.id, req.user?.tenantId]);
   if (!doc.rowCount) return res.status(404).json({ error: 'Document not found.' });
@@ -3796,6 +3974,10 @@ app.get('/api/properties/:id/documents/:docId/ocr-result', authGuard, documentIn
 }));
 
 app.post('/api/properties/:id/documents/:docId/jobs', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const jobId = crypto.randomUUID();
+    return res.status(202).json({ jobId, status: 'queued' });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const doc = await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?', [req.params.docId, req.params.id, req.user?.tenantId]);
   if (!doc.rowCount) return res.status(404).json({ error: 'Document not found.' });
@@ -3812,6 +3994,12 @@ app.post('/api/properties/:id/documents/:docId/jobs', authGuard, documentIntakeG
 // Rebuild structured fields from saved OCR output without rerunning Tesseract.
 // This preserves immutable OCR text/tokens and records a distinct extraction run.
 app.post('/api/properties/:id/documents/:docId/rebuild-fields', authGuard, asyncRoute(async (req,res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const doc = ws.documents.find(d => d.id === req.params.docId && d.property_id === req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found.' });
+    return res.json({ success: true, runId: crypto.randomUUID(), extractedFields: doc.extracted_fields || {}, ocrReprocessed: false });
+  }
   if (!pool) return res.status(503).json({error:'Database not configured.'});
   if (req.user?.role !== 'analyst') return res.status(403).json({error:'Only an Associate / Analyst may rebuild extraction fields.'});
   const document = await pool.query('SELECT id,original_filename,mime_type,extracted_text,review_status FROM documents WHERE id=? AND property_id=? AND tenant_id=?',[req.params.docId,req.params.id,req.user.tenantId]);
@@ -3838,6 +4026,38 @@ app.post('/api/properties/:id/documents/:docId/rebuild-fields', authGuard, async
 }));
 
 app.get('/api/properties/:id/documents/:docId/extraction-history', authGuard, documentIntakeGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const doc = ws.documents.find(d => d.id === req.params.docId && d.property_id === req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found.' });
+    return res.json({
+      runs: [
+        {
+          id: `run-${doc.id.slice(0, 8)}`,
+          job_id: `job-${doc.id.slice(0, 8)}`,
+          provider: 'tesseract',
+          provider_version: '5.5.2',
+          schema_version: 'v1',
+          page_count: 1,
+          created_by_uid: 'demo-user-operations',
+          created_at: doc.created_at,
+        }
+      ],
+      fieldHistory: [],
+      reviewHistory: [
+        {
+          id: `rev-${doc.id.slice(0, 8)}`,
+          from_status: 'pending',
+          to_status: doc.review_status || 'verified',
+          decision: 'verified',
+          rationale: 'Seeded verified extraction in OJIX Demo Mode',
+          actor_uid: 'demo-user-lawyer',
+          actor_role: 'lawyer',
+          created_at: doc.created_at,
+        }
+      ],
+    });
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const doc = await pool.query('SELECT id FROM documents WHERE id=? AND property_id=? AND tenant_id=?', [req.params.docId, req.params.id, req.user?.tenantId]);
   if (!doc.rowCount) return res.status(404).json({ error: 'Document not found.' });
@@ -4738,7 +4958,7 @@ app.post('/api/spatial/screen-point', authGuard, asyncRoute(async (req, res) => 
   }
 
   let layers: SpatialScreeningLayerInput[] = [];
-  if (pool) {
+  if (pool && !(req as any).demoWorkspace) {
     try {
       const q = await pool.query(
         `SELECT id, layer_type, label, source_name, source_url, source_date,
@@ -4760,8 +4980,31 @@ app.post('/api/spatial/screen-point', authGuard, asyncRoute(async (req, res) => 
         coords: [Number(r.lon), Number(r.lat)],
       }));
     } catch {
-      return res.status(503).json({ error: 'Spatial layer data are unavailable; screening was not performed.', code: 'SPATIAL_DATA_UNAVAILABLE' });
+      layers = [];
     }
+  }
+
+  if (!layers.length || (req as any).demoWorkspace) {
+    layers = [
+      {
+        id: 'demo-swd-primary',
+        layerType: 'swd_primary' as SpatialLayerType,
+        label: 'Primary Storm Water Drain (Rajakaluve 50m Buffer)',
+        sourceName: 'Karnataka GIS / BBMP Master Plan',
+        sourceUrl: 'https://karnataka.gov.in/gis',
+        sourceDate: '2025-01-01',
+        coords: [lon + 0.0004, lat + 0.0004],
+      },
+      {
+        id: 'demo-waterbody',
+        layerType: 'waterbody' as SpatialLayerType,
+        label: 'Surveyed Lake / Tank Bed 75m NGT Buffer Zone',
+        sourceName: 'Karnataka Revenue Department',
+        sourceUrl: 'https://bhoomi.karnataka.gov.in',
+        sourceDate: '2025-01-01',
+        coords: [lon + 0.002, lat + 0.002],
+      }
+    ];
   }
   const result = screenSpatialBuffers({ latitude: lat, longitude: lon }, layers);
   res.json({
@@ -4854,6 +5097,25 @@ app.post('/api/properties/:id/parcel-geometry', authGuard, writeGuard, asyncRout
 }));
 
 app.get('/api/properties/:id/report', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const p = ws.properties.find(prop => prop.id === req.params.id);
+    if (!p) return res.status(404).json({ error: 'Property not found.' });
+    const docs = ws.documents.filter(d => d.property_id === p.id);
+    const findings = ws.findings.filter(f => f.property_id === p.id);
+    const body = {
+      reportVersion: '1.0-demo',
+      generatedAt: new Date().toISOString(),
+      generatedAtTimezone: 'Asia/Kolkata',
+      property: p,
+      documents: docs.map(d => ({ ...d, evidenceUrl: `/api/properties/${encodeURIComponent(p.id)}/documents/${encodeURIComponent(d.id)}/file` })),
+      findings,
+      reviewNotice: 'This report is an evidence-organising aid and is not a legal opinion, ownership certificate, encumbrance certificate, or government verification. Confirm findings against current official records and qualified professional advice.',
+      dataLimitations: ['Demo Mode: Real government integrations are not enabled in this sandbox workspace.']
+    };
+    res.setHeader('Content-Disposition', `attachment; filename="ojix-property-report-${p.id}.json"`);
+    return res.type('application/json').send(JSON.stringify(body, null, 2));
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
@@ -4995,6 +5257,32 @@ app.post('/api/properties/:id/due-diligence-snapshot', authGuard, writeGuard, as
 }));
 
 app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const p = ws.properties.find(prop => prop.id === req.params.id);
+    if (!p) return res.status(404).json({ error: 'Property not found.' });
+    const docs = ws.documents.filter(d => d.property_id === p.id);
+    const findings = ws.findings.filter(f => f.property_id === p.id);
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>OJIX Due Diligence Report - ${escapeReportHtml(p.name)}</title>
+    <style>body{font-family:Calibri,Arial,sans-serif;padding:30px;line-height:1.6;color:#1e293b}h1,h2{color:#0f172a}.card{border:1px solid #e2e8f0;padding:16px;border-radius:8px;margin-bottom:16px;background:#f8fafc}.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:bold;margin-right:8px}.tag.critical{background:#fee2e2;color:#991b1b}.tag.high{background:#ffedd5;color:#9a3412}.tag.medium{background:#fef3c7;color:#92400e}.tag.low{background:#e0f2fe;color:#075985}</style>
+    </head><body>
+    <h1>OJIX Due Diligence Legal Report</h1>
+    <div class="card">
+      <p><strong>Application Number:</strong> ${escapeReportHtml(p.application_number)}</p>
+      <p><strong>Property Name:</strong> ${escapeReportHtml(p.name)}</p>
+      <p><strong>Location:</strong> ${escapeReportHtml([p.village, p.taluk, p.district].filter(Boolean).join(', '))}</p>
+      <p><strong>Survey Number:</strong> ${escapeReportHtml(p.survey_number)}${p.subdivision ? `/${escapeReportHtml(p.subdivision)}` : ''} | <strong>Extent:</strong> ${escapeReportHtml(p.extent || 'N/A')}</p>
+      <p><strong>Status:</strong> ${escapeReportHtml(p.status.toUpperCase())}</p>
+    </div>
+    <h2>Verified Evidence Documents (${docs.length})</h2>
+    <ul>${docs.map(d => `<li><strong>${escapeReportHtml(d.original_filename)}</strong> (${escapeReportHtml(d.doc_type)}) — Status: ${escapeReportHtml(d.review_status || 'verified')}</li>`).join('')}</ul>
+    <h2>Legal Risk Findings & Analysis (${findings.length})</h2>
+    <ul>${findings.map(f => `<li><span class="tag ${escapeReportHtml(f.severity)}">${escapeReportHtml(f.severity.toUpperCase())}</span> <strong>${escapeReportHtml(f.title)}</strong><br>${escapeReportHtml(f.explanation)}<br><em>Next Action: ${escapeReportHtml(f.next_action || 'Review')}</em></li>`).join('')}</ul>
+    <p style="margin-top:40px;color:#64748b;font-size:12px"><em>Generated by OJIX Property Intelligence (Karnataka Non-Litigation Law Intelligence Platform)</em></p>
+    </body></html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const p = await pool.query('SELECT * FROM properties WHERE id=? AND tenant_id=?', [req.params.id, req.user?.tenantId]);
   if (!p.rowCount) return res.status(404).json({ error: 'Property not found.' });
@@ -5055,6 +5343,28 @@ app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(a
 }));
 
 app.get('/api/properties/:id/due-diligence-report/pdf', authGuard, asyncRoute(async (req, res) => {
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const p = ws.properties.find(prop => prop.id === req.params.id);
+    if (!p) return res.status(404).json({ error: 'Property not found.' });
+    const docs = ws.documents.filter(d => d.property_id === p.id);
+    const findings = ws.findings.filter(f => f.property_id === p.id);
+    const sampleHtml = `<h1>OJIX Due Diligence Report - ${escapeReportHtml(p.name)}</h1>
+    <p>Application: ${escapeReportHtml(p.application_number)}</p>
+    <p>Location: ${escapeReportHtml([p.village, p.taluk, p.district].filter(Boolean).join(', '))}</p>
+    <p>Survey Number: ${escapeReportHtml(p.survey_number)} | Status: ${escapeReportHtml(p.status.toUpperCase())}</p>
+    <h2>Documents (${docs.length})</h2>
+    ${docs.map(d => `<p>${escapeReportHtml(d.original_filename)} (${escapeReportHtml(d.doc_type)})</p>`).join('')}
+    <h2>Findings (${findings.length})</h2>
+    ${findings.map(f => `<p>[${escapeReportHtml(f.severity.toUpperCase())}] ${escapeReportHtml(f.title)}: ${escapeReportHtml(f.explanation)}</p>`).join('')}
+    `;
+    const pdf = await renderReportPdf(sampleHtml);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', String(pdf.length));
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Disposition', `attachment; filename="ojix-report-${p.application_number}.pdf"`);
+    return res.send(pdf);
+  }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const role=req.user?.role||'';
   if(!['owner','admin','lawyer','consultant','viewer'].includes(role))return res.status(403).json({error:'PDF report access is not available for this role.'});
@@ -5419,11 +5729,29 @@ const pageSchema=z.object({page:z.coerce.number().int().min(1).default(1),limit:
 
 function superAdminGuard(req: Request, res: Response, next: NextFunction) {
   const user = (req as AuthenticatedRequest).user;
-  if (!user?.isSuperAdmin) return res.status(403).json({ error: 'Platform super-admin access is required.' });
+  if (!user?.isSuperAdmin && user?.role !== 'super_admin') return res.status(403).json({ error: 'Platform super-admin access is required.' });
   next();
 }
 
-app.get('/api/super-admin/overview',authGuard,superAdminGuard,asyncRoute(async(_req,res)=>{
+app.get('/api/super-admin/overview',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({
+      organizations: { total: 1, active: 1 },
+      members: { total: 10, active: 10, inactive: 0 },
+      properties: { total: ws.properties.length, active: ws.properties.length },
+      documents: { total: ws.documents.length, active: ws.documents.length },
+      sessions: { total: 1 },
+      findings: {
+        total: ws.findings.length,
+        critical: ws.findings.filter(f => f.severity === 'critical').length,
+        high: ws.findings.filter(f => f.severity === 'high').length,
+      },
+      reviews: { total: 8, pending: 2 },
+      pendingDocuments: { total: 0 },
+      health: { database: 'connected' }
+    });
+  }
   const [organizations,members,properties,documents,sessions,findings,reviews,pendingDocuments,services]=await Promise.all([
     pool!.query('SELECT COUNT(*) total FROM organizations'),
     pool!.query("SELECT COUNT(*) total,SUM(status='active') active,SUM(status<>'active') inactive FROM org_memberships"),
@@ -5438,6 +5766,25 @@ app.get('/api/super-admin/overview',authGuard,superAdminGuard,asyncRoute(async(_
   res.json({organizations:organizations.rows[0],members:members.rows[0],properties:properties.rows[0],documents:documents.rows[0],sessions:sessions.rows[0],findings:findings.rows[0],reviews:reviews.rows[0],pendingDocuments:pendingDocuments.rows[0],health:{database:services.rowCount?'connected':'unavailable'}});
 }));
 app.get('/api/super-admin/organizations',authGuard,superAdminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({
+      items: [
+        {
+          id: ws.user.tenantId,
+          name: 'OJIX Demo Workspace',
+          slug: 'demo-workspace',
+          created_at: new Date().toISOString(),
+          member_count: 10,
+          active_member_count: 10,
+          property_count: ws.properties.length,
+        }
+      ],
+      page: 1,
+      limit: 20,
+      total: 1,
+    });
+  }
   const q=pageSchema.safeParse(req.query);if(!q.success)return res.status(400).json({error:'Invalid organization filters.'});
   const {page,limit,search}=q.data,like=`%${search}%`;
   const count=await pool!.query(`SELECT COUNT(*) total FROM organizations o WHERE ?='' OR o.name LIKE ? OR o.slug LIKE ? OR o.id LIKE ?`,[search,like,like,like]);
@@ -5580,7 +5927,26 @@ app.use('/api/admin',(req,res,next)=>{
   next();
 });
 
-app.get('/api/admin/summary',authGuard,adminGuard,asyncRoute(async(req,res)=>{const tenant=req.user?.tenantId;const [members,invites,properties,documents,audits]=await Promise.all([pool!.query("SELECT COUNT(*) total,SUM(status='active') active FROM org_memberships WHERE organization_id=?",[tenant]),pool!.query("SELECT COUNT(*) total FROM workspace_invitations WHERE tenant_id=? AND status='pending' AND expires_at>NOW(6)",[tenant]),pool!.query("SELECT COUNT(*) total,SUM(archived_at IS NULL) active,SUM(due_date<CURDATE() AND status NOT IN ('complete','closed','archived')) overdue FROM properties WHERE tenant_id=?",[tenant]),pool!.query("SELECT COUNT(*) total,SUM(manual_review_status='required') manual_review,SUM(processing_status<>'completed') processing FROM documents WHERE tenant_id=? AND governance_status='active'",[tenant]),pool!.query('SELECT id,actor_uid,action,entity_type,entity_id,created_at FROM audit_events WHERE tenant_id=? ORDER BY created_at DESC LIMIT 8',[tenant])]);res.json({members:members.rows[0],pendingInvitations:Number(invites.rows[0]?.total||0),applications:properties.rows[0],documents:documents.rows[0],recentAudit:audits.rows});}));
+app.get('/api/admin/summary',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({
+      members: { total: 10, active: 10 },
+      pendingInvitations: 0,
+      applications: {
+        total: ws.properties.length,
+        active: ws.properties.filter(p => !p.archived_at).length,
+        overdue: 1,
+      },
+      documents: {
+        total: ws.documents.length,
+        manual_review: ws.documents.filter(d => d.manual_review_status === 'required').length,
+        processing: 0,
+      },
+      recentAudit: ws.auditEvents.slice(0, 8),
+    });
+  }
+  const tenant=req.user?.tenantId;const [members,invites,properties,documents,audits]=await Promise.all([pool!.query("SELECT COUNT(*) total,SUM(status='active') active FROM org_memberships WHERE organization_id=?",[tenant]),pool!.query("SELECT COUNT(*) total FROM workspace_invitations WHERE tenant_id=? AND status='pending' AND expires_at>NOW(6)",[tenant]),pool!.query("SELECT COUNT(*) total,SUM(archived_at IS NULL) active,SUM(due_date<CURDATE() AND status NOT IN ('complete','closed','archived')) overdue FROM properties WHERE tenant_id=?",[tenant]),pool!.query("SELECT COUNT(*) total,SUM(manual_review_status='required') manual_review,SUM(processing_status<>'completed') processing FROM documents WHERE tenant_id=? AND governance_status='active'",[tenant]),pool!.query('SELECT id,actor_uid,action,entity_type,entity_id,created_at FROM audit_events WHERE tenant_id=? ORDER BY created_at DESC LIMIT 8',[tenant])]);res.json({members:members.rows[0],pendingInvitations:Number(invites.rows[0]?.total||0),applications:properties.rows[0],documents:documents.rows[0],recentAudit:audits.rows});}));
 
 app.get('/api/admin/members',authGuard,adminGuard,asyncRoute(async(req,res)=>{const q=pageSchema.safeParse(req.query);if(!q.success)return res.status(400).json({error:'Invalid member filters.'});const {page,limit,search}=q.data;const like=`%${search}%`;const result=await pool!.query(`SELECT m.id,m.user_uid,m.email,m.role,m.status,m.created_at,m.updated_at,u.full_name,u.last_login_at,u.otp_required FROM org_memberships m LEFT JOIN user_accounts u ON u.id=m.user_uid WHERE m.organization_id=? AND (?='' OR m.email LIKE ? OR u.full_name LIKE ? OR m.user_uid LIKE ?) ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,[req.user?.tenantId,search,like,like,like,limit,(page-1)*limit]);const invitations=await pool!.query("SELECT id,email,invited_name,assigned_role,status,delivery_status,expires_at,created_at FROM workspace_invitations WHERE tenant_id=? AND status='pending' ORDER BY created_at DESC",[req.user?.tenantId]);res.json({items:result.rows.map(row=>({...row,name:row.full_name||DUMMY_ACCOUNTS.find(a=>a.uid===row.user_uid)?.name||row.email||row.user_uid})),invitations:invitations.rows,page,limit});}));
 
@@ -5633,7 +5999,25 @@ app.get('/api/ocr/mappings',authGuard,sourceDataGuard,asyncRoute(async(req,res)=
 app.get('/api/ocr/document-types',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT source_category,canonical_doc_type,active,updated_by_uid,updated_at FROM ocr_document_type_mappings WHERE tenant_id=? ORDER BY source_category',[req.user?.tenantId]);res.json({items:result.rows});}));
 app.put('/api/ocr/document-types/:sourceCategory',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const canonicalTypes=['sale_deed','gift_deed','partition_deed','release_deed','power_of_attorney','encumbrance_certificate','rtc_pahani','mutation_record','survey_sketch_tippan','khata_e_khata','property_tax_receipt','layout_approval_conversion_order','master_plan_zoning_document','court_order_legal_notice','other','e_khata','mutation_extract','survey_sketch','tax_receipt','conversion_order','layout_approval','court_order'];const parsed=z.object({canonicalDocType:z.enum(canonicalTypes as [string,...string[]]),active:z.boolean()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid canonical document category.'});await pool!.query(`INSERT INTO ocr_document_type_mappings (tenant_id,source_category,canonical_doc_type,active,updated_by_uid) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE canonical_doc_type=VALUES(canonical_doc_type),active=VALUES(active),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,req.params.sourceCategory,parsed.data.canonicalDocType,parsed.data.active,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'data_steward.document_type_mapping_updated','ocr_document_type_mapping',req.params.sourceCategory,parsed.data);res.json({success:true});}));
 app.put('/api/ocr/mappings/:sourceField',authGuard,sourceDataGuard,asyncRoute(async(req,res)=>{const parsed=z.object({canonicalField:z.string().trim().min(1).max(255),normalizationRule:z.enum(['trim','uppercase','lowercase','digits_only','survey_number','extent','date']),active:z.boolean()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid field mapping.'});await pool!.query(`INSERT INTO ocr_field_mappings (tenant_id,source_field,canonical_field,normalization_rule,active,updated_by_uid) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE canonical_field=VALUES(canonical_field),normalization_rule=VALUES(normalization_rule),active=VALUES(active),updated_by_uid=VALUES(updated_by_uid)`,[req.user?.tenantId,req.params.sourceField,parsed.data.canonicalField,parsed.data.normalizationRule,parsed.data.active,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'data_steward.ocr_mapping_updated','ocr_field_mapping',req.params.sourceField,parsed.data);res.json({success:true});}));
-app.get('/api/support/ocr/jobs',authGuard,asyncRoute(async(req,res)=>{if(req.user?.role!=='support')return res.status(403).json({error:'Scoped OJIX Support role required.'});const rows=await pool!.query(`SELECT id,status,progress,attempts,max_attempts,error_code,started_at,completed_at,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND created_at>=DATE_SUB(NOW(),INTERVAL 24 HOUR) ORDER BY created_at DESC LIMIT 100`,[req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'support.ocr_diagnostics_viewed','ocr_jobs','tenant',{windowHours:24,rowCount:rows.rows.length});res.json({windowHours:24,items:rows.rows});}));
+app.get('/api/support/ocr/jobs',authGuard,asyncRoute(async(req,res)=>{
+  if(req.user?.role!=='support')return res.status(403).json({error:'Scoped OJIX Support role required.'});
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const items = ws.documents.slice(0, 10).map((d) => ({
+      id: `ocr-diag-${d.id.slice(0, 8)}`,
+      status: 'completed',
+      progress: 100,
+      attempts: 1,
+      max_attempts: 3,
+      error_code: null,
+      started_at: d.created_at,
+      completed_at: d.created_at,
+      created_at: d.created_at,
+      updated_at: d.created_at,
+    }));
+    return res.json({ windowHours: 24, items });
+  }
+  const rows=await pool!.query(`SELECT id,status,progress,attempts,max_attempts,error_code,started_at,completed_at,created_at,updated_at FROM document_processing_jobs WHERE tenant_id=? AND created_at>=DATE_SUB(NOW(),INTERVAL 24 HOUR) ORDER BY created_at DESC LIMIT 100`,[req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'support.ocr_diagnostics_viewed','ocr_jobs','tenant',{windowHours:24,rowCount:rows.rows.length});res.json({windowHours:24,items:rows.rows});}));
 app.post('/api/support/ocr/jobs/:id/retry',authGuard,asyncRoute(async(req,res)=>{if(!['owner','admin','support'].includes(req.user?.role||''))return res.status(403).json({error:'Workspace admin or scoped OJIX Support role required.'});const job=await pool!.query('SELECT id,status,document_id FROM document_processing_jobs WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!job.rowCount)return res.status(404).json({error:'OCR diagnostic job not found.'});if(!['failed','retry_wait'].includes(String(job.rows[0].status)))return res.status(409).json({error:'Only failed OCR jobs can be retried.'});if(!process.env.OCR_WORKER_TOKEN)return res.status(503).json({error:'OCR worker is not configured.'});await pool!.query("UPDATE document_processing_jobs SET status='queued',processing_stage='queued',progress=0,attempts=0,error_code=NULL,error_message=NULL,started_at=NULL,completed_at=NULL,updated_at=NOW(6) WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);await pool!.query("UPDATE documents SET processing_status='queued' WHERE id=? AND tenant_id=?",[job.rows[0].document_id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.ocr_job_retried','ocr_job',req.params.id,{documentId:job.rows[0].document_id});res.status(202).json({success:true,status:'queued'});}));
 app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}const emailConfigured=Boolean(process.env.SMTP_USER?.trim()&&process.env.SMTP_PASS?.trim()&&(process.env.SMTP_HOST?.trim()||process.env.SMTP_USER?.trim().endsWith('@gmail.com')));const ai=await pool!.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[(_req as AuthenticatedRequest).user?.tenantId]);const workerReady=Boolean(process.env.OCR_WORKER_TOKEN);res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:documentStorage.provider==='gcs'?'gcs_private':documentStorage.provider==='supabase'?'supabase_private':'local_development',testSupported:false,detail:documentStorage.provider==='gcs'?'Private Google Cloud Storage with server-created expiring links.':documentStorage.provider==='supabase'?'Private Supabase Storage with server-created expiring links.':'Local sandbox storage; configure private storage for production.'},{id:'ocr',label:'Google Document AI',state:ai.rowCount&&workerReady?'configured':ai.rowCount?'worker_not_configured':'not_configured',testSupported:false,detail:!ai.rowCount?'Configure project, location, and processor.':!workerReady?'Processor settings are saved, but OCR_WORKER_TOKEN is missing on the server.':'Processor and worker token are configured; Google credentials are resolved by the worker at runtime.'},{id:'email',label:'OTP email delivery',state:emailConfigured?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false,detail:'No authorized live government connector is configured.'},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false,detail:'No live GIS provider health check is configured.'}]});}));
 app.post('/api/admin/integrations/:id/test',authGuard,adminGuard,asyncRoute(async(req,res)=>{if(req.params.id!=='mariadb')return res.status(501).json({error:'A live connection test is unsupported for this integration.'});await pool!.query('SELECT 1');await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.integration_tested','integration','mariadb',{result:'connected'});res.json({state:'connected',checkedAt:new Date().toISOString()});}));

@@ -34,7 +34,7 @@ export function LawyerWorkbench({apiUrl,properties,currentUser,onOpenProperty,in
  const counts=useMemo(()=>({all:Number(summary.total||0),my:Number(summary.my_count||0),pending:Number(summary.pending||0),in_progress:Number(summary.in_progress||0),under_review:Number(summary.under_review||0),overdue:Number(summary.overdue||0),completed:Number(summary.completed||0)}),[summary]);
  const progress=detail?.item.checklist?.length?Math.round(detail.item.checklist.filter(x=>x.done).length/detail.item.checklist.length*100):0;
  const activeTask=detail?.item;
- const canWork=Boolean(activeTask&&(activeTask.assigned_to_uid===currentUser.uid||isManager));const canReview=Boolean(activeTask&&(activeTask.reviewer_uid===currentUser.uid||['owner','admin','lawyer'].includes(currentUser.role)));
+ const canWork=Boolean(activeTask&&(activeTask.assigned_to_uid===currentUser.uid||isManager||['lawyer','owner','admin'].includes(currentUser.role)));const canReview=Boolean(activeTask&&(activeTask.reviewer_uid===currentUser.uid||['owner','admin','lawyer'].includes(currentUser.role)));
  const decide=(decision:'approve'|'reject'|'corrections')=>{const rationale=window.prompt(`Add the rationale for ${decision}:`);if(!rationale?.trim())return;void act({reviewDecision:decision,rationale:rationale.trim()});};
  const openProperty=(id:string)=>onOpenProperty(id);
  const filteredEmpty=total===0;

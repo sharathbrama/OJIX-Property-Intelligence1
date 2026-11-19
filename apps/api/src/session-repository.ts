@@ -48,6 +48,7 @@ export interface DemoStoredDocument {
   classification_source: string;
   manual_review_status: string;
   processing_status: string;
+  review_status?: string;
   extracted_text?: string;
   extracted_fields?: any;
   governance_status: string;
@@ -433,6 +434,28 @@ function createBaselineProperties(tenantId: string): DemoProperty[] {
       assigned_lawyer_uid: 'demo-user-lawyer', assigned_analyst_uid: 'demo-user-analyst',
       assigned_operations_uid: 'demo-user-operations', assigned_consultant_uid: 'demo-user-consultant',
       assigned_viewer_uid: 'demo-user-viewer', archived_at: null,
+      created_at: t, updated_at: t,
+    },
+    {
+      id: 'prop-mnd-009', tenant_id: tenantId,
+      application_number: 'OJ-2026-MND-009', name: 'Mandya Sugar Belt Farmland (Sy 88/1)',
+      review_purpose: 'title_verification', primary_document_type: 'rtc',
+      property_identifier: 'MND-FARMLAND-88', property_identifier_type: 'survey_number',
+      property_type: 'agricultural', village: 'Mandya', hobli: 'Kasaba',
+      taluk: 'Mandya', district: 'Mandya',
+      district_id: 'e37a87f9-a2d4-4c19-a9d8-19830c95743a', taluk_id: 'e61ad754-7544-47d9-859a-ca2dec00a951', hobli_id: null, village_id: null,
+      survey_number: '88', subdivision: '1',
+      extent: '2 acres 20 guntas', extent_value: 108900, extent_unit: 'sq_ft',
+      boundary_north: 'Irrigation Canal', boundary_south: 'Village Road',
+      boundary_east: 'Survey 89', boundary_west: 'Survey 87',
+      address: 'Survey 88/1, Kasaba Hobli, Mandya Taluk, Mandya District',
+      latitude: 12.5218, longitude: 76.8951, coordinate_source: 'manual',
+      coordinate_confidence: 0.90, coordinate_captured_at: t,
+      identity_state: 'verified', notes: 'Newly created property awaiting Owner assignment to Document Operations team.',
+      status: 'documents_pending', workflow_priority: 'high', due_date: null,
+      assigned_lawyer_uid: null, assigned_analyst_uid: null,
+      assigned_operations_uid: null, assigned_consultant_uid: null,
+      assigned_viewer_uid: null, archived_at: null,
       created_at: t, updated_at: t,
     },
   ];
