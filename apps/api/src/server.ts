@@ -64,7 +64,7 @@ import { demoReadPermissions, demoSessionExpiresAt, demoSessionIsActive, isDedic
 import { detectedDocumentMimeType, resolveDirectUploadLimit, resolveMultipartFileLimit, resolveUploadDirectory } from './upload-config.js';
 import { createMockPool } from './mock-pool.js';
 import { isMockMode, getMockStore } from './mock-data-store.js';
-import { demoSessionRepo, VALID_DEMO_ROLES, type DemoSessionWorkspace, type DemoProperty, type DemoStoredDocument, type DemoTask } from './session-repository.js';
+import { demoSessionRepo, VALID_DEMO_ROLES, saveDiskDemoProperty, saveDiskDemoOverride, saveDiskDemoDocument, type DemoSessionWorkspace, type DemoProperty, type DemoStoredDocument, type DemoTask } from './session-repository.js';
 import { processDocumentWithOcr, executePythonTesseractOcr } from './demo-ocr-runner.js';
 import {
   getTaluksForDistrict,
@@ -2925,6 +2925,7 @@ app.post('/api/properties', authGuard, writeGuard, asyncRoute(async (req, res) =
       updated_at: now,
     };
     ws.properties.unshift(newProp);
+    saveDiskDemoProperty(newProp);
     ws.auditEvents.unshift({
       id: crypto.randomUUID(),
       tenant_id: ws.user.tenantId,
@@ -3206,6 +3207,14 @@ app.patch('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res)
       if (update.assignedOperationsUid !== undefined) property.assigned_operations_uid = update.assignedOperationsUid || null;
     }
     property.updated_at = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    saveDiskDemoOverride(property.id, {
+      status: property.status,
+      workflow_priority: property.workflow_priority,
+      due_date: property.due_date,
+      assigned_lawyer_uid: property.assigned_lawyer_uid,
+      assigned_analyst_uid: property.assigned_analyst_uid,
+      assigned_operations_uid: property.assigned_operations_uid,
+    });
 
     const after = {
       status: property.status,
@@ -3501,6 +3510,14 @@ app.post('/api/properties/:id/analyze', authGuard, writeGuard, asyncRoute(async 
     if (['documents_pending', 'in_review'].includes(property.status)) {
       property.status = 'ready_for_review';
       property.updated_at = new Date().toISOString().replace('T', ' ').replace('Z', '');
+    saveDiskDemoOverride(property.id, {
+      status: property.status,
+      workflow_priority: property.workflow_priority,
+      due_date: property.due_date,
+      assigned_lawyer_uid: property.assigned_lawyer_uid,
+      assigned_analyst_uid: property.assigned_analyst_uid,
+      assigned_operations_uid: property.assigned_operations_uid,
+    });
     }
     const propFindings = ws.findings.filter(f => f.property_id === property.id);
     const summary = {
@@ -3741,6 +3758,7 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
       };
 
       ws.documents.unshift(storedDoc);
+      saveDiskDemoDocument(storedDoc);
       inserted.push(storedDoc);
       await fs.promises.unlink(file.path).catch(() => {});
     }
@@ -5968,15 +5986,74 @@ app.get('/api/admin/roles',authGuard,adminGuard,(_req,res)=>res.json({items:RBAC
 app.get('/api/admin/permissions',authGuard,adminGuard,asyncRoute(async(req,res)=>{try{const result=await pool!.query('SELECT role,resource,action,allowed,updated_by_uid,updated_at FROM workspace_permission_overrides WHERE tenant_id=? ORDER BY role,resource,action',[req.user?.tenantId]);const roles=Object.fromEntries(RBAC_ROLES.map(role=>{const permissions=new Set(DEFAULT_ROLE_PERMISSIONS[role]);for(const override of result.rows.filter((row:any)=>row.role===role)){const key=`${override.resource}.${override.action}` as any;if(Boolean(override.allowed))permissions.add(key);else permissions.delete(key);}return[role,{defaults:[...(DEFAULT_ROLE_PERMISSIONS[role]||[])],effective:[...permissions]}];}));res.json({roles,overrides:result.rows,actions:RBAC_ACTIONS,migrationReady:true});}catch(error:any){if(error?.code==='ER_NO_SUCH_TABLE'||error?.errno===1146)return res.status(503).json({error:'Apply migration 033 before configuring workspace permissions.',migrationReady:false});throw error;}}));
 app.put('/api/admin/permissions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const schema=z.object({changes:z.array(z.object({role:z.enum(ROLE_ASSIGNABLE_ROLES as [string,...string[]]),resource:z.string().trim().regex(/^[a-z][a-z0-9_]{1,79}$/),action:z.enum(RBAC_ACTIONS),allowed:z.boolean(),reason:z.string().trim().min(3).max(500)})).min(1).max(100)});const parsed=schema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Provide valid role permission changes with a reason.'});if(parsed.data.changes.some(change=>change.resource==='super_admin'||change.role==='owner'||change.role==='super_admin'))return res.status(403).json({error:'Workspace permission settings cannot grant or change platform Super Admin or Owner permissions.'});if(req.user?.role==='admin'&&parsed.data.changes.some(change=>change.role==='admin'))return res.status(403).json({error:'Only the workspace Owner can change the Admin role permissions.'});if(parsed.data.changes.some(change=>change.allowed&&!DEFAULT_ROLE_PERMISSIONS[change.role as keyof typeof DEFAULT_ROLE_PERMISSIONS]?.has(`${change.resource}.${change.action}` as any)))return res.status(400).json({error:'A role permission cannot be granted outside its approved server-side baseline.'});try{for(const change of parsed.data.changes){await pool!.query('INSERT INTO workspace_permission_overrides (tenant_id,role,resource,action,allowed,updated_by_uid) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE allowed=VALUES(allowed),updated_by_uid=VALUES(updated_by_uid),updated_at=NOW(6)',[req.user?.tenantId,change.role,change.resource,change.action,change.allowed,req.user?.uid||'unknown']);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.permission_override_changed','workspace_permission_override',`${change.role}:${change.resource}.${change.action}`,{...change,updatedByRole:req.user?.role});}res.json({success:true,updated:parsed.data.changes.length});}catch(error:any){if(error?.code==='ER_NO_SUCH_TABLE'||error?.errno===1146)return res.status(503).json({error:'Apply migration 033 before configuring workspace permissions.',migrationReady:false});throw error;}}));
 
-app.get('/api/admin/applications',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query(`SELECT p.*,(SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') document_count,(SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.manual_review_status='required' AND d.governance_status='active') manual_review_count FROM properties p WHERE p.tenant_id=? ORDER BY p.archived_at IS NOT NULL,p.due_date IS NULL,p.due_date,p.updated_at DESC LIMIT 500`,[req.user?.tenantId]);res.json({items:result.rows});}));
+app.get('/api/admin/applications',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({
+      items: ws.properties.map((p) => ({
+        ...p,
+        document_count: ws.documents.filter((d) => d.property_id === p.id).length,
+        manual_review_count: ws.documents.filter((d) => d.property_id === p.id && d.manual_review_status === 'required').length,
+      })),
+    });
+  }
+  const result=await pool!.query(`SELECT p.*,(SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.governance_status='active') document_count,(SELECT COUNT(*) FROM documents d WHERE d.property_id=p.id AND d.tenant_id=p.tenant_id AND d.manual_review_status='required' AND d.governance_status='active') manual_review_count FROM properties p WHERE p.tenant_id=? ORDER BY p.archived_at IS NOT NULL,p.due_date IS NULL,p.due_date,p.updated_at DESC LIMIT 500`,[req.user?.tenantId]);res.json({items:result.rows});}));
 
-app.patch('/api/admin/applications/:id/assignment',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({assignedLawyerUid:z.string().max(191).default(''),assignedAnalystUid:z.string().max(191).default(''),assignedOperationsUid:z.string().max(191).default(''),assignedConsultantUid:z.string().max(191).optional(),assignedViewerUid:z.string().max(191).optional().default(''),priority:z.enum(['low','normal','high','urgent']),dueDate:z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/),z.literal(''),z.null()]),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid assignment update.'});const current=await pool!.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!current.rowCount)return res.status(404).json({error:'Application not found.'});const consultantInput=parsed.data.assignedConsultantUid?.trim()||'';let consultantUid=consultantInput;if(consultantInput.includes('@')){const consultant=await pool!.query("SELECT user_uid FROM org_memberships WHERE organization_id=? AND LOWER(email)=LOWER(?) AND role='consultant' AND status='active' LIMIT 1",[req.user?.tenantId,consultantInput]);if(!consultant.rowCount)return res.status(400).json({error:'No active Consultant member matches that email in this workspace.'});consultantUid=consultant.rows[0].user_uid;}for(const[role,uid]of [['lawyer',parsed.data.assignedLawyerUid],['analyst',parsed.data.assignedAnalystUid],['operations',parsed.data.assignedOperationsUid],['consultant',consultantUid],['viewer',parsed.data.assignedViewerUid||'']])if(uid){const member=await pool!.query("SELECT id FROM org_memberships WHERE organization_id=? AND user_uid=? AND role=? AND status='active'",[req.user?.tenantId,uid,role]);if(!member.rowCount)return res.status(400).json({error:`Assigned ${role} is not an active member.`});}await pool!.query('UPDATE properties SET assigned_lawyer_uid=?,assigned_analyst_uid=?,assigned_operations_uid=?,assigned_consultant_uid=COALESCE(?,assigned_consultant_uid),assigned_viewer_uid=?,workflow_priority=?,due_date=?,updated_by_uid=?,updated_at=NOW(6) WHERE id=? AND tenant_id=?',[parsed.data.assignedLawyerUid,parsed.data.assignedAnalystUid,parsed.data.assignedOperationsUid,consultantUid||null,parsed.data.assignedViewerUid||'',parsed.data.priority,parsed.data.dueDate||null,req.user?.uid,req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.application_assignment_changed','property',req.params.id,{before:current.rows[0],after:{...parsed.data,assignedConsultantUid:consultantUid||''},reason:parsed.data.reason});res.json({success:true});}));
+app.patch('/api/admin/applications/:id/assignment',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({assignedLawyerUid:z.string().max(191).default(''),assignedAnalystUid:z.string().max(191).default(''),assignedOperationsUid:z.string().max(191).default(''),assignedConsultantUid:z.string().max(191).optional(),assignedViewerUid:z.string().max(191).optional().default(''),priority:z.enum(['low','normal','high','urgent']),dueDate:z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/),z.literal(''),z.null()]),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid assignment update.'});
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const prop = ws.properties.find((p) => p.id === req.params.id);
+    if (!prop) return res.status(404).json({ error: 'Application not found.' });
+    prop.assigned_lawyer_uid = parsed.data.assignedLawyerUid || null;
+    prop.assigned_analyst_uid = parsed.data.assignedAnalystUid || null;
+    prop.assigned_operations_uid = parsed.data.assignedOperationsUid || null;
+    prop.workflow_priority = parsed.data.priority;
+    prop.due_date = parsed.data.dueDate || null;
+    saveDiskDemoOverride(prop.id, {
+      assigned_lawyer_uid: prop.assigned_lawyer_uid,
+      assigned_analyst_uid: prop.assigned_analyst_uid,
+      assigned_operations_uid: prop.assigned_operations_uid,
+      workflow_priority: prop.workflow_priority,
+      due_date: prop.due_date,
+    });
+    return res.json({ success: true });
+  }
+  const current=await pool!.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!current.rowCount)return res.status(404).json({error:'Application not found.'});const consultantInput=parsed.data.assignedConsultantUid?.trim()||'';let consultantUid=consultantInput;if(consultantInput.includes('@')){const consultant=await pool!.query("SELECT user_uid FROM org_memberships WHERE organization_id=? AND LOWER(email)=LOWER(?) AND role='consultant' AND status='active' LIMIT 1",[req.user?.tenantId,consultantInput]);if(!consultant.rowCount)return res.status(400).json({error:'No active Consultant member matches that email in this workspace.'});consultantUid=consultant.rows[0].user_uid;}for(const[role,uid]of [['lawyer',parsed.data.assignedLawyerUid],['analyst',parsed.data.assignedAnalystUid],['operations',parsed.data.assignedOperationsUid],['consultant',consultantUid],['viewer',parsed.data.assignedViewerUid||'']])if(uid){const member=await pool!.query("SELECT id FROM org_memberships WHERE organization_id=? AND user_uid=? AND role=? AND status='active'",[req.user?.tenantId,uid,role]);if(!member.rowCount)return res.status(400).json({error:`Assigned ${role} is not an active member.`});}await pool!.query('UPDATE properties SET assigned_lawyer_uid=?,assigned_analyst_uid=?,assigned_operations_uid=?,assigned_consultant_uid=COALESCE(?,assigned_consultant_uid),assigned_viewer_uid=?,workflow_priority=?,due_date=?,updated_by_uid=?,updated_at=NOW(6) WHERE id=? AND tenant_id=?',[parsed.data.assignedLawyerUid,parsed.data.assignedAnalystUid,parsed.data.assignedOperationsUid,consultantUid||null,parsed.data.assignedViewerUid||'',parsed.data.priority,parsed.data.dueDate||null,req.user?.uid,req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.application_assignment_changed','property',req.params.id,{before:current.rows[0],after:{...parsed.data,assignedConsultantUid:consultantUid||''},reason:parsed.data.reason});res.json({success:true});}));
 
-app.patch('/api/admin/applications/:id/workflow',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({status:z.enum(['draft','documents_pending','in_review','clarification_required','ready_for_review','closed']),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Admins may update operational statuses only; legal approval and release are excluded.'});const current=await pool!.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!current.rowCount)return res.status(404).json({error:'Application not found.'});await pool!.query('UPDATE properties SET status=?,updated_by_uid=?,updated_at=NOW(6) WHERE id=? AND tenant_id=?',[parsed.data.status,req.user?.uid,req.params.id,req.user?.tenantId]);await pool!.query('INSERT INTO property_workflow_history (id,tenant_id,property_id,previous_status,new_status,reason,changes_json,changed_by_uid) VALUES (?,?,?,?,?,?,?,?)',[crypto.randomUUID(),req.user?.tenantId,req.params.id,current.rows[0].status,parsed.data.status,parsed.data.reason,JSON.stringify({administrative:true}),req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.application_workflow_changed','property',req.params.id,{before:current.rows[0].status,after:parsed.data.status,reason:parsed.data.reason});res.json({success:true});}));
+app.patch('/api/admin/applications/:id/workflow',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({status:z.enum(['draft','documents_pending','in_review','clarification_required','ready_for_review','closed']),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Admins may update operational statuses only; legal approval and release are excluded.'});
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const prop = ws.properties.find((p) => p.id === req.params.id);
+    if (!prop) return res.status(404).json({ error: 'Application not found.' });
+    prop.status = parsed.data.status;
+    saveDiskDemoOverride(prop.id, { status: prop.status });
+    return res.json({ success: true });
+  }
+  const current=await pool!.query('SELECT * FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!current.rowCount)return res.status(404).json({error:'Application not found.'});await pool!.query('UPDATE properties SET status=?,updated_by_uid=?,updated_at=NOW(6) WHERE id=? AND tenant_id=?',[parsed.data.status,req.user?.uid,req.params.id,req.user?.tenantId]);await pool!.query('INSERT INTO property_workflow_history (id,tenant_id,property_id,previous_status,new_status,reason,changes_json,changed_by_uid) VALUES (?,?,?,?,?,?,?,?)',[crypto.randomUUID(),req.user?.tenantId,req.params.id,current.rows[0].status,parsed.data.status,parsed.data.reason,JSON.stringify({administrative:true}),req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.application_workflow_changed','property',req.params.id,{before:current.rows[0].status,after:parsed.data.status,reason:parsed.data.reason});res.json({success:true});}));
 
-for(const action of ['archive','restore'] as const)app.post(`/api/admin/applications/:id/${action}`,authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A reason is required.'});const current=await pool!.query('SELECT id,status,archived_at FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!current.rowCount)return res.status(404).json({error:'Application not found.'});if(action==='archive')await pool!.query("UPDATE properties SET archived_at=NOW(6),archived_by_uid=?,archive_reason=?,status='archived' WHERE id=? AND tenant_id=?",[req.user?.uid,parsed.data.reason,req.params.id,req.user?.tenantId]);else await pool!.query("UPDATE properties SET archived_at=NULL,archived_by_uid=NULL,archive_reason=NULL,status='in_review' WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,`admin.application_${action}d`,'property',req.params.id,{reason:parsed.data.reason});res.json({success:true});}));
+for(const action of ['archive','restore'] as const)app.post(`/api/admin/applications/:id/${action}`,authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A reason is required.'});
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    const prop = ws.properties.find((p) => p.id === req.params.id);
+    if (!prop) return res.status(404).json({ error: 'Application not found.' });
+    if (action === 'archive') {
+      prop.archived_at = new Date().toISOString();
+      prop.status = 'archived';
+    } else {
+      prop.archived_at = null;
+      prop.status = 'in_review';
+    }
+    saveDiskDemoOverride(prop.id, { archived_at: prop.archived_at, status: prop.status });
+    return res.json({ success: true });
+  }
+  const current=await pool!.query('SELECT id,status,archived_at FROM properties WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);if(!current.rowCount)return res.status(404).json({error:'Application not found.'});if(action==='archive')await pool!.query("UPDATE properties SET archived_at=NOW(6),archived_by_uid=?,archive_reason=?,status='archived' WHERE id=? AND tenant_id=?",[req.user?.uid,parsed.data.reason,req.params.id,req.user?.tenantId]);else await pool!.query("UPDATE properties SET archived_at=NULL,archived_by_uid=NULL,archive_reason=NULL,status='in_review' WHERE id=? AND tenant_id=?",[req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,`admin.application_${action}d`,'property',req.params.id,{reason:parsed.data.reason});res.json({success:true});}));
 
-app.get('/api/admin/documents',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT d.id,d.property_id,d.original_filename,d.doc_type,d.classification_confidence,d.processing_status,d.manual_review_status,d.governance_status,d.governance_reason,d.uploaded_by_uid,d.size_bytes,d.sha256,d.created_at,p.application_number,p.name property_name FROM documents d JOIN properties p ON p.id=d.property_id AND p.tenant_id=d.tenant_id WHERE d.tenant_id=? ORDER BY d.created_at DESC LIMIT 500',[req.user?.tenantId]);res.json({items:result.rows});}));
+app.get('/api/admin/documents',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({ items: ws.documents });
+  }
+  const result=await pool!.query('SELECT d.id,d.property_id,d.original_filename,d.doc_type,d.classification_confidence,d.processing_status,d.manual_review_status,d.governance_status,d.governance_reason,d.uploaded_by_uid,d.size_bytes,d.sha256,d.created_at,p.application_number,p.name property_name FROM documents d JOIN properties p ON p.id=d.property_id AND p.tenant_id=d.tenant_id WHERE d.tenant_id=? ORDER BY d.created_at DESC LIMIT 500',[req.user?.tenantId]);res.json({items:result.rows});}));
 
 app.patch('/api/admin/documents/:id/reassign',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({propertyId:z.string().uuid(),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Target property and reason are required.'});const doc=await pool!.query('SELECT * FROM documents WHERE id=? AND tenant_id=?',[req.params.id,req.user?.tenantId]);const property=await pool!.query('SELECT id FROM properties WHERE id=? AND tenant_id=?',[parsed.data.propertyId,req.user?.tenantId]);if(!doc.rowCount||!property.rowCount)return res.status(404).json({error:'Document or target application not found.'});if(doc.rows[0].extracted_fields?.reviewState?.isVerified)return res.status(409).json({error:'Verified evidence must be returned to review before reassignment.'});await pool!.query("UPDATE documents SET property_id=?,manual_review_status='required',governance_status='active',governance_reason=?,governance_by_uid=?,governance_at=NOW(6) WHERE id=? AND tenant_id=?",[parsed.data.propertyId,parsed.data.reason,req.user?.uid,req.params.id,req.user?.tenantId]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.document_reassigned','document',req.params.id,{beforePropertyId:doc.rows[0].property_id,afterPropertyId:parsed.data.propertyId,reason:parsed.data.reason});res.json({success:true});}));
 
@@ -6022,18 +6099,92 @@ app.post('/api/support/ocr/jobs/:id/retry',authGuard,asyncRoute(async(req,res)=>
 app.get('/api/admin/integrations',authGuard,adminGuard,asyncRoute(async(_req,res)=>{let database='unavailable';try{await pool!.query('SELECT 1');database='connected';}catch{}const emailConfigured=Boolean(process.env.SMTP_USER?.trim()&&process.env.SMTP_PASS?.trim()&&(process.env.SMTP_HOST?.trim()||process.env.SMTP_USER?.trim().endsWith('@gmail.com')));const ai=await pool!.query('SELECT tenant_id FROM document_ai_config WHERE tenant_id=?',[(_req as AuthenticatedRequest).user?.tenantId]);const workerReady=Boolean(process.env.OCR_WORKER_TOKEN);res.json({items:[{id:'mariadb',label:'MariaDB workspace',state:database,testSupported:true},{id:'storage',label:'Document storage adapter',state:documentStorage.provider==='gcs'?'gcs_private':documentStorage.provider==='supabase'?'supabase_private':'local_development',testSupported:false,detail:documentStorage.provider==='gcs'?'Private Google Cloud Storage with server-created expiring links.':documentStorage.provider==='supabase'?'Private Supabase Storage with server-created expiring links.':'Local sandbox storage; configure private storage for production.'},{id:'ocr',label:'Google Document AI',state:ai.rowCount&&workerReady?'configured':ai.rowCount?'worker_not_configured':'not_configured',testSupported:false,detail:!ai.rowCount?'Configure project, location, and processor.':!workerReady?'Processor settings are saved, but OCR_WORKER_TOKEN is missing on the server.':'Processor and worker token are configured; Google credentials are resolved by the worker at runtime.'},{id:'email',label:'OTP email delivery',state:emailConfigured?'configured':'not_configured',testSupported:false},{id:'government',label:'Government source connectors',state:'not_connected',testSupported:false,detail:'No authorized live government connector is configured.'},{id:'gis',label:'GIS / spatial data',state:'unavailable',testSupported:false,detail:'No live GIS provider health check is configured.'}]});}));
 app.post('/api/admin/integrations/:id/test',authGuard,adminGuard,asyncRoute(async(req,res)=>{if(req.params.id!=='mariadb')return res.status(501).json({error:'A live connection test is unsupported for this integration.'});await pool!.query('SELECT 1');await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.integration_tested','integration','mariadb',{result:'connected'});res.json({state:'connected',checkedAt:new Date().toISOString()});}));
 
-app.get('/api/admin/sessions',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT s.id,s.user_uid,s.created_at,s.last_activity_at,s.expires_at,s.ip_address,s.user_agent,m.email,m.role FROM authentication_sessions s LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid WHERE s.tenant_id=? AND s.revoked_at IS NULL AND s.expires_at>NOW(6) ORDER BY s.last_activity_at DESC',[req.user?.tenantId]);res.json({items:result.rows});}));
-app.delete('/api/admin/sessions/:id',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A revocation reason is required.'});const session=await pool!.query('SELECT * FROM authentication_sessions WHERE id=? AND tenant_id=? AND revoked_at IS NULL',[req.params.id,req.user?.tenantId]);if(!session.rowCount)return res.status(404).json({error:'Active session not found.'});await pool!.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE id=? AND tenant_id=?',[req.user?.uid,parsed.data.reason,req.params.id,req.user?.tenantId]);for(const[token,item]of authSessions)if(item.id===req.params.id)authSessions.delete(token);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.session_revoked','authentication_session',req.params.id,{userUid:session.rows[0].user_uid,reason:parsed.data.reason});res.json({success:true});}));
-app.get('/api/admin/security-events',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query("SELECT id,actor_uid,action,entity_type,entity_id,details,created_at FROM audit_events WHERE tenant_id=? AND (action LIKE 'auth.%' OR action LIKE 'admin.session%' OR action LIKE 'admin.member%' OR action LIKE 'admin.invitation%') ORDER BY created_at DESC LIMIT 200",[req.user?.tenantId]);res.json({items:result.rows});}));
+app.get('/api/admin/sessions',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({
+      items: [{
+        id: ws.sessionId,
+        user_uid: ws.user.uid,
+        email: ws.user.email,
+        role: ws.user.role,
+        created_at: new Date().toISOString(),
+        last_activity_at: new Date().toISOString(),
+        expires_at: new Date(ws.expiresAt).toISOString(),
+      }],
+    });
+  }
+  const result=await pool!.query('SELECT s.id,s.user_uid,s.created_at,s.last_activity_at,s.expires_at,s.ip_address,s.user_agent,m.email,m.role FROM authentication_sessions s LEFT JOIN org_memberships m ON m.organization_id=s.tenant_id AND m.user_uid=s.user_uid WHERE s.tenant_id=? AND s.revoked_at IS NULL AND s.expires_at>NOW(6) ORDER BY s.last_activity_at DESC',[req.user?.tenantId]);res.json({items:result.rows});}));
 
-app.get('/api/admin/storage',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query("SELECT COUNT(*) document_count,COALESCE(SUM(size_bytes),0) size_bytes,SUM(governance_status='quarantined') quarantined_count FROM documents WHERE tenant_id=?",[req.user?.tenantId]);const archives=await pool!.query('SELECT COUNT(*) archived_count FROM properties WHERE tenant_id=? AND archived_at IS NOT NULL',[req.user?.tenantId]);res.json({measured:true,...result.rows[0],...archives.rows[0]});}));
-app.get('/api/admin/retention',authGuard,adminGuard,asyncRoute(async(req,res)=>{const result=await pool!.query('SELECT * FROM workspace_retention_policies WHERE tenant_id=?',[req.user?.tenantId]);res.json({item:result.rows[0]||{tenant_id:req.user?.tenantId,retention_days:2555,archive_after_days:365,legal_hold:false,automatic_cleanup_enabled:false},schedulerActive:false});}));
-app.patch('/api/admin/retention',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({retentionDays:z.number().int().min(365).max(36500),archiveAfterDays:z.number().int().min(30).max(36500),legalHold:z.boolean(),automaticCleanupEnabled:z.literal(false),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid retention policy. Automatic deletion is not available.'});const before=await pool!.query('SELECT * FROM workspace_retention_policies WHERE tenant_id=?',[req.user?.tenantId]);await pool!.query('INSERT INTO workspace_retention_policies (tenant_id,retention_days,archive_after_days,legal_hold,automatic_cleanup_enabled,updated_by_uid) VALUES (?,?,?,?,FALSE,?) ON DUPLICATE KEY UPDATE retention_days=VALUES(retention_days),archive_after_days=VALUES(archive_after_days),legal_hold=VALUES(legal_hold),automatic_cleanup_enabled=FALSE,updated_by_uid=VALUES(updated_by_uid)',[req.user?.tenantId,parsed.data.retentionDays,parsed.data.archiveAfterDays,parsed.data.legalHold,req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.retention_updated','workspace_retention_policy',req.user?.tenantId||null,{before:before.rows[0]||null,after:parsed.data,reason:parsed.data.reason});res.json({success:true,schedulerActive:false});}));
+app.delete('/api/admin/sessions/:id',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A revocation reason is required.'});
+  if ((req as any).demoWorkspace) return res.json({ success: true });
+  const session=await pool!.query('SELECT * FROM authentication_sessions WHERE id=? AND tenant_id=? AND revoked_at IS NULL',[req.params.id,req.user?.tenantId]);if(!session.rowCount)return res.status(404).json({error:'Active session not found.'});await pool!.query('UPDATE authentication_sessions SET revoked_at=NOW(6),revoked_by_uid=?,revoke_reason=? WHERE id=? AND tenant_id=?',[req.user?.uid,parsed.data.reason,req.params.id,req.user?.tenantId]);for(const[token,item]of authSessions)if(item.id===req.params.id)authSessions.delete(token);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.session_revoked','authentication_session',req.params.id,{userUid:session.rows[0].user_uid,reason:parsed.data.reason});res.json({success:true});}));
 
-app.get('/api/admin/audit',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=pageSchema.extend({action:z.string().max(120).optional().default(''),actor:z.string().max(191).optional().default(''),entityType:z.string().max(120).optional().default(''),from:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),to:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()}).safeParse(req.query);if(!parsed.success)return res.status(400).json({error:'Invalid audit filters.'});const q=parsed.data,where=['tenant_id=?'],params:any[]=[req.user?.tenantId];if(q.action){where.push('action=?');params.push(q.action);}if(q.actor){where.push('actor_uid=?');params.push(q.actor);}if(q.entityType){where.push('entity_type=?');params.push(q.entityType);}if(q.from){where.push('created_at>=?');params.push(`${q.from} 00:00:00`);}if(q.to){where.push('created_at<=?');params.push(`${q.to} 23:59:59`);}if(q.search){where.push('(action LIKE ? OR actor_uid LIKE ? OR entity_id LIKE ?)');const like=`%${q.search}%`;params.push(like,like,like);}const count=await pool!.query(`SELECT COUNT(*) total FROM audit_events WHERE ${where.join(' AND ')}`,params);const result=await pool!.query(`SELECT id,actor_uid,action,entity_type,entity_id,details,created_at FROM audit_events WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`,[...params,q.limit,(q.page-1)*q.limit]);res.json({items:result.rows,total:Number(count.rows[0]?.total||0),page:q.page,limit:q.limit});}));
+app.get('/api/admin/security-events',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({ items: ws.auditEvents });
+  }
+  const result=await pool!.query("SELECT id,actor_uid,action,entity_type,entity_id,details,created_at FROM audit_events WHERE tenant_id=? AND (action LIKE 'auth.%' OR action LIKE 'admin.session%' OR action LIKE 'admin.member%' OR action LIKE 'admin.invitation%') ORDER BY created_at DESC LIMIT 200",[req.user?.tenantId]);res.json({items:result.rows});}));
+
+app.get('/api/admin/storage',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({
+      measured: true,
+      document_count: ws.documents.length,
+      size_bytes: ws.documents.reduce((acc, d) => acc + (d.size_bytes || 0), 0),
+      quarantined_count: 0,
+      archived_count: ws.properties.filter((p) => p.archived_at).length,
+    });
+  }
+  const result=await pool!.query("SELECT COUNT(*) document_count,COALESCE(SUM(size_bytes),0) size_bytes,SUM(governance_status='quarantined') quarantined_count FROM documents WHERE tenant_id=?",[req.user?.tenantId]);const archives=await pool!.query('SELECT COUNT(*) archived_count FROM properties WHERE tenant_id=? AND archived_at IS NOT NULL',[req.user?.tenantId]);res.json({measured:true,...result.rows[0],...archives.rows[0]});}));
+
+app.get('/api/admin/retention',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({
+      item: { tenant_id: ws.user.tenantId, retention_days: 2555, archive_after_days: 365, legal_hold: false, automatic_cleanup_enabled: false },
+      schedulerActive: false,
+    });
+  }
+  const result=await pool!.query('SELECT * FROM workspace_retention_policies WHERE tenant_id=?',[req.user?.tenantId]);res.json({item:result.rows[0]||{tenant_id:req.user?.tenantId,retention_days:2555,archive_after_days:365,legal_hold:false,automatic_cleanup_enabled:false},schedulerActive:false});}));
+
+app.patch('/api/admin/retention',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  const parsed=z.object({retentionDays:z.number().int().min(365).max(36500),archiveAfterDays:z.number().int().min(30).max(36500),legalHold:z.boolean(),automaticCleanupEnabled:z.literal(false),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid retention policy. Automatic deletion is not available.'});
+  if ((req as any).demoWorkspace) return res.json({ success: true, schedulerActive: false });
+  const before=await pool!.query('SELECT * FROM workspace_retention_policies WHERE tenant_id=?',[req.user?.tenantId]);await pool!.query('INSERT INTO workspace_retention_policies (tenant_id,retention_days,archive_after_days,legal_hold,automatic_cleanup_enabled,updated_by_uid) VALUES (?,?,?,?,FALSE,?) ON DUPLICATE KEY UPDATE retention_days=VALUES(retention_days),archive_after_days=VALUES(archive_after_days),legal_hold=VALUES(legal_hold),automatic_cleanup_enabled=FALSE,updated_by_uid=VALUES(updated_by_uid)',[req.user?.tenantId,parsed.data.retentionDays,parsed.data.archiveAfterDays,parsed.data.legalHold,req.user?.uid]);await audit(req.user?.uid||'unknown',req.user?.tenantId,'admin.retention_updated','workspace_retention_policy',req.user?.tenantId||null,{before:before.rows[0]||null,after:parsed.data,reason:parsed.data.reason});res.json({success:true,schedulerActive:false});}));
+
+app.get('/api/admin/audit',authGuard,adminGuard,asyncRoute(async(req,res)=>{
+  if ((req as any).demoWorkspace) {
+    const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
+    return res.json({ items: ws.auditEvents, total: ws.auditEvents.length, page: 1, limit: 50 });
+  }
+  const parsed=pageSchema.extend({action:z.string().max(120).optional().default(''),actor:z.string().max(191).optional().default(''),entityType:z.string().max(120).optional().default(''),from:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),to:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()}).safeParse(req.query);if(!parsed.success)return res.status(400).json({error:'Invalid audit filters.'});const q=parsed.data,where=['tenant_id=?'],params:any[]=[req.user?.tenantId];if(q.action){where.push('action=?');params.push(q.action);}if(q.actor){where.push('actor_uid=?');params.push(q.actor);}if(q.entityType){where.push('entity_type=?');params.push(q.entityType);}if(q.from){where.push('created_at>=?');params.push(`${q.from} 00:00:00`);}if(q.to){where.push('created_at<=?');params.push(`${q.to} 23:59:59`);}if(q.search){where.push('(action LIKE ? OR actor_uid LIKE ? OR entity_id LIKE ?)');const like=`%${q.search}%`;params.push(like,like,like);}const count=await pool!.query(`SELECT COUNT(*) total FROM audit_events WHERE ${where.join(' AND ')}`,params);const result=await pool!.query(`SELECT id,actor_uid,action,entity_type,entity_id,details,created_at FROM audit_events WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`,[...params,q.limit,(q.page-1)*q.limit]);res.json({items:result.rows,total:Number(count.rows[0]?.total||0),page:q.page,limit:q.limit});}));
 
 app.get('/api/settings', authGuard, asyncRoute(async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+  if (!pool || (req as any).demoWorkspace) {
+    return res.json({
+      settings: {
+        org_name: 'Karnataka Legal Partners LLP',
+        llpin: 'AAA-1234',
+        primary_contact: 'Sharath — Managing Partner (sharath@ojix.local)',
+        firm_email: 'legal@ojix.local',
+        default_district: 'Bengaluru Urban',
+        office_address: '100 Feet Road, Indiranagar, Bengaluru 560038',
+        firm_logo_url: '',
+        default_report_template: 'detailed_due_diligence',
+        legal_disclaimer: 'This due diligence summary is prepared for internal client guidance.',
+        auto_screen_bhoomi: true,
+        auto_screen_kaveri: true,
+        auto_screen_spatial: true,
+        swd_primary_buffer_m: 50,
+        lake_buffer_m: 30,
+        rajakaluve_buffer_m: 25,
+      },
+    });
+  }
   const result = await pool.query('SELECT * FROM workspace_settings WHERE tenant_id=?', [req.user?.tenantId]);
   if (!result.rows.length) {
     return res.json({

@@ -12,6 +12,7 @@
  */
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { DEFAULT_ROLE_PERMISSIONS } from './rbac.js';
 import {
   KARNATAKA_DISTRICTS,
@@ -617,6 +618,61 @@ function createBaselineReports(properties: DemoProperty[]): DemoReport[] {
   ];
 }
 
+const DISK_PROPERTIES_PATH = '/tmp/ojix_demo_properties.json';
+const DISK_OVERRIDES_PATH = '/tmp/ojix_demo_overrides.json';
+const DISK_DOCUMENTS_PATH = '/tmp/ojix_demo_documents.json';
+
+export function getDiskDemoProperties(): DemoProperty[] {
+  try {
+    if (fs.existsSync(DISK_PROPERTIES_PATH)) {
+      return JSON.parse(fs.readFileSync(DISK_PROPERTIES_PATH, 'utf-8'));
+    }
+  } catch {}
+  return [];
+}
+
+export function saveDiskDemoProperty(property: DemoProperty): void {
+  try {
+    const list = getDiskDemoProperties().filter((p) => p.id !== property.id);
+    list.unshift(property);
+    fs.writeFileSync(DISK_PROPERTIES_PATH, JSON.stringify(list));
+  } catch {}
+}
+
+export function getDiskDemoOverrides(): Record<string, Partial<DemoProperty>> {
+  try {
+    if (fs.existsSync(DISK_OVERRIDES_PATH)) {
+      return JSON.parse(fs.readFileSync(DISK_OVERRIDES_PATH, 'utf-8'));
+    }
+  } catch {}
+  return {};
+}
+
+export function saveDiskDemoOverride(propertyId: string, override: Partial<DemoProperty>): void {
+  try {
+    const all = getDiskDemoOverrides();
+    all[propertyId] = { ...(all[propertyId] || {}), ...override };
+    fs.writeFileSync(DISK_OVERRIDES_PATH, JSON.stringify(all));
+  } catch {}
+}
+
+export function getDiskDemoDocuments(): DemoStoredDocument[] {
+  try {
+    if (fs.existsSync(DISK_DOCUMENTS_PATH)) {
+      return JSON.parse(fs.readFileSync(DISK_DOCUMENTS_PATH, 'utf-8'));
+    }
+  } catch {}
+  return [];
+}
+
+export function saveDiskDemoDocument(doc: DemoStoredDocument): void {
+  try {
+    const list = getDiskDemoDocuments().filter((d) => d.id !== doc.id);
+    list.unshift(doc);
+    fs.writeFileSync(DISK_DOCUMENTS_PATH, JSON.stringify(list));
+  } catch {}
+}
+
 /**
  * Demo Session Repository managing all active demo workspaces with stateless rehydration.
  */
@@ -732,8 +788,21 @@ class DemoSessionRepository {
       accessExpiresAt: new Date(payload.exp).toISOString(),
     };
 
-    const properties = createBaselineProperties(user.tenantId);
-    const documents = createBaselineDocuments(properties);
+    const diskProps = getDiskDemoProperties();
+    const diskOverrides = getDiskDemoOverrides();
+    const baseline = createBaselineProperties(user.tenantId);
+    const diskIds = new Set(diskProps.map((p) => p.id));
+    const combined = [...diskProps, ...baseline.filter((p) => !diskIds.has(p.id))];
+    const properties = combined.map((p) => ({
+      ...p,
+      ...(diskOverrides[p.id] || {}),
+    }));
+
+    const diskDocs = getDiskDemoDocuments();
+    const baselineDocs = createBaselineDocuments(properties);
+    const diskDocIds = new Set(diskDocs.map((d) => d.id));
+    const documents = [...diskDocs, ...baselineDocs.filter((d) => !diskDocIds.has(d.id))];
+
     const findings = createBaselineFindings(properties);
     const tasks = createBaselineTasks(properties);
     const reports = createBaselineReports(properties);

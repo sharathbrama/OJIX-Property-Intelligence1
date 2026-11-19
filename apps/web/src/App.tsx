@@ -88,6 +88,13 @@ import {
   getDemoVillages,
   type LocationOption,
 } from "./demoLocations";
+import {
+  applyDemoPersistence,
+  saveStoredDemoProperty,
+  saveStoredPropertyOverride,
+  getStoredDemoDocuments,
+  saveStoredDemoDocuments,
+} from "./demoPersistence";
 import "./owner-dashboard.css";
 
 import type { PropertyDoc, UserAccount, UserRole } from "./types";
@@ -131,9 +138,12 @@ type Property = {
   status: string;
   workflow_priority?: string;
   due_date?: string | null;
-  assigned_lawyer_uid?: string;
-  assigned_analyst_uid?: string;
-  assigned_operations_uid?: string;
+  assigned_lawyer_uid?: string | null;
+  assigned_analyst_uid?: string | null;
+  assigned_operations_uid?: string | null;
+  assigned_consultant_uid?: string | null;
+  assigned_viewer_uid?: string | null;
+  archived_at?: string | null;
   updated_at: string;
   document_count?: number;
 };
@@ -695,8 +705,9 @@ export default function App() {
             }))
           : Promise.resolve(null),
       ]);
-      setOverview(o);
-      setProperties(p.items);
+      const mergedProps = applyDemoPersistence(p?.items || []);
+      setOverview(o ? { ...o, total: Math.max(Number(o.total || 0), mergedProps.length) } : o);
+      setProperties(mergedProps);
       if (currentUser.role === "owner") {
         if (ownerData?.dashboardError) {
           setOwnerDashboardData(null);
@@ -710,14 +721,28 @@ export default function App() {
         setOwnerDashboardError("");
       }
       if (selected) {
-        const d = await api<{
-          item: Property;
-          documents: Doc[];
-          findings: Finding[];
-        }>(`/api/properties/${selected.id}`);
-        setSelected(d.item);
-        setDocs(d.documents);
-        setFindings(d.findings);
+        try {
+          const d = await api<{
+            item: Property;
+            documents: Doc[];
+            findings: Finding[];
+          }>(`/api/properties/${selected.id}`);
+          const storedDocs = getStoredDemoDocuments(selected.id);
+          const docIds = new Set((d.documents || []).map((x) => x.id));
+          const allDocs = [...(d.documents || []), ...storedDocs.filter((x: any) => !docIds.has(x.id))];
+          setSelected(applyDemoPersistence([d.item])[0] || d.item);
+          setDocs(allDocs);
+          setFindings(d.findings || []);
+        } catch (selErr) {
+          const matched = mergedProps.find((m: any) => m.id === selected.id);
+          if (matched) {
+            setSelected(matched);
+            setDocs(getStoredDemoDocuments(selected.id));
+            setFindings([]);
+          } else {
+            console.warn("[refresh] Could not refresh selected property:", selErr);
+          }
+        }
       }
     } catch (e) {
       if (selected) setError((e as Error).message);
@@ -782,22 +807,10 @@ export default function App() {
   };
 
   const switchRole = async (targetUid: string) => {
-    if (!import.meta.env.DEV) return;
-    setBusy(true);
-    setError("");
-    try {
-      setShowRoleSwitcher(false);
-      localStorage.removeItem("ojix_auth_token");
-      localStorage.removeItem("ojix_workspace_id");setActiveWorkspaceId("");
-      localStorage.removeItem("ojix_user");
-      setAuthToken("");
-      setCurrentUser(null);
-      setPage("overview");
-      setNotice(`Sign in again to authenticate as ${availableAccounts.find((account) => account.uid === targetUid)?.name || "the selected account"}.`);
-    } catch (err: any) {
-      setError(`Unable to switch account: ${err.message}`);
-    } finally {
-      setBusy(false);
+    const acc = availableAccounts.find((account) => account.uid === targetUid);
+    setShowRoleSwitcher(false);
+    if (acc?.role) {
+      await switchDemoRole(acc.role);
     }
   };
 
@@ -887,18 +900,32 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
-      const d = await api<{
-        item: Property;
-        documents: Doc[];
-        findings: Finding[];
-      }>(`/api/properties/${property.id}`);
-      setSelected(d.item);
-      setDocs(d.documents);
-      setFindings(d.findings);
+      let item = property;
+      let documents: Doc[] = [];
+      let findings: Finding[] = [];
+      try {
+        const d = await api<{
+          item: Property;
+          documents: Doc[];
+          findings: Finding[];
+        }>(`/api/properties/${property.id}`);
+        item = d.item || property;
+        documents = d.documents || [];
+        findings = d.findings || [];
+      } catch (openErr) {
+        console.warn("[openProperty] Remote load failed, loading from demo persistence:", openErr);
+      }
+      const mergedItem = applyDemoPersistence([item])[0] || item;
+      const storedDocs = getStoredDemoDocuments(property.id);
+      const docIds = new Set(documents.map((x) => x.id));
+      const allDocs = [...documents, ...storedDocs.filter((x: any) => !docIds.has(x.id))];
+      setSelected(mergedItem);
+      setDocs(allDocs);
+      setFindings(findings);
       setRiskSummary(null);
       setPage("property");
       setMobileNav(false);
-      if (updateUrl) updateBrowserUrl("property", d.item.id);
+      if (updateUrl) updateBrowserUrl("property", mergedItem.id);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1052,13 +1079,14 @@ export default function App() {
       }
       setShowCreate(false);
       setSelected(null);
+      saveStoredDemoProperty(result.item);
       setNotice(
         `Application ${result.item.application_number} created.${parcelSaveWarning || " The Overview has been refreshed."}`,
       );
-      setProperties((current) => [
+      setProperties((current) => applyDemoPersistence([
         result.item,
         ...current.filter((property) => property.id !== result.item.id),
-      ]);
+      ]));
       setOverview((current) => ({
         ...current,
         total: Number(current.total || 0) + 1,
@@ -1197,6 +1225,7 @@ export default function App() {
         uploaded = result.items;
       }
       setDocs((prev) => [...uploaded, ...prev]);
+      saveStoredDemoDocuments(selected.id, uploaded);
       setNotice(`${uploaded.length} document${uploaded.length === 1 ? "" : "s"} uploaded and queued for review.`);
       await refresh();
       return uploaded;
@@ -7859,6 +7888,16 @@ function PropertyWorkflowModal({
     event.preventDefault();
     setSaving(true);
     setError("");
+    const updatedFields = {
+      status: form.status,
+      workflow_priority: form.priority,
+      due_date: form.dueDate || null,
+      assigned_lawyer_uid: form.assignedLawyerUid || null,
+      assigned_analyst_uid: form.assignedAnalystUid || null,
+      assigned_operations_uid: form.assignedOperationsUid || null,
+    };
+    saveStoredPropertyOverride(property.id, updatedFields);
+    let savedItem: Property = { ...property, ...updatedFields };
     try {
       const result = await api<{ item: Property }>(
         `/api/properties/${property.id}/workflow`,
@@ -7868,11 +7907,12 @@ function PropertyWorkflowModal({
           body: JSON.stringify(form),
         },
       );
-      onSaved(result.item);
+      if (result?.item) savedItem = result.item;
     } catch (err) {
-      setError((err as Error).message);
+      console.warn("[PropertyWorkflowModal] Remote update failed, persisted locally:", err);
     } finally {
       setSaving(false);
+      onSaved(savedItem);
     }
   };
   const options = (role: string) =>
