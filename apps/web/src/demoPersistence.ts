@@ -93,13 +93,16 @@ export function applyDemoPersistence(serverProperties: any[] = []): any[] {
   const base = serverProperties.filter((p) => !customIds.has(p.id));
   const combined = [...custom, ...base];
 
-  // Apply workflow & assignment overrides
+  // Apply workflow & assignment overrides + accurate document count
   return combined.map((prop) => {
-    const override = overrides[prop.id];
-    if (!override) return prop;
+    const override = overrides[prop.id] || {};
+    const storedDocs = getStoredDemoDocuments(prop.id);
+    const existingCount = Number(prop.document_count || 0);
+    const docCount = Math.max(existingCount, storedDocs.length);
     return {
       ...prop,
       ...override,
+      document_count: docCount,
     };
   });
 }
