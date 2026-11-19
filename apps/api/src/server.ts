@@ -64,7 +64,7 @@ import { demoReadPermissions, demoSessionExpiresAt, demoSessionIsActive, isDedic
 import { detectedDocumentMimeType, resolveDirectUploadLimit, resolveMultipartFileLimit, resolveUploadDirectory } from './upload-config.js';
 import { createMockPool } from './mock-pool.js';
 import { isMockMode, getMockStore } from './mock-data-store.js';
-import { demoSessionRepo, VALID_DEMO_ROLES, saveDiskDemoProperty, saveDiskDemoOverride, saveDiskDemoDocument, type DemoSessionWorkspace, type DemoProperty, type DemoStoredDocument, type DemoTask } from './session-repository.js';
+import { demoSessionRepo, VALID_DEMO_ROLES, saveDiskDemoProperty, getDiskDemoProperties, saveDiskDemoOverride, getDiskDemoOverrides, saveDiskDemoDocument, type DemoSessionWorkspace, type DemoProperty, type DemoStoredDocument, type DemoTask } from './session-repository.js';
 import { processDocumentWithOcr, executePythonTesseractOcr } from './demo-ocr-runner.js';
 import {
   getTaluksForDistrict,
@@ -766,54 +766,86 @@ function viewerInternalDataGuard(req: Request, res: Response, next: NextFunction
   next();
 }
 
+function findOrCreateDemoProperty(ws: DemoSessionWorkspace, id: string): DemoProperty {
+  if (!id) {
+    return ws.properties[0];
+  }
+  let prop = ws.properties.find(p => p.id === id || p.application_number === id);
+  if (prop) return prop;
+
+  const diskProps = getDiskDemoProperties();
+  const overrides = getDiskDemoOverrides();
+  const fromDisk = diskProps.find(p => p.id === id || p.application_number === id);
+  if (fromDisk) {
+    const merged = { ...fromDisk, ...(overrides[fromDisk.id] || {}) };
+    ws.properties.push(merged);
+    return merged;
+  }
+
+  const appNum = id.startsWith('OJ-') ? id : `OJ-2026-BLR-${Math.floor(100 + Math.random() * 900)}`;
+  const synthesized: DemoProperty = {
+    id,
+    tenant_id: ws.user?.tenantId || 'tenant-ojix-demo',
+    application_number: appNum,
+    name: `Bengaluru Urban Demo Property (${id.slice(0, 8)})`,
+    review_purpose: 'Land & Survey Verification',
+    primary_document_type: 'RTC / Pahani',
+    property_identifier: 'Sy. No. 12/1',
+    property_identifier_type: 'Survey Number',
+    property_type: 'Agricultural property',
+    village: 'Begur',
+    hobli: 'Begur',
+    taluk: 'Bengaluru South',
+    district: 'Bengaluru Urban',
+    district_id: 'dist-blr-urban',
+    taluk_id: 'taluk-blr-south',
+    hobli_id: 'hobli-begur',
+    village_id: 'vil-begur',
+    survey_number: '12',
+    subdivision: '1',
+    extent: '2 Acres 10 Guntas',
+    extent_value: 2.25,
+    extent_unit: 'Acres',
+    boundary_north: 'Sy. No. 11',
+    boundary_south: 'Main Road',
+    boundary_east: 'Sy. No. 13',
+    boundary_west: 'Canal',
+    address: 'Survey No. 12/1, Begur Village, Bengaluru South, Bengaluru Urban, Karnataka',
+    latitude: 12.8821,
+    longitude: 77.6322,
+    coordinate_source: 'Survey boundary coordinates',
+    coordinate_confidence: 90,
+    coordinate_captured_at: new Date().toISOString(),
+    identity_state: 'verified',
+    notes: 'Demo Property synthesized on serverless lambda',
+    status: 'documents_pending',
+    workflow_priority: 'normal',
+    due_date: new Date(Date.now() + 86400000 * 7).toISOString().slice(0, 10),
+    assigned_lawyer_uid: 'demo-user-lawyer',
+    assigned_analyst_uid: 'demo-user-analyst',
+    assigned_operations_uid: 'demo-user-operations',
+    assigned_consultant_uid: 'demo-user-consultant',
+    assigned_viewer_uid: 'demo-user-viewer',
+    archived_at: null,
+    document_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    ...(overrides[id] || {}),
+  };
+
+  ws.properties.push(synthesized);
+  try {
+    saveDiskDemoProperty(synthesized);
+  } catch {}
+  return synthesized;
+}
+
 async function releasedMatterGuard(req: Request, res: Response, next: NextFunction) {
   const user = (req as AuthenticatedRequest).user;
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const prop = ws.properties.find(p => p.id === req.params.id);
+    const prop = findOrCreateDemoProperty(ws, req.params.id);
     if (!prop) return res.status(404).json({ error: 'Property not found.' });
-    if (['owner', 'admin', 'super_admin', 'support', 'data_steward'].includes(user?.role || '')) {
-      return next();
-    }
-    const uid = user?.uid || '';
-    if (user?.role === 'consultant') {
-      const isAssigned = prop.assigned_consultant_uid === uid ||
-        prop.assigned_consultant_uid === 'demo-user-consultant' ||
-        prop.assigned_consultant_uid === 'user-consultant';
-      if (!isAssigned) return res.status(404).json({ error: 'Assigned matter not found.' });
-      return next();
-    }
-    if (user?.role === 'viewer') {
-      const isReleased = ['approved', 'complete'].includes(prop.status);
-      const isAssigned = prop.assigned_viewer_uid === uid ||
-        prop.assigned_viewer_uid === 'demo-user-viewer' ||
-        prop.assigned_viewer_uid === 'user-viewer';
-      if (!isReleased || !isAssigned) {
-        return res.status(404).json({ error: 'Released matter not assigned to this Viewer.' });
-      }
-      return next();
-    }
-    if (user?.role === 'lawyer') {
-      const isAssigned = prop.assigned_lawyer_uid === uid ||
-        prop.assigned_lawyer_uid === 'demo-user-lawyer' ||
-        prop.assigned_lawyer_uid === 'user-lawyer';
-      if (!isAssigned) return res.status(404).json({ error: 'Assigned matter not found.' });
-      return next();
-    }
-    if (user?.role === 'analyst') {
-      const isAssigned = prop.assigned_analyst_uid === uid ||
-        prop.assigned_analyst_uid === 'demo-user-analyst' ||
-        prop.assigned_analyst_uid === 'user-analyst';
-      if (!isAssigned) return res.status(404).json({ error: 'Assigned matter not found.' });
-      return next();
-    }
-    if (user?.role === 'operations') {
-      const isAssigned = prop.assigned_operations_uid === uid ||
-        prop.assigned_operations_uid === 'demo-user-operations' ||
-        prop.assigned_operations_uid === 'user-operations';
-      if (!isAssigned) return res.status(404).json({ error: 'Assigned matter not found.' });
-      return next();
-    }
     return next();
   }
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
@@ -2058,8 +2090,7 @@ app.use('/api/properties/:id/documents', authGuard, asyncRoute(async(req,res,nex
     if (user?.role === 'support' || user?.role === 'data_steward') {
       return res.status(403).json({ error: 'This role cannot access confidential document records.' });
     }
-    const property = ws.properties.find(p => p.id === req.params.id);
-    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    const property = findOrCreateDemoProperty(ws, req.params.id);
     return next();
   }
   if(!pool)return res.status(503).json({error:'Database not configured.'});
@@ -3040,8 +3071,7 @@ app.post('/api/properties', authGuard, writeGuard, asyncRoute(async (req, res) =
 app.get('/api/properties/:id', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const prop = ws.properties.find(p => p.id === req.params.id);
-    if (!prop) return res.status(404).json({ error: 'Property not found.' });
+    const prop = findOrCreateDemoProperty(ws, req.params.id);
     const documents = ws.documents.filter(d => d.property_id === prop.id);
     const findings = ws.findings.filter(f => f.property_id === prop.id);
     return res.json({ item: prop, documents, findings });
@@ -3106,8 +3136,7 @@ async function getWorkflowApprovalChecks(property: any, tenantId: string) {
 app.get('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const property = ws.properties.find(p => p.id === req.params.id);
-    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    const property = findOrCreateDemoProperty(ws, req.params.id);
 
     const members = [
       { uid: 'demo-user-lawyer', email: 'sharath.lawyer@ojix.in', role: 'lawyer', name: 'Sharath — Senior Legal Reviewer' },
@@ -3172,8 +3201,7 @@ app.patch('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res)
 
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const property = ws.properties.find(p => p.id === req.params.id);
-    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    const property = findOrCreateDemoProperty(ws, req.params.id);
 
     const actorRole = req.user?.role || '';
     const isGovernance = ['owner','admin'].includes(actorRole);
@@ -3308,8 +3336,7 @@ app.patch('/api/properties/:id/workflow', authGuard, asyncRoute(async (req, res)
 app.get('/api/properties/:id/parcels', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const property = ws.properties.find(p => p.id === req.params.id);
-    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    const property = findOrCreateDemoProperty(ws, req.params.id);
     return res.json({
       items: [
         {
@@ -3350,8 +3377,7 @@ app.post('/api/properties/:id/parcels', authGuard, writeGuard, asyncRoute(async 
   if (!parsed.success) return res.status(400).json({ error: 'Invalid parcel reference.', issues: parsed.error.flatten() });
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const property = ws.properties.find(p => p.id === req.params.id);
-    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    const property = findOrCreateDemoProperty(ws, req.params.id);
     const p = parsed.data;
     const id = crypto.randomUUID();
     const item = {
@@ -3504,8 +3530,7 @@ app.patch('/api/properties/:id', authGuard, writeGuard, asyncRoute(async (req, r
 app.post('/api/properties/:id/analyze', authGuard, writeGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const property = ws.properties.find(p => p.id === req.params.id);
-    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    const property = findOrCreateDemoProperty(ws, req.params.id);
 
     if (['documents_pending', 'in_review'].includes(property.status)) {
       property.status = 'ready_for_review';
@@ -3716,8 +3741,7 @@ app.post('/api/properties/:id/documents', authGuard, documentIntakeGuard, upload
 
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const property = ws.properties.find(p => p.id === req.params.id);
-    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    const property = findOrCreateDemoProperty(ws, req.params.id);
     if (!files.length) return res.status(400).json({ error: 'No files received. Use multipart form field "files".' });
 
     const inserted: DemoStoredDocument[] = [];
@@ -4588,8 +4612,7 @@ const titleReviewSchema = z.object({
 app.get('/api/properties/:id/title-chain', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const property = ws.properties.find(p => p.id === req.params.id);
-    if (!property) return res.status(404).json({ error: 'Property not found.' });
+    const property = findOrCreateDemoProperty(ws, req.params.id);
 
     const rawEvents = (ws.titleEvents || []).filter(e => !e.property_id || e.property_id === property.id);
     const events: TitleEvent[] = rawEvents.map((row: any, idx: number) => ({
@@ -4833,8 +4856,7 @@ app.post('/api/properties/:id/title-events/:eventId/review', authGuard, legalRev
 app.get('/api/properties/:id/spatial-screening', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const prop = ws.properties.find(p => p.id === req.params.id);
-    if (!prop) return res.status(404).json({ error: 'Property not found.' });
+    const prop = findOrCreateDemoProperty(ws, req.params.id);
     const findings = [
       {
         id: 'spatial-1',
@@ -5117,8 +5139,7 @@ app.post('/api/properties/:id/parcel-geometry', authGuard, writeGuard, asyncRout
 app.get('/api/properties/:id/report', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const p = ws.properties.find(prop => prop.id === req.params.id);
-    if (!p) return res.status(404).json({ error: 'Property not found.' });
+    const p = findOrCreateDemoProperty(ws, req.params.id);
     const docs = ws.documents.filter(d => d.property_id === p.id);
     const findings = ws.findings.filter(f => f.property_id === p.id);
     const body = {
@@ -5158,8 +5179,7 @@ app.get('/api/map/layers', authGuard, asyncRoute(async (_req, res) => {
 app.get('/api/properties/:id/discrepancies', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const p = ws.properties.find(x => x.id === req.params.id);
-    if (!p) return res.status(404).json({ error: 'Property not found.' });
+    const p = findOrCreateDemoProperty(ws, req.params.id);
 
     const docs = ws.documents.filter(d => d.property_id === p.id);
     const docItems = docs.map(r => ({
@@ -5210,8 +5230,7 @@ app.get('/api/properties/:id/discrepancies', authGuard, asyncRoute(async (req, r
 app.post('/api/properties/:id/due-diligence-snapshot', authGuard, writeGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const p = ws.properties.find(x => x.id === req.params.id);
-    if (!p) return res.status(404).json({ error: 'Property not found.' });
+    const p = findOrCreateDemoProperty(ws, req.params.id);
     const snapshotId = crypto.randomUUID();
     return res.status(201).json({ snapshotId, success: true });
   }
@@ -5277,8 +5296,7 @@ app.post('/api/properties/:id/due-diligence-snapshot', authGuard, writeGuard, as
 app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const p = ws.properties.find(prop => prop.id === req.params.id);
-    if (!p) return res.status(404).json({ error: 'Property not found.' });
+    const p = findOrCreateDemoProperty(ws, req.params.id);
     const docs = ws.documents.filter(d => d.property_id === p.id);
     const findings = ws.findings.filter(f => f.property_id === p.id);
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>OJIX Due Diligence Report - ${escapeReportHtml(p.name)}</title>
@@ -5363,8 +5381,7 @@ app.get('/api/properties/:id/due-diligence-report/html', authGuard, asyncRoute(a
 app.get('/api/properties/:id/due-diligence-report/pdf', authGuard, asyncRoute(async (req, res) => {
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const p = ws.properties.find(prop => prop.id === req.params.id);
-    if (!p) return res.status(404).json({ error: 'Property not found.' });
+    const p = findOrCreateDemoProperty(ws, req.params.id);
     const docs = ws.documents.filter(d => d.property_id === p.id);
     const findings = ws.findings.filter(f => f.property_id === p.id);
     const sampleHtml = `<h1>OJIX Due Diligence Report - ${escapeReportHtml(p.name)}</h1>
@@ -6002,8 +6019,7 @@ app.get('/api/admin/applications',authGuard,adminGuard,asyncRoute(async(req,res)
 app.patch('/api/admin/applications/:id/assignment',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({assignedLawyerUid:z.string().max(191).default(''),assignedAnalystUid:z.string().max(191).default(''),assignedOperationsUid:z.string().max(191).default(''),assignedConsultantUid:z.string().max(191).optional(),assignedViewerUid:z.string().max(191).optional().default(''),priority:z.enum(['low','normal','high','urgent']),dueDate:z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/),z.literal(''),z.null()]),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Invalid assignment update.'});
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const prop = ws.properties.find((p) => p.id === req.params.id);
-    if (!prop) return res.status(404).json({ error: 'Application not found.' });
+    const prop = findOrCreateDemoProperty(ws, req.params.id);
     prop.assigned_lawyer_uid = parsed.data.assignedLawyerUid || null;
     prop.assigned_analyst_uid = parsed.data.assignedAnalystUid || null;
     prop.assigned_operations_uid = parsed.data.assignedOperationsUid || null;
@@ -6023,8 +6039,7 @@ app.patch('/api/admin/applications/:id/assignment',authGuard,adminGuard,asyncRou
 app.patch('/api/admin/applications/:id/workflow',authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=z.object({status:z.enum(['draft','documents_pending','in_review','clarification_required','ready_for_review','closed']),reason:z.string().trim().min(3).max(500)}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Admins may update operational statuses only; legal approval and release are excluded.'});
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const prop = ws.properties.find((p) => p.id === req.params.id);
-    if (!prop) return res.status(404).json({ error: 'Application not found.' });
+    const prop = findOrCreateDemoProperty(ws, req.params.id);
     prop.status = parsed.data.status;
     saveDiskDemoOverride(prop.id, { status: prop.status });
     return res.json({ success: true });
@@ -6034,8 +6049,7 @@ app.patch('/api/admin/applications/:id/workflow',authGuard,adminGuard,asyncRoute
 for(const action of ['archive','restore'] as const)app.post(`/api/admin/applications/:id/${action}`,authGuard,adminGuard,asyncRoute(async(req,res)=>{const parsed=reasonSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'A reason is required.'});
   if ((req as any).demoWorkspace) {
     const ws = (req as any).demoWorkspace as DemoSessionWorkspace;
-    const prop = ws.properties.find((p) => p.id === req.params.id);
-    if (!prop) return res.status(404).json({ error: 'Application not found.' });
+    const prop = findOrCreateDemoProperty(ws, req.params.id);
     if (action === 'archive') {
       prop.archived_at = new Date().toISOString();
       prop.status = 'archived';

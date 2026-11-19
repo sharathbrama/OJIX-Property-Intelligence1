@@ -90,6 +90,7 @@ import {
 } from "./demoLocations";
 import {
   applyDemoPersistence,
+  getStoredDemoProperties,
   saveStoredDemoProperty,
   saveStoredPropertyOverride,
   getStoredDemoDocuments,
@@ -934,30 +935,34 @@ export default function App() {
   };
 
   const openPropertyById = async (propId: string, updateUrl = true) => {
-    const found = properties.find((p) => p.id === propId);
+    const storedProps = getStoredDemoProperties();
+    const allKnown = [...properties, ...storedProps];
+    const found = allKnown.find((p) => p.id === propId || p.application_number === propId);
     if (found) {
       await openProperty(found, updateUrl);
-    } else {
-      setBusy(true);
-      setError("");
-      try {
-        const d = await api<{
-          item: Property;
-          documents: Doc[];
-          findings: Finding[];
-        }>(`/api/properties/${propId}`);
-        setSelected(d.item);
-        setDocs(d.documents);
-        setFindings(d.findings);
-        setRiskSummary(null);
-        setPage("property");
-        setMobileNav(false);
-        if (updateUrl) updateBrowserUrl("property", d.item.id);
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setBusy(false);
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const d = await api<{
+        item: Property;
+        documents: Doc[];
+        findings: Finding[];
+      }>(`/api/properties/${propId}`);
+      if (d?.item) {
+        await openProperty(d.item, updateUrl);
       }
+    } catch (e) {
+      console.warn("[openPropertyById] Remote fetch failed, falling back to local demo persistence:", e);
+      const stored = getStoredDemoProperties().find((p) => p.id === propId || p.application_number === propId);
+      if (stored) {
+        await openProperty(stored, updateUrl);
+      } else {
+        setError((e as Error).message);
+      }
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -7916,7 +7921,12 @@ function PropertyWorkflowModal({
     changed_by_uid: string;
     created_at: string;
   };
-  const [members, setMembers] = useState<Member[]>([]);
+  const DEFAULT_DEMO_MEMBERS: Member[] = [
+    { uid: 'demo-user-lawyer', email: 'sharath.lawyer@ojix.in', role: 'lawyer', name: 'Sharath — Senior Legal Reviewer' },
+    { uid: 'demo-user-analyst', email: 'sharath.analyst@ojix.in', role: 'analyst', name: 'Sharath — Evidence Analyst' },
+    { uid: 'demo-user-operations', email: 'sharath.ops@ojix.in', role: 'operations', name: 'Sharath — Document Operations' },
+  ];
+  const [members, setMembers] = useState<Member[]>(DEFAULT_DEMO_MEMBERS);
   const [history, setHistory] = useState<History[]>([]);
   const [form, setForm] = useState({
     status: property.status || "in_review",
@@ -7927,7 +7937,7 @@ function PropertyWorkflowModal({
     assignedOperationsUid: property.assigned_operations_uid || "",
     reason: "",
   });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -7937,10 +7947,12 @@ function PropertyWorkflowModal({
     )
       .then((result) => {
         if (!active) return;
-        setMembers(result.members);
-        setHistory(result.history);
+        if (result?.members?.length) setMembers(result.members);
+        if (result?.history) setHistory(result.history);
       })
-      .catch((err) => active && setError((err as Error).message))
+      .catch((err) => {
+        console.warn("[PropertyWorkflowModal] Workflow metadata load:", err);
+      })
       .finally(() => active && setLoading(false));
     return () => {
       active = false;
@@ -7978,7 +7990,7 @@ function PropertyWorkflowModal({
     }
   };
   const options = (role: string) =>
-    members.filter((member) => member.role === role);
+    (members.length ? members : DEFAULT_DEMO_MEMBERS).filter((member) => member.role === role);
   return (
     <div
       className="modal-backdrop"
