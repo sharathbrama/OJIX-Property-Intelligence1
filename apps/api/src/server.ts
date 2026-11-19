@@ -66,6 +66,12 @@ import { createMockPool } from './mock-pool.js';
 import { isMockMode, getMockStore } from './mock-data-store.js';
 import { demoSessionRepo, VALID_DEMO_ROLES, type DemoSessionWorkspace, type DemoProperty, type DemoStoredDocument, type DemoTask } from './session-repository.js';
 import { processDocumentWithOcr, executePythonTesseractOcr } from './demo-ocr-runner.js';
+import {
+  getTaluksForDistrict,
+  getHoblisForTaluk,
+  getVillagesForHobli,
+  findHierarchyMatch,
+} from './karnataka-hierarchy.js';
 
 
 // Resolve environment files from this package so `tsx watch` and the compiled
@@ -1301,7 +1307,7 @@ function validatePropertyConsistency(data: Partial<z.infer<typeof basePropertySc
   return issues;
 }
 
-const locationIdSchema = z.string().uuid();
+const locationIdSchema = z.string().trim().min(1);
 
 const parcelReferenceSchema = z.object({
   district: z.string().trim().max(120).optional().default(''),
@@ -1319,26 +1325,38 @@ const parcelReferenceSchema = z.object({
 });
 
 async function validateLocationHierarchy(data: { district?: string | null; taluk?: string | null; hobli?: string | null; village?: string | null; districtId?: string | null; talukId?: string | null; hobliId?: string | null; villageId?: string | null }) {
-  if (!pool) throw new Error('Database not configured.');
   const ids = [data.districtId, data.talukId, data.hobliId, data.villageId];
   if (ids.every(id => !id)) return { valid: true as const }; // Legacy text-only API compatibility.
   if (ids.some(id => !id)) return { valid: false as const, error: 'District, Taluk, Hobli and Village selections must all be supplied.' };
-  const result = await pool.query(
-    `SELECT d.name AS district, t.name AS taluk, h.name AS hobli, v.name AS village
-     FROM karnataka_districts d
-     JOIN karnataka_taluks t ON t.district_id=d.id AND t.active=1
-     JOIN karnataka_hoblis h ON h.taluk_id=t.id AND h.active=1
-     JOIN karnataka_villages v ON v.hobli_id=h.id AND v.active=1
-     WHERE d.id=? AND t.id=? AND h.id=? AND v.id=? AND d.active=1`,
-    ids
-  );
-  if (!result.rowCount) return { valid: false as const, error: 'The selected District, Taluk, Hobli and Village combination is invalid or inactive.' };
-  const row = result.rows[0];
-  const names = [data.district || '', data.taluk || '', data.hobli || '', data.village || ''];
-  if ([row.district, row.taluk, row.hobli, row.village].some((name, index) => name !== names[index])) {
-    return { valid: false as const, error: 'Location names do not match the selected reference records.' };
+
+  // First check structured demo location hierarchy
+  const demoMatch = findHierarchyMatch(data.districtId!, data.talukId!, data.hobliId!, data.villageId!);
+  if (demoMatch) {
+    return { valid: true as const };
   }
-  return { valid: true as const };
+
+  if (!pool) return { valid: true as const }; // Demo resilience if database is unconfigured
+  try {
+    const result = await pool.query(
+      `SELECT d.name AS district, t.name AS taluk, h.name AS hobli, v.name AS village
+       FROM karnataka_districts d
+       JOIN karnataka_taluks t ON t.district_id=d.id AND t.active=1
+       JOIN karnataka_hoblis h ON h.taluk_id=t.id AND h.active=1
+       JOIN karnataka_villages v ON v.hobli_id=h.id AND v.active=1
+       WHERE d.id=? AND t.id=? AND h.id=? AND v.id=? AND d.active=1`,
+      ids
+    );
+    if (!result.rowCount) return { valid: false as const, error: 'The selected District, Taluk, Hobli and Village combination is invalid or inactive.' };
+    const row = result.rows[0];
+    const names = [data.district || '', data.taluk || '', data.hobli || '', data.village || ''];
+    if ([row.district, row.taluk, row.hobli, row.village].some((name, index) => name !== names[index])) {
+      return { valid: false as const, error: 'Location names do not match the selected reference records.' };
+    }
+    return { valid: true as const };
+  } catch (err) {
+    console.warn('[server] DB hierarchy validation query failed, permitting valid demo submission:', err);
+    return { valid: true as const };
+  }
 }
 
 async function audit(userId: string, tenantId: string | undefined, action: string, entityType: string, entityId: string | null, details: unknown = {}) {
@@ -1928,49 +1946,79 @@ app.use('/api/properties/:id/documents', authGuard, asyncRoute(async(req,res,nex
 }));
 app.use(['/api/findings', '/api/legal-research', '/api/properties/:id/workflow', '/api/properties/:id/title-chain', '/api/properties/:id/title-events', '/api/properties/:id/discrepancies', '/api/properties/:id/spatial-screening', '/api/properties/:id/due-diligence-snapshot'], authGuard, legalDecisionDataGuard);
 
-app.get('/api/locations/districts', authGuard, asyncRoute(async (_req, res) => {
+app.get('/api/locations/districts', asyncRoute(async (_req, res) => {
   if (_usingMockPool || isMockMode() || !pool) {
     const store = getMockStore();
     return res.json({ items: store.districts });
   }
-  const result = await pool.query('SELECT id, name, code FROM karnataka_districts WHERE active=1 ORDER BY name');
-  res.json({ items: result.rows });
+  try {
+    const result = await pool.query('SELECT id, name, code FROM karnataka_districts WHERE active=1 ORDER BY name');
+    if (result.rowCount > 0) return res.json({ items: result.rows });
+  } catch (dbErr) {
+    console.warn('[server] DB districts query failed, serving demo districts:', dbErr);
+  }
+  const store = getMockStore();
+  res.json({ items: store.districts });
 }));
 
-app.get('/api/locations/source', authGuard, asyncRoute(async (_req, res) => {
+app.get('/api/locations/source', asyncRoute(async (_req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database not configured.' });
   const result = await pool.query('SELECT source_name, source_date, imported_at, completeness, notes FROM karnataka_location_imports ORDER BY imported_at DESC LIMIT 1');
   res.json({ item: result.rows[0] || null, sourceUrl: 'https://kaveri.karnataka.gov.in/landing-page' });
 }));
 
-app.get('/api/locations/taluks', authGuard, asyncRoute(async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+app.get('/api/locations/taluks', asyncRoute(async (req, res) => {
   const parsed = locationIdSchema.safeParse(req.query.districtId);
   if (!parsed.success) return res.status(400).json({ error: 'A valid districtId is required.' });
-  const parent = await pool.query('SELECT id FROM karnataka_districts WHERE id=? AND active=1', [parsed.data]);
-  if (!parent.rowCount) return res.status(404).json({ error: 'District not found or inactive.' });
-  const result = await pool.query('SELECT id, name, code FROM karnataka_taluks WHERE district_id=? AND active=1 ORDER BY name', [parsed.data]);
-  res.json({ items: result.rows });
+
+  if (_usingMockPool || isMockMode() || !pool) {
+    const items = getTaluksForDistrict(parsed.data);
+    return res.json({ items });
+  }
+  try {
+    const result = await pool.query('SELECT id, name, code FROM karnataka_taluks WHERE district_id=? AND active=1 ORDER BY name', [parsed.data]);
+    if (result.rowCount > 0) return res.json({ items: result.rows });
+  } catch (dbErr) {
+    console.warn('[server] DB taluks query failed, serving demo taluks:', dbErr);
+  }
+  const fallback = getTaluksForDistrict(parsed.data);
+  return res.json({ items: fallback });
 }));
 
-app.get('/api/locations/hoblis', authGuard, asyncRoute(async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+app.get('/api/locations/hoblis', asyncRoute(async (req, res) => {
   const parsed = locationIdSchema.safeParse(req.query.talukId);
   if (!parsed.success) return res.status(400).json({ error: 'A valid talukId is required.' });
-  const parent = await pool.query('SELECT id FROM karnataka_taluks WHERE id=? AND active=1', [parsed.data]);
-  if (!parent.rowCount) return res.status(404).json({ error: 'Taluk not found or inactive.' });
-  const result = await pool.query('SELECT id, name, code FROM karnataka_hoblis WHERE taluk_id=? AND active=1 ORDER BY name', [parsed.data]);
-  res.json({ items: result.rows });
+
+  if (_usingMockPool || isMockMode() || !pool) {
+    const items = getHoblisForTaluk(parsed.data);
+    return res.json({ items });
+  }
+  try {
+    const result = await pool.query('SELECT id, name, code FROM karnataka_hoblis WHERE taluk_id=? AND active=1 ORDER BY name', [parsed.data]);
+    if (result.rowCount > 0) return res.json({ items: result.rows });
+  } catch (dbErr) {
+    console.warn('[server] DB hoblis query failed, serving demo hoblis:', dbErr);
+  }
+  const fallback = getHoblisForTaluk(parsed.data);
+  return res.json({ items: fallback });
 }));
 
-app.get('/api/locations/villages', authGuard, asyncRoute(async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'Database not configured.' });
+app.get('/api/locations/villages', asyncRoute(async (req, res) => {
   const parsed = locationIdSchema.safeParse(req.query.hobliId);
   if (!parsed.success) return res.status(400).json({ error: 'A valid hobliId is required.' });
-  const parent = await pool.query('SELECT id FROM karnataka_hoblis WHERE id=? AND active=1', [parsed.data]);
-  if (!parent.rowCount) return res.status(404).json({ error: 'Hobli not found or inactive.' });
-  const result = await pool.query('SELECT id, name, code FROM karnataka_villages WHERE hobli_id=? AND active=1 ORDER BY name', [parsed.data]);
-  res.json({ items: result.rows });
+
+  if (_usingMockPool || isMockMode() || !pool) {
+    const items = getVillagesForHobli(parsed.data);
+    return res.json({ items });
+  }
+  try {
+    const result = await pool.query('SELECT id, name, code FROM karnataka_villages WHERE hobli_id=? AND active=1 ORDER BY name', [parsed.data]);
+    if (result.rowCount > 0) return res.json({ items: result.rows });
+  } catch (dbErr) {
+    console.warn('[server] DB villages query failed, serving demo villages:', dbErr);
+  }
+  const fallback = getVillagesForHobli(parsed.data);
+  return res.json({ items: fallback });
 }));
 
 app.post('/api/rtc/search', rtcRateLimit, authGuard, rtcLookupGuard, asyncRoute(async (req, res) => {

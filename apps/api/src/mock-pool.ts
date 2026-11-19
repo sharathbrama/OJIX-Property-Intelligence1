@@ -12,6 +12,9 @@ import {
   getTaluksForDistrict,
   getHoblisForTaluk,
   getVillagesForHobli,
+  DEMO_TALUKS,
+  DEMO_HOBLIS,
+  DEMO_VILLAGES,
 } from './karnataka-hierarchy.js';
 
 interface DbResult {
@@ -476,7 +479,25 @@ function handleQuery(sql: string, params: any[] = []): DbResult {
 
   // ─── Karnataka locations ──────────────────────────────────────────────
   if (normalizedSql.includes('from karnataka_districts')) {
-    if (normalizedSql.includes('where id=')) {
+    // 4-level join hierarchy validation query:
+    if (normalizedSql.includes('join karnataka_taluks') || normalizedSql.includes('d.name as district')) {
+      const [districtId, talukId, hobliId, villageId] = params;
+      const d = store.districts.find(x => x.id === districtId);
+      const taluks = getTaluksForDistrict(districtId);
+      const t = taluks.find(x => x.id === talukId);
+      const hoblis = t ? getHoblisForTaluk(t.id) : [];
+      const h = hoblis.find(x => x.id === hobliId);
+      const villages = h ? getVillagesForHobli(h.id) : [];
+      const v = villages.find(x => x.id === villageId);
+      if (d && t && h && v) {
+        return {
+          rows: [{ district: d.name, taluk: t.name, hobli: h.name, village: v.name }],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    }
+    if (normalizedSql.includes('where id=') || normalizedSql.includes('where id =')) {
       const d = store.districts.find(x => x.id === params[0]);
       return d ? { rows: [d], rowCount: 1 } : { rows: [{ id: params[0], name: 'District', active: 1 }], rowCount: 1 };
     }
@@ -484,11 +505,15 @@ function handleQuery(sql: string, params: any[] = []): DbResult {
   }
 
   if (normalizedSql.includes('from karnataka_taluks')) {
-    if (normalizedSql.includes('where id=')) {
-      const t = store.taluks.find(x => x.id === params[0]);
-      return t ? { rows: [t], rowCount: 1 } : { rows: [{ id: params[0], name: 'Taluk', active: 1 }], rowCount: 1 };
+    if (normalizedSql.includes('where id=') || normalizedSql.includes('where id =')) {
+      const talukId = params[0];
+      const match = DEMO_TALUKS.find(x => x.id === talukId) || store.taluks.find(x => x.id === talukId);
+      const districtId = match ? ('districtId' in match ? match.districtId : (match as any).district_id) : '';
+      return match
+        ? { rows: [{ id: match.id, district_id: districtId, name: match.name, code: match.code, active: 1 }], rowCount: 1 }
+        : { rows: [{ id: talukId, name: 'Taluk', active: 1 }], rowCount: 1 };
     }
-    if (normalizedSql.includes('district_id=')) {
+    if (normalizedSql.includes('district_id=') || normalizedSql.includes('district_id =')) {
       const taluks = getTaluksForDistrict(params[0]);
       return { rows: taluks, rowCount: taluks.length };
     }
@@ -496,11 +521,15 @@ function handleQuery(sql: string, params: any[] = []): DbResult {
   }
 
   if (normalizedSql.includes('from karnataka_hoblis')) {
-    if (normalizedSql.includes('where id=')) {
-      const h = store.hoblis.find(x => x.id === params[0]);
-      return h ? { rows: [h], rowCount: 1 } : { rows: [{ id: params[0], name: 'Hobli', active: 1 }], rowCount: 1 };
+    if (normalizedSql.includes('where id=') || normalizedSql.includes('where id =')) {
+      const hobliId = params[0];
+      const match = DEMO_HOBLIS.find(x => x.id === hobliId) || store.hoblis.find(x => x.id === hobliId);
+      const talukId = match ? ('talukId' in match ? match.talukId : (match as any).taluk_id) : '';
+      return match
+        ? { rows: [{ id: match.id, taluk_id: talukId, name: match.name, code: match.code, active: 1 }], rowCount: 1 }
+        : { rows: [{ id: hobliId, name: 'Hobli', active: 1 }], rowCount: 1 };
     }
-    if (normalizedSql.includes('taluk_id=')) {
+    if (normalizedSql.includes('taluk_id=') || normalizedSql.includes('taluk_id =')) {
       const hoblis = getHoblisForTaluk(params[0]);
       return { rows: hoblis, rowCount: hoblis.length };
     }
@@ -508,11 +537,15 @@ function handleQuery(sql: string, params: any[] = []): DbResult {
   }
 
   if (normalizedSql.includes('from karnataka_villages')) {
-    if (normalizedSql.includes('where id=')) {
-      const v = store.villages.find(x => x.id === params[0]);
-      return v ? { rows: [v], rowCount: 1 } : { rows: [{ id: params[0], name: 'Village', active: 1 }], rowCount: 1 };
+    if (normalizedSql.includes('where id=') || normalizedSql.includes('where id =')) {
+      const villageId = params[0];
+      const match = DEMO_VILLAGES.find(x => x.id === villageId) || store.villages.find(x => x.id === villageId);
+      const hobliId = match ? ('hobliId' in match ? match.hobliId : (match as any).hobli_id) : '';
+      return match
+        ? { rows: [{ id: match.id, hobli_id: hobliId, name: match.name, code: match.code, active: 1 }], rowCount: 1 }
+        : { rows: [{ id: villageId, name: 'Village', active: 1 }], rowCount: 1 };
     }
-    if (normalizedSql.includes('hobli_id=')) {
+    if (normalizedSql.includes('hobli_id=') || normalizedSql.includes('hobli_id =')) {
       const villages = getVillagesForHobli(params[0]);
       return { rows: villages, rowCount: villages.length };
     }

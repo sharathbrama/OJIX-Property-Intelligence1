@@ -81,6 +81,13 @@ import OwnerInactivityGuard from "./components/OwnerInactivityGuard";
 import { authFetch } from "./authFetch";
 import { API_BASE_URL } from "./apiConfig";
 import { validatePropertyForm } from "./propertyFormValidation";
+import {
+  getDemoDistricts,
+  getDemoTaluks,
+  getDemoHoblis,
+  getDemoVillages,
+  type LocationOption,
+} from "./demoLocations";
 import "./owner-dashboard.css";
 
 import type { PropertyDoc, UserAccount, UserRole } from "./types";
@@ -9042,7 +9049,6 @@ function escapeHtml(text: string) {
   );
 }
 
-type LocationOption = { id: string; name: string; code: string };
 function LocationField({
   label,
   required,
@@ -9068,14 +9074,29 @@ function LocationField({
 }) {
   const unavailable = disabled || loading;
   const prompt = loading
-    ? "Loading…"
+    ? `Loading ${label.toLowerCase()}…`
     : error
       ? `Unable to load ${label}`
-      : placeholder;
+      : !options.length && !disabled
+        ? `No ${label.toLowerCase()} available`
+        : placeholder;
+
   return (
     <label className="form-field location-select-field">
-      <span>
-        {label} {required && <b>*</b>}
+      <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span>
+          {label} {required && <b>*</b>}
+        </span>
+        {loading && (
+          <small style={{ color: "#3b82f6", fontSize: "11px", fontWeight: 600 }}>
+            Loading…
+          </small>
+        )}
+        {!loading && !disabled && options.length > 0 && (
+          <small style={{ color: "#94a3b8", fontSize: "11px" }}>
+            {options.length} {options.length === 1 ? "option" : "options"}
+          </small>
+        )}
       </span>
       <select
         className="native-location-select"
@@ -9083,7 +9104,7 @@ function LocationField({
         value={selectedId}
         disabled={unavailable}
         aria-label={label}
-        aria-invalid={Boolean(validationError)}
+        aria-invalid={Boolean(validationError || error)}
         onChange={(event) => {
           const option = options.find((item) => item.id === event.target.value);
           onChange(option?.name || "", option);
@@ -9099,14 +9120,14 @@ function LocationField({
       {validationError && (
         <small className="field-error">{validationError}</small>
       )}
-      {!validationError &&
-        (error || (!loading && !disabled && !options.length)) && (
-          <small className="field-error">
-            {error
-              ? `Failed to load ${label.toLowerCase()}.`
-              : "No results found."}
-          </small>
-        )}
+      {!validationError && error && (
+        <small className="field-error">{error}</small>
+      )}
+      {!validationError && !error && !loading && !disabled && !options.length && (
+        <small style={{ color: "#94a3b8", fontSize: "11px" }}>
+          No records found for the selected parent.
+        </small>
+      )}
     </label>
   );
 }
@@ -9372,22 +9393,36 @@ function CreatePropertyModal({
         const data = await api<{ items: LocationOption[] }>(
           `/api/locations/${kind}${query}`,
         );
-        setLocations((p) => ({ ...p, [kind]: data.items }));
-      } catch (e) {
-        if (kind === "districts") {
-          const fallbackDistricts: LocationOption[] = [
-            { id: "44ddb060-53cf-4c38-863a-368f25212485", name: "Bengaluru Urban", code: "BLR-U" },
-            { id: "86cd7e12-0542-43ef-96e6-2a1f0c3a03f7", name: "Bengaluru Rural", code: "BLR-R" },
-            { id: "7bae1f91-63ec-40a4-9e6d-87ce1633af77", name: "Mysuru", code: "MYS" },
-            { id: "53025ed6-5b15-4887-a63d-73b521f7bfe6", name: "Ramanagara", code: "RMN" },
-            { id: "4c80e8a6-e6e3-4898-aa8f-47e7666f90a0", name: "Dakshina Kannada", code: "DKN" },
-            { id: "e62002d5-a909-4fa8-a2a5-19cc1b02142b", name: "Tumakuru", code: "TMK" },
-          ];
-          setLocations((p) => ({ ...p, districts: fallbackDistricts }));
-          setLocationError((p) => ({ ...p, districts: "" }));
+        if (data?.items && Array.isArray(data.items) && data.items.length > 0) {
+          setLocations((p) => ({ ...p, [kind]: data.items }));
+          setLocationError((p) => ({ ...p, [kind]: "" }));
+          return;
+        }
+        // Fall back to client demo data if API returns empty list
+        let fallback: LocationOption[] = [];
+        if (kind === "districts") fallback = getDemoDistricts();
+        else if (kind === "taluks" && parent) fallback = getDemoTaluks(parent);
+        else if (kind === "hoblis" && parent) fallback = getDemoHoblis(parent);
+        else if (kind === "villages" && parent) fallback = getDemoVillages(parent);
+
+        setLocations((p) => ({ ...p, [kind]: fallback }));
+        setLocationError((p) => ({ ...p, [kind]: "" }));
+      } catch (_e) {
+        // Fall back to client demo data if network/API fails
+        let fallback: LocationOption[] = [];
+        if (kind === "districts") fallback = getDemoDistricts();
+        else if (kind === "taluks" && parent) fallback = getDemoTaluks(parent);
+        else if (kind === "hoblis" && parent) fallback = getDemoHoblis(parent);
+        else if (kind === "villages" && parent) fallback = getDemoVillages(parent);
+
+        setLocations((p) => ({ ...p, [kind]: fallback }));
+        if (fallback.length > 0) {
+          setLocationError((p) => ({ ...p, [kind]: "" }));
         } else {
-          setLocations((p) => ({ ...p, [kind]: [] }));
-          setLocationError((p) => ({ ...p, [kind]: (e as Error).message }));
+          setLocationError((p) => ({
+            ...p,
+            [kind]: (_e as Error)?.message || `Unable to load ${kind}`,
+          }));
         }
       } finally {
         setLoadingLocation("");
@@ -9451,7 +9486,8 @@ function CreatePropertyModal({
       villageId: "",
     }));
     setLocations((p) => ({ ...p, taluks: [], hoblis: [], villages: [] }));
-    if (option) loadLocations("taluks", option.id);
+    setLocationError((p) => ({ ...p, taluks: "", hoblis: "", villages: "" }));
+    if (option?.id) loadLocations("taluks", option.id);
   };
   const selectTaluk = (value: string, option?: LocationOption) => {
     setRtcLookup(null);
@@ -9465,7 +9501,8 @@ function CreatePropertyModal({
       villageId: "",
     }));
     setLocations((p) => ({ ...p, hoblis: [], villages: [] }));
-    if (option) loadLocations("hoblis", option.id);
+    setLocationError((p) => ({ ...p, hoblis: "", villages: "" }));
+    if (option?.id) loadLocations("hoblis", option.id);
   };
   const selectHobli = (value: string, option?: LocationOption) => {
     setRtcLookup(null);
@@ -9477,7 +9514,16 @@ function CreatePropertyModal({
       villageId: "",
     }));
     setLocations((p) => ({ ...p, villages: [] }));
-    if (option) loadLocations("villages", option.id);
+    setLocationError((p) => ({ ...p, villages: "" }));
+    if (option?.id) loadLocations("villages", option.id);
+  };
+  const selectVillage = (value: string, option?: LocationOption) => {
+    setRtcLookup(null);
+    setForm((p) => ({
+      ...p,
+      village: value,
+      villageId: option?.id || "",
+    }));
   };
   const fetchRtc = async () => {
     setRtcLoading(true);
@@ -9825,10 +9871,13 @@ function CreatePropertyModal({
                 </label>
               )}
               <div className="form-section-heading">
-                <span>Administrative location</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span>Administrative location</span>
+                  <span className="demo-mode-badge" style={{ fontSize: "10px", padding: "2px 7px", letterSpacing: "0.5px" }}>DEMO DATA</span>
+                </div>
                 <small>
                   Select in order: District → Taluk → Hobli/Town → Index-II
-                  Village.
+                  Village. (Seeded demonstration records)
                 </small>
               </div>
               <LocationField
@@ -9876,14 +9925,7 @@ function CreatePropertyModal({
                 validationError={visibleError("villageId")}
                 disabled={!form.hobliId}
                 placeholder="Select hobli / town first"
-                onChange={(value, option) => {
-                  setRtcLookup(null);
-                  setForm((p) => ({
-                    ...p,
-                    village: value,
-                    villageId: option?.id || "",
-                  }));
-                }}
+                onChange={selectVillage}
               />
               {!editing && (
                 <div className="selected-property-type">
