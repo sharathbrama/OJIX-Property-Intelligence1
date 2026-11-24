@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OJIX Property Intelligence — The End-to-End Product Workflow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #030408;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .banner-wrapper {
+      position: relative;
+      width: 1600px;
+      height: 1000px;
+      box-shadow: 0 40px 140px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 84, 38, 0.3);
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background: #070A12;
+      color: #FFFFFF;
+    }
+
+    /* Subtle background grid & technical aura */
+    .banner-wrapper::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: 
+        linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* Top ambient glow */
+    .banner-wrapper::after {
+      content: '';
+      position: absolute;
+      top: -120px;
+      left: 30%;
+      width: 600px;
+      height: 250px;
+      background: radial-gradient(circle, rgba(255, 84, 38, 0.15) 0%, rgba(14, 165, 233, 0.08) 50%, transparent 80%);
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    /* ═════════════════════════════════════════════════════════════════
+       HEADER BAR: LOGO, STEP BREADCRUMBS & EXECUTIVE METRICS
+       ═════════════════════════════════════════════════════════════════ */
+    .banner-header {
+      height: 86px;
+      background: rgba(13, 17, 27, 0.96);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 36px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+
+    .brand-logo-icon {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #FF5426 0%, #D83B10 100%);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 20px rgba(255, 84, 38, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .brand-logo-icon svg {
+      width: 24px;
+      height: 24px;
+      fill: #FFFFFF;
+    }
+
+    .brand-title-wrap h1 {
+      font-size: 20px;
+      font-weight: 900;
+      letter-spacing: 0.03em;
+      color: #FFFFFF;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-title-wrap h1 span.badge {
+      font-size: 9.5px;
+      font-weight: 800;
+      background: rgba(255, 84, 38, 0.16);
+      color: #FF5426;
+      border: 1px solid rgba(255, 84, 38, 0.4);
+      padding: 2.5px 8px;
+      border-radius: 4px;
+      letter-spacing: 0.1em;
+    }
+
+    .brand-title-wrap p {
+      font-size: 11px;
+      color: #8FA0B8;
+      font-weight: 500;
+      margin-top: 1px;
+    }
+
+    /* Interactive Pipeline Progress Header */
+    .header-pipeline-track {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(18, 24, 38, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 6px 18px;
+      border-radius: 40px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px;
+      font-weight: 700;
+      box-shadow: inset 0 1px 4px rgba(0,0,0,0.4);
+    }
+
+    .track-step {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      color: #64748B;
+    }
+
+    .track-step.done {
+      color: #38BDF8;
+      background: rgba(56, 189, 248, 0.1);
+    }
+
+    .track-step.active {
+      color: #FF5426;
+      background: rgba(255, 84, 38, 0.15);
+      border: 1px solid rgba(255, 84, 38, 0.35);
+    }
+
+    .track-step.verified {
+      color: #10B981;
+      background: rgba(16, 185, 129, 0.12);
+    }
+
+    .track-arrow {
+      color: #475569;
+      font-size: 11px;
+    }
+
+    .header-cta-group {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .header-badge-metric {
+      text-align: right;
+    }
+
+    .header-badge-metric .val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14.5px;
+      font-weight: 800;
+      color: #FFFFFF;
+    }
+
+    .header-badge-metric .lbl {
+      font-size: 9px;
+      color: #70829B;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+
+    /* ═════════════════════════════════════════════════════════════════
+       MAIN 3-PANEL LAYOUT (INPUT ➔ PRODUCT COCKPIT ➔ OUTPUT)
+       ═════════════════════════════════════════════════════════════════ */
+    .banner-body {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 360px 810px 430px;
+      position: relative;
+      z-index: 5;
+      overflow: hidden;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       COLUMN 1: RAW DEED INTAKE (AUTHENTIC DOCUMENT SCREENSHOTS)
+       ───────────────────────────────────────────────────────────── */
+    .stage-input {
+      background: linear-gradient(180deg, #0A0E18 0%, #070912 100%);
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 16px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      position: relative;
+    }
+
+    .section-eyebrow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+      padding-bottom: 7px;
+    }
+
+    .pill-step {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      font-weight: 800;
+      color: #38BDF8;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 2.5px 8px;
+      border-radius: 4px;
+      letter-spacing: 0.08em;
+    }
+
+    .section-heading-title {
+      font-size: 12.5px;
+      font-weight: 900;
+      color: #FFFFFF;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-top: 1px;
+    }
+
+    .section-subtext {
+      font-size: 9.5px;
+      color: #8E9BAE;
+      line-height: 1.35;
+    }
+
+    /* Document Stack (4 Realistic Mini Government Document Mockups) */
+    .doc-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      flex: 1;
+    }
+
+    .deed-mockup-card {
+      background: #111624;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 9px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      position: relative;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      transition: all 0.2s ease;
+    }
+
+    .deed-mockup-card:hover {
+      border-color: rgba(56, 189, 248, 0.5);
+      background: #151C2E;
+    }
+
+    .card-top-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .card-doc-title {
+      font-size: 11px;
+      font-weight: 800;
+      color: #F8FAFC;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .card-portal-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 3px;
+      text-transform: uppercase;
+    }
+
+    .portal-kaveri {
+      color: #FF5426;
+      background: rgba(255, 84, 38, 0.14);
+      border: 1px solid rgba(255, 84, 38, 0.35);
+    }
+
+    .portal-bhoomi {
+      color: #10B981;
+      background: rgba(16, 185, 129, 0.14);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+
+    .portal-nadakacheri {
+      color: #F59E0B;
+      background: rgba(245, 158, 11, 0.14);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+    }
+
+    .portal-mojini {
+      color: #38BDF8;
+      background: rgba(56, 189, 248, 0.14);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+
+    /* Authentic Miniature Document Paper Preview */
+    .mini-document-paper {
+      background: #F8FAFC;
+      border-radius: 4px;
+      padding: 6px 8px;
+      color: #0F172A;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .doc-watermark-strip {
+      position: absolute;
+      right: 6px;
+      bottom: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 6.5px;
+      font-weight: 900;
+      color: rgba(15, 23, 42, 0.15);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      pointer-events: none;
+    }
+
+    .paper-stamp-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 0.8px solid #CBD5E1;
+      padding-bottom: 3px;
+    }
+
+    .govt-emblem-text {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7px;
+      font-weight: 800;
+      color: #1E293B;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .stamp-seal-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 6.5px;
+      font-weight: 800;
+      color: #047857;
+      background: #D1FAE5;
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+
+    .paper-body-preview {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 7.8px;
+      line-height: 1.3;
+    }
+
+    .paper-meta-row {
+      display: flex;
+      justify-content: space-between;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.2px;
+      color: #475569;
+    }
+
+    .paper-kannada-line {
+      font-size: 8px;
+      color: #0F172A;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background: #F1F5F9;
+      padding: 2px 4px;
+      border-left: 2px solid #FF5426;
+      border-radius: 2px;
+    }
+
+    .paper-footer-barcode {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 1px;
+    }
+
+    .barcode-svg {
+      height: 10px;
+      width: 80px;
+      opacity: 0.7;
+    }
+
+    .intake-pipeline-badge {
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px dashed rgba(56, 189, 248, 0.35);
+      border-radius: 6px;
+      padding: 7px 10px;
+      text-align: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8.5px;
+      color: #38BDF8;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       COLUMN 2: THE OJIX PRODUCT COCKPIT (THE HEART / WORKFLOW ENGINE)
+       ───────────────────────────────────────────────────────────── */
+    .stage-cockpit {
+      background: #090C16;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      position: relative;
+    }
+
+    .cockpit-header-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .app-window-frame {
+      background: #101422;
+      border: 1px solid rgba(255, 84, 38, 0.45);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.75);
+    }
+
+    /* App Chrome Title Bar */
+    .app-titlebar {
+      height: 38px;
+      background: #161B2B;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+    }
+
+    .window-dots {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .w-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .w-dot.red { background: #EF4444; }
+    .w-dot.yellow { background: #F59E0B; }
+    .w-dot.green { background: #10B981; }
+
+    .app-breadcrumbs {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 700;
+      color: #CBD5E1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .app-breadcrumbs span.matter {
+      color: #FF5426;
+      font-weight: 800;
+    }
+
+    .live-session-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8.5px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      padding: 2px 8px;
+      border-radius: 4px;
+      color: #10B981;
+      font-weight: 800;
+    }
+
+    .live-pulse {
+      width: 6px;
+      height: 6px;
+      background: #10B981;
+      border-radius: 50%;
+      box-shadow: 0 0 8px #10B981;
+    }
+
+    /* 4-Quadrant Engine Grid */
+    .cockpit-quad-grid {
+      flex: 1;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 420px 350px;
+      grid-template-rows: 245px 175px;
+      gap: 10px;
+      background: #0A0D17;
+    }
+
+    .cockpit-card {
+      background: #121726;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 9px 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card-label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8.5px;
+      font-weight: 800;
+      color: #94A3B8;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .status-badge-pass {
+      color: #10B981;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      padding: 1.5px 6px;
+      border-radius: 3px;
+      font-weight: 800;
+    }
+
+    /* 1. Cadastral Vector GIS Canvas */
+    .gis-canvas-container {
+      flex: 1;
+      background: #060910;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .gis-canvas-container svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .gis-overlay-legend {
+      position: absolute;
+      bottom: 6px;
+      left: 8px;
+      background: rgba(9, 12, 20, 0.9);
+      backdrop-filter: blur(4px);
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.2px;
+      color: #CBD5E1;
+      display: flex;
+      gap: 10px;
+    }
+
+    /* 2. 30-Year Title Chain DAG Timeline */
+    .dag-flow-container {
+      flex: 1;
+      background: #060910;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-around;
+      gap: 6px;
+    }
+
+    .dag-step-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .dag-box {
+      background: #161D2E;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      padding: 5px 7px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5px;
+    }
+
+    .dag-box.highlight-target {
+      border-color: #10B981;
+      background: rgba(16, 185, 129, 0.1);
+    }
+
+    .dag-year {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.5px;
+      font-weight: 800;
+      color: #FF5426;
+    }
+
+    .dag-title {
+      font-size: 8.5px;
+      font-weight: 800;
+      color: #FFFFFF;
+      white-space: nowrap;
+    }
+
+    .dag-desc {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 6.8px;
+      color: #71849D;
+    }
+
+    .dag-arrow-icon {
+      color: #10B981;
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    /* 3. Bilingual Kannada/English OCR Normalizer */
+    .bilingual-ocr-table {
+      flex: 1;
+      background: #060910;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      padding: 6px 9px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .ocr-entry-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 8.2px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      padding: 2.5px 0;
+    }
+
+    .ocr-field-name {
+      color: #8E9BAE;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.5px;
+    }
+
+    .ocr-kannada-text {
+      color: #F1F5F9;
+      font-weight: 600;
+      font-size: 8.2px;
+    }
+
+    .ocr-eng-text {
+      color: #38BDF8;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8px;
+    }
+
+    .ocr-match-tag {
+      color: #10B981;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.5px;
+      font-weight: 800;
+    }
+
+    /* 4. 10-Role Cross-Verification Matrix */
+    .role-matrix-container {
+      flex: 1;
+      background: #060910;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      padding: 5px 7px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    .roles-grid-10 {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
+    }
+
+    .role-badge-cell {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      padding: 4px 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 1px;
+    }
+
+    .role-badge-cell.signed {
+      border-color: rgba(16, 185, 129, 0.4);
+      background: rgba(16, 185, 129, 0.08);
+    }
+
+    .role-badge-title {
+      font-size: 7.8px;
+      font-weight: 800;
+      color: #E2E8F0;
+    }
+
+    .role-badge-status {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 6.5px;
+      font-weight: 800;
+      color: #10B981;
+      text-transform: uppercase;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       COLUMN 3: THE INSTITUTIONAL CLEARANCE DELIVERABLE (OUTPUT)
+       ───────────────────────────────────────────────────────────── */
+    .stage-output {
+      background: linear-gradient(180deg, #0A0E1A 0%, #060912 100%);
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      position: relative;
+    }
+
+    .cert-dossier-card {
+      background: #111728;
+      border: 1.5px solid #10B981;
+      border-radius: 10px;
+      padding: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 11px;
+      box-shadow: 0 12px 40px rgba(16, 185, 129, 0.15);
+      position: relative;
+      overflow: hidden;
+      flex: 1;
+    }
+
+    .cert-dossier-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, #10B981, #FF5426);
+    }
+
+    .cert-header-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .seal-grade-a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(16, 185, 129, 0.16);
+      border: 1px solid #10B981;
+      color: #10B981;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 900;
+      padding: 3.5px 9px;
+      border-radius: 5px;
+      letter-spacing: 0.05em;
+    }
+
+    .score-counter-block {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 800;
+      color: #FFFFFF;
+    }
+
+    .score-counter-block strong {
+      color: #10B981;
+      font-size: 14px;
+    }
+
+    .cert-title-header h3 {
+      font-size: 14.5px;
+      font-weight: 900;
+      color: #FFFFFF;
+      letter-spacing: 0.02em;
+    }
+
+    .cert-title-header p {
+      font-size: 9.5px;
+      color: #8E9BAE;
+      margin-top: 1.5px;
+    }
+
+    /* Verification Checklist */
+    .findings-checklist {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 9px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .finding-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      font-size: 9px;
+      line-height: 1.35;
+      color: #CBD5E1;
+    }
+
+    .finding-tick {
+      color: #10B981;
+      font-weight: 900;
+      font-size: 11px;
+    }
+
+    .finding-row strong {
+      color: #FFFFFF;
+    }
+
+    .blockchain-audit-stamp {
+      background: #080C16;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 8px 9px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .audit-label-small {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.2px;
+      font-weight: 800;
+      color: #64748B;
+      text-transform: uppercase;
+    }
+
+    .audit-hash-mono {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8px;
+      color: #38BDF8;
+      word-break: break-all;
+    }
+
+    .download-pdf-button {
+      background: linear-gradient(135deg, #FF5426 0%, #D83B10 100%);
+      color: #FFFFFF;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 10px;
+      border-radius: 6px;
+      text-align: center;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 18px rgba(255, 84, 38, 0.4);
+      margin-top: auto;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    /* ═════════════════════════════════════════════════════════════════
+       FOOTER BAR: COMMITMENT & REACH
+       ═════════════════════════════════════════════════════════════════ */
+    .banner-footer {
+      height: 56px;
+      background: #06080E;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 36px;
+      font-size: 11px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .footer-guarantee {
+      color: #CBD5E1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .footer-guarantee svg {
+      width: 15px;
+      height: 15px;
+      fill: #10B981;
+    }
+
+    .footer-pitch {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: #8E9BAE;
+    }
+
+    .footer-pitch span.orange {
+      color: #FF5426;
+      font-weight: 800;
+    }
+
+    .footer-contact {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px;
+      color: #CBD5E1;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="banner-wrapper">
+
+    <!-- ═════════════════════════════════════════════════════════════════
+         HEADER: THE ENTERPRISE PRODUCT PIPELINE
+         ═════════════════════════════════════════════════════════════════ -->
+    <header class="banner-header">
+      <div class="brand-group">
+        <div class="brand-logo-icon">
+          <svg viewBox="0 0 24 24">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+        </div>
+        <div class="brand-title-wrap">
+          <h1>OJIX PROPERTY INTELLIGENCE <span class="badge">PRODUCT WORKFLOW</span></h1>
+          <p>Institutional Non-Litigation Due Diligence Platform for Karnataka</p>
+        </div>
+      </div>
+
+      <!-- Live Pipeline Progress Indicator -->
+      <div class="header-pipeline-track">
+        <div class="track-step done">
+          <span>01</span> RAW DEED INTAKE
+        </div>
+        <span class="track-arrow">➔</span>
+        <div class="track-step active">
+          <span>02</span> OJIX INTELLIGENCE CORE
+        </div>
+        <span class="track-arrow">➔</span>
+        <div class="track-step verified">
+          <span>03</span> CLEARANCE CERTIFICATE
+        </div>
+      </div>
+
+      <div class="header-cta-group">
+        <div class="header-badge-metric">
+          <div class="val">48 Hours</div>
+          <div class="lbl">Turnaround vs 4 Weeks</div>
+        </div>
+        <div class="header-badge-metric">
+          <div class="val" style="color:#10B981;">0 Blindspots</div>
+          <div class="lbl">8 Unified Portals</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ═════════════════════════════════════════════════════════════════
+         MAIN 3-PANEL PIPELINE
+         ═════════════════════════════════════════════════════════════════ -->
+    <main class="banner-body">
+
+      <!-- ── COLUMN 1: RAW DEED INJECTIONS (THE INPUT) ── -->
+      <section class="stage-input">
+        <div class="section-eyebrow">
+          <span class="pill-step">STAGE 01 • INGESTION</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:8.5px; color:#64748B;">INPUT LAYER</span>
+        </div>
+
+        <div class="section-heading-title">RAW DEED INJECTIONS</div>
+        <p class="section-subtext">Ingesting fragmented government records into normalized digital intelligence.</p>
+
+        <div class="doc-stack">
+
+          <!-- 1. SALE DEED MOCKUP (KAVERI 2.0) -->
+          <div class="deed-mockup-card">
+            <div class="card-top-header">
+              <span class="card-doc-title">📜 Sale Deed (ಕ್ರಯಪತ್ರ)</span>
+              <span class="card-portal-badge portal-kaveri">Kaveri 2.0</span>
+            </div>
+            <div class="mini-document-paper">
+              <div class="doc-watermark-strip">KAVERI-2 DEED</div>
+              <div class="paper-stamp-header">
+                <span class="govt-emblem-text">🏛️ GOVT OF KARNATAKA • STAMPS</span>
+                <span class="stamp-seal-badge">E-STAMP VERIFIED</span>
+              </div>
+              <div class="paper-body-preview">
+                <div class="paper-meta-row">
+                  <span>Doc #4582/2023</span>
+                  <span>SRO K.R. Puram</span>
+                </div>
+                <div class="paper-kannada-line">“ಕ್ರಮಬದ್ಧ ಶುದ್ಧ ಕ್ರಯಪತ್ರ: ಕೃಷ್ಣರಾಜಪುರಂ ಹೋಬಳಿ...”</div>
+              </div>
+              <div class="paper-footer-barcode">
+                <svg class="barcode-svg" viewBox="0 0 100 12">
+                  <rect x="0" y="0" width="3" height="12" fill="#0F172A"/>
+                  <rect x="5" y="0" width="1.5" height="12" fill="#0F172A"/>
+                  <rect x="9" y="0" width="4" height="12" fill="#0F172A"/>
+                  <rect x="15" y="0" width="2" height="12" fill="#0F172A"/>
+                  <rect x="19" y="0" width="1" height="12" fill="#0F172A"/>
+                  <rect x="23" y="0" width="3" height="12" fill="#0F172A"/>
+                  <rect x="28" y="0" width="4" height="12" fill="#0F172A"/>
+                  <rect x="34" y="0" width="1.5" height="12" fill="#0F172A"/>
+                  <rect x="38" y="0" width="3" height="12" fill="#0F172A"/>
+                  <rect x="43" y="0" width="2" height="12" fill="#0F172A"/>
+                  <rect x="47" y="0" width="5" height="12" fill="#0F172A"/>
+                  <rect x="54" y="0" width="2" height="12" fill="#0F172A"/>
+                  <rect x="58" y="0" width="4" height="12" fill="#0F172A"/>
+                  <rect x="64" y="0" width="2" height="12" fill="#0F172A"/>
+                  <rect x="68" y="0" width="3" height="12" fill="#0F172A"/>
+                  <rect x="73" y="0" width="1.5" height="12" fill="#0F172A"/>
+                  <rect x="76" y="0" width="4" height="12" fill="#0F172A"/>
+                  <rect x="82" y="0" width="2" height="12" fill="#0F172A"/>
+                  <rect x="86" y="0" width="3" height="12" fill="#0F172A"/>
+                  <rect x="91" y="0" width="5" height="12" fill="#0F172A"/>
+                </svg>
+                <span style="font-family:'JetBrains Mono',monospace; font-size:6.5px; color:#475569;">IN-KA910284U</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. RTC / PAHANI MOCKUP (BHOOMI PORTAL) -->
+          <div class="deed-mockup-card">
+            <div class="card-top-header">
+              <span class="card-doc-title">📄 RTC / Pahani (ಪಹಣಿ)</span>
+              <span class="card-portal-badge portal-bhoomi">Bhoomi</span>
+            </div>
+            <div class="mini-document-paper">
+              <div class="doc-watermark-strip">BHOOMI RECORD</div>
+              <div class="paper-stamp-header">
+                <span class="govt-emblem-text">🌾 REVENUE DEPT • FORM NO. 16</span>
+                <span class="stamp-seal-badge" style="background:#DCFCE7; color:#15803D;">DIGITAL SIGNED</span>
+              </div>
+              <div class="paper-body-preview">
+                <div class="paper-meta-row">
+                  <span>Sy No. 45/3A</span>
+                  <span>Extent: 2A 14G (Kharab: Nil)</span>
+                </div>
+                <div class="paper-kannada-line">“ಕಾಲಂ 9/10: ರಮೇಶ್ ರಾವ್ ಬಿನ್ ಆನಂದ ರಾವ್”</div>
+              </div>
+              <div class="paper-footer-barcode">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:6.5px; color:#047857; font-weight:700;">QR VALIDATED • HOB: BIDARAHALLI</span>
+                <span style="font-family:'JetBrains Mono',monospace; font-size:6.5px; color:#475569;">REV/2024/718</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. MUTATION EXTRACT & INCOME/CASTE (BHOOMI / NADAKACHERI) -->
+          <div class="deed-mockup-card">
+            <div class="card-top-header">
+              <span class="card-doc-title">📑 Mutation Extract (ಎಂ.ಆರ್)</span>
+              <span class="card-portal-badge portal-nadakacheri">Nadakacheri</span>
+            </div>
+            <div class="mini-document-paper">
+              <div class="doc-watermark-strip">NADAKACHERI CERT</div>
+              <div class="paper-stamp-header">
+                <span class="govt-emblem-text">⚖️ M.R. REGISTER • SEC 79A/B</span>
+                <span class="stamp-seal-badge" style="background:#FEF3C7; color:#B45309;">MUTATION PASS</span>
+              </div>
+              <div class="paper-body-preview">
+                <div class="paper-meta-row">
+                  <span>M.R. No. T14/2012-13</span>
+                  <span>Hissa Podi Certified</span>
+                </div>
+                <div class="paper-kannada-line">“ವಾರಸುದಾರಿಕೆ ಖಾತೆ ವರ್ಗಾವಣೆ ಮಂಜೂರು...”</div>
+              </div>
+              <div class="paper-footer-barcode">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:6.5px; color:#B45309; font-weight:700;">PTCL NON-INVOLVEMENT OK</span>
+                <span style="font-family:'JetBrains Mono',monospace; font-size:6.5px; color:#475569;">RD00382910</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. VILLAGE TIPPANI & CADASTRAL MAP (MOJINI 3) -->
+          <div class="deed-mockup-card">
+            <div class="card-top-header">
+              <span class="card-doc-title">🗺️ Village Tippan / Map</span>
+              <span class="card-portal-badge portal-mojini">Mojini 3.0</span>
+            </div>
+            <div class="mini-document-paper">
+              <div class="doc-watermark-strip">MOJINI CADASTRAL</div>
+              <div class="paper-stamp-header">
+                <span class="govt-emblem-text">📐 SURVEY & SETTLEMENT DEPT</span>
+                <span class="stamp-seal-badge" style="background:#E0F2FE; color:#0369A1;">FMB VERIFIED</span>
+              </div>
+              <div class="paper-body-preview">
+                <div class="paper-meta-row">
+                  <span>Village: Kadugodi</span>
+                  <span>Cadastral Sheet #12</span>
+                </div>
+                <div class="paper-kannada-line">“ಅಕಾರಬಂಧ & ಟಿಪ್ಪಣಿ ದಾಖಲೆ ತಾಳೆ ಆಗಿದೆ”</div>
+              </div>
+              <div class="paper-footer-barcode">
+                <span style="font-family:'JetBrains Mono',monospace; font-size:6.5px; color:#0284C7; font-weight:700;">LAT/LONG BOUNDS LOCKED</span>
+                <span style="font-family:'JetBrains Mono',monospace; font-size:6.5px; color:#475569;">MOJ/BLR/45-3A</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="intake-pipeline-badge">
+          ⚡ Real-Time Government Registry Synchronization
+        </div>
+      </section>
+
+      <!-- ── COLUMN 2: THE OJIX PRODUCT COCKPIT (THE WORKSPACE ENGINE) ── -->
+      <section class="stage-cockpit">
+        <div class="cockpit-header-bar">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="pill-step" style="color:#FF5426; background:rgba(255,84,38,0.12); border-color:rgba(255,84,38,0.35);">STAGE 02 • THE ENGINE</span>
+            <span class="section-heading-title">THIS IS OJIX INTELLIGENCE</span>
+          </div>
+          <div class="live-session-pill">
+            <div class="live-pulse"></div>
+            <span>LIVE MULTI-ROLE GOVERNANCE</span>
+          </div>
+        </div>
+
+        <!-- SaaS Software App Window Mockup -->
+        <div class="app-window-frame">
+          <!-- Titlebar -->
+          <div class="app-titlebar">
+            <div class="window-dots">
+              <div class="w-dot red"></div>
+              <div class="w-dot yellow"></div>
+              <div class="w-dot green"></div>
+            </div>
+            <div class="app-breadcrumbs">
+              <span>OJIX Workspace</span> /
+              <span class="matter">Matter #842: Kadugodi Sy 45/3A</span> /
+              <span>Cross-Verification Pipeline</span>
+            </div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:8.5px; color:#94A3B8;">
+              PORTAL: KA-BLR-EAST
+            </div>
+          </div>
+
+          <!-- 4 Interconnected Specialized Engine Panes -->
+          <div class="cockpit-quad-grid">
+
+            <!-- PANE 1: CADASTRAL GIS SPATIAL SCREENER -->
+            <div class="cockpit-card">
+              <div class="card-label-row">
+                <span>01. Sub-Meter GIS Buffer Screener</span>
+                <span class="status-badge-pass">PASS: 72.4M SETBACK</span>
+              </div>
+              <div class="gis-canvas-container">
+                <svg viewBox="0 0 400 175">
+                  <defs>
+                    <pattern id="gridSub" width="16" height="16" patternUnits="userSpaceOnUse">
+                      <path d="M 16 0 L 0 0 0 16" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.8"/>
+                    </pattern>
+                  </defs>
+                  <rect width="100%" height="100%" fill="url(#gridSub)"/>
+
+                  <!-- Primary SWD (Rajakaluve Stream) -->
+                  <path d="M 10 32 Q 140 72 240 42 T 390 82" fill="none" stroke="#0284C7" stroke-width="8" stroke-linecap="round"/>
+                  <text x="20" y="24" fill="#38BDF8" font-size="8.5" font-family="'JetBrains Mono', monospace" font-weight="800">PRIMARY RAJAKALUVE (SWD)</text>
+
+                  <!-- 50m Statutory Buffer Zone Band -->
+                  <path d="M 10 32 Q 140 72 240 42 T 390 82" fill="none" stroke="rgba(239, 68, 68, 0.22)" stroke-width="40"/>
+                  <text x="270" y="72" fill="#EF4444" font-size="7.5" font-family="'JetBrains Mono', monospace" font-weight="700">50m STATUTORY BUFFER</text>
+
+                  <!-- Cleared Subject Parcel: Sy 45/3A (Green) -->
+                  <polygon points="170,98 280,88 295,152 180,160" fill="rgba(16, 185, 129, 0.22)" stroke="#10B981" stroke-width="2"/>
+                  <text x="195" y="125" fill="#FFFFFF" font-size="9" font-weight="900">Sy 45/3A (2A 14G)</text>
+                  <text x="195" y="137" fill="#10B981" font-size="7.5" font-weight="800" font-family="'JetBrains Mono', monospace">CLEARED • 72.4m SETBACK</text>
+
+                  <!-- Encroached Adjacent Parcel: Sy 45/3B (Red Alert) -->
+                  <polygon points="50,48 130,58 120,108 45,98" fill="rgba(239, 68, 68, 0.25)" stroke="#EF4444" stroke-width="1.8" stroke-dasharray="3,3"/>
+                  <text x="54" y="78" fill="#FCA5A5" font-size="7.5" font-weight="800">Sy 45/3B (BUFFER VIOLATION)</text>
+
+                  <!-- Distance Measurement Vector -->
+                  <line x1="205" y1="95" x2="195" y2="60" stroke="#F59E0B" stroke-width="1.5" stroke-dasharray="2,2"/>
+                  <circle cx="195" cy="60" r="3" fill="#F59E0B"/>
+                  <circle cx="205" cy="95" r="3" fill="#10B981"/>
+                  <rect x="202" y="69" width="40" height="13" rx="2" fill="#0F172A" stroke="#F59E0B" stroke-width="0.8"/>
+                  <text x="206" y="79" fill="#F59E0B" font-size="8" font-family="'JetBrains Mono', monospace" font-weight="800">72.4m</text>
+                </svg>
+                <div class="gis-overlay-legend">
+                  <span>● Cadastral Boundary</span>
+                  <span style="color:#0284C7;">● 50m SWD Buffer</span>
+                  <span style="color:#10B981;">● 0% Buffer Encroachment</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- PANE 2: 30-YEAR TITLE CHAIN DAG ENGINE -->
+            <div class="cockpit-card">
+              <div class="card-label-row">
+                <span>02. 30-Year Title DAG Lineage</span>
+                <span class="status-badge-pass">UNBROKEN CHAIN</span>
+              </div>
+              <div class="dag-flow-container">
+                <!-- Row 1: Grant to Sale -->
+                <div class="dag-step-row">
+                  <div class="dag-box">
+                    <span class="dag-year">1994 • Saguvali Chit</span>
+                    <span class="dag-title">Govt Land Grant</span>
+                    <span class="dag-desc">Grantee: Ramappa</span>
+                  </div>
+                  <span class="dag-arrow-icon">➔</span>
+                  <div class="dag-box">
+                    <span class="dag-year">2003 • Registered Sale</span>
+                    <span class="dag-title">Absolute Sale Deed</span>
+                    <span class="dag-desc">Doc #1892/03</span>
+                  </div>
+                </div>
+                <!-- Row 2: Partition to Present Owner -->
+                <div class="dag-step-row">
+                  <div class="dag-box">
+                    <span class="dag-year">2014 • M.R. T14</span>
+                    <span class="dag-title">Hissa Podi Division</span>
+                    <span class="dag-desc">Sy 45/3 divided to 3A</span>
+                  </div>
+                  <span class="dag-arrow-icon">➔</span>
+                  <div class="dag-box highlight-target">
+                    <span class="dag-year" style="color:#10B981;">2024 • Clear Title</span>
+                    <span class="dag-title" style="color:#10B981;">Owner: Ramesh Rao</span>
+                    <span class="dag-desc" style="color:#A7F3D0;">Kaveri & Bhoomi Match</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- PANE 3: BILINGUAL KANNADA/ENGLISH OCR EXTRACTION -->
+            <div class="cockpit-card">
+              <div class="card-label-row">
+                <span>03. Bilingual OCR Entity Normalizer</span>
+                <span style="color:#38BDF8; font-family:'JetBrains Mono',monospace; font-size:8px;">99.8% ACCURACY</span>
+              </div>
+              <div class="bilingual-ocr-table">
+                <div class="ocr-entry-row">
+                  <span class="ocr-field-name">OWNER (ಕಾಲಂ 9):</span>
+                  <span class="ocr-kannada-text">ಶ್ರೀ ರಮೇಶ್ ರಾವ್</span>
+                  <span class="ocr-eng-text">Ramesh Rao</span>
+                  <span class="ocr-match-tag">MATCH ✓</span>
+                </div>
+                <div class="ocr-entry-row">
+                  <span class="ocr-field-name">EXTENT (ವಿಸ್ತೀರ್ಣ):</span>
+                  <span class="ocr-kannada-text">2 ಎಕರೆ 14 ಗುಂಟೆ</span>
+                  <span class="ocr-eng-text">2A 14G (0 Kharab)</span>
+                  <span class="ocr-match-tag">MATCH ✓</span>
+                </div>
+                <div class="ocr-entry-row">
+                  <span class="ocr-field-name">MUTATION (ಎಂ.ಆರ್):</span>
+                  <span class="ocr-kannada-text">ಎಂ.ಆರ್. ಟಿ14/2012</span>
+                  <span class="ocr-eng-text">MR T14/2012-13</span>
+                  <span class="ocr-match-tag">MATCH ✓</span>
+                </div>
+                <div class="ocr-entry-row">
+                  <span class="ocr-field-name">ENCUMBRANCE:</span>
+                  <span class="ocr-kannada-text">ನಿರಾಕ್ಷೇಪಣಾ ಪತ್ರ</span>
+                  <span class="ocr-eng-text">Nil Encumbrance</span>
+                  <span class="ocr-match-tag">MATCH ✓</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- PANE 4: 10-ROLE COLLABORATIVE WORKSPACE REGISTRY -->
+            <div class="cockpit-card">
+              <div class="card-label-row">
+                <span>04. 10-Role Governance Matrix</span>
+                <span class="status-badge-pass">ALL 10 VERIFIED</span>
+              </div>
+              <div class="role-matrix-container">
+                <div class="roles-grid-10">
+                  <div class="role-badge-cell signed"><span class="role-badge-title">Admin</span><span class="role-badge-status">✓ Ready</span></div>
+                  <div class="role-badge-cell signed"><span class="role-badge-title">Owner</span><span class="role-badge-status">✓ Case</span></div>
+                  <div class="role-badge-cell signed"><span class="role-badge-title">Ops</span><span class="role-badge-status">✓ Ingest</span></div>
+                  <div class="role-badge-cell signed"><span class="role-badge-title">Data</span><span class="role-badge-status">✓ Sync</span></div>
+                  <div class="role-badge-cell signed"><span class="role-badge-title">Analyst</span><span class="role-badge-status">✓ DAG</span></div>
+                  <div class="role-badge-cell signed"><span class="role-badge-title">Lawyer</span><span class="role-badge-status">✓ Title</span></div>
+                  <div class="role-badge-cell signed"><span class="role-badge-title">GIS</span><span class="role-badge-status">✓ Buffer</span></div>
+                  <div class="role-badge-cell signed"><span class="role-badge-title">Support</span><span class="role-badge-status">✓ Queue</span></div>
+                  <div class="role-badge-cell signed"><span class="role-badge-title">Super</span><span class="role-badge-status">✓ Audit</span></div>
+                  <div class="role-badge-cell signed"><span class="role-badge-title">Client</span><span class="role-badge-status">✓ Dossier</span></div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+      <!-- ── COLUMN 3: INSTITUTIONAL CLEARANCE DELIVERABLE (THE OUTPUT) ── -->
+      <section class="stage-output">
+        <div class="section-eyebrow">
+          <span class="pill-step" style="color:#10B981; background:rgba(16,185,129,0.12); border-color:rgba(16,185,129,0.35);">STAGE 03 • OUTPUT</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:8.5px; color:#10B981;">DELIVERABLE</span>
+        </div>
+
+        <div class="section-heading-title">TITLE CLEARANCE DOSSIER</div>
+        <p class="section-subtext">Board-ready legal opinion and institutional risk certificate generated in 48 hours.</p>
+
+        <div class="cert-dossier-card">
+          <div class="cert-header-meta">
+            <span class="seal-grade-a">GRADE A • CLEAR TITLE</span>
+            <div class="score-counter-block">Score: <strong>98/100</strong></div>
+          </div>
+
+          <div class="cert-title-header">
+            <h3>Kadugodi Sy 45/3A</h3>
+            <p>Bengaluru East Taluk • 2 Acres 14 Guntas</p>
+          </div>
+
+          <div class="findings-checklist">
+            <div class="finding-row">
+              <span class="finding-tick">✓</span>
+              <span><strong>30-Year Unbroken Lineage:</strong> 1994 Govt Grant to 2024 Sale Deed verified with zero gaps.</span>
+            </div>
+            <div class="finding-row">
+              <span class="finding-tick">✓</span>
+              <span><strong>0% GIS Encroachment:</strong> 72.4m distance from 50m Rajakaluve buffer; 0% lake buffer.</span>
+            </div>
+            <div class="finding-row">
+              <span class="finding-tick">✓</span>
+              <span><strong>Nil Encumbrance:</strong> Kaveri-2 Form 15 clean; zero registered charges or active mortgages.</span>
+            </div>
+            <div class="finding-row">
+              <span class="finding-tick">✓</span>
+              <span><strong>Statutory Clearance:</strong> Fully compliant under PTCL Act & Sec 79A/B Land Reforms.</span>
+            </div>
+          </div>
+
+          <div class="blockchain-audit-stamp">
+            <span class="audit-label-small">Cryptographic Audit Hash</span>
+            <span class="audit-hash-mono">#SHA256:8f3c7a2b9e1d440f90ab84e5...</span>
+          </div>
+
+          <a href="#" class="download-pdf-button">
+            Download Court-Admissible Dossier (52 Pages) ➔
+          </a>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- ═════════════════════════════════════════════════════════════════
+         FOOTER: COMMITMENT & CONTACT
+         ═════════════════════════════════════════════════════════════════ -->
+    <footer class="banner-footer">
+      <div class="footer-guarantee">
+        <svg viewBox="0 0 20 20"><path d="M10 2L3 5v6c0 5.55 3.84 10.74 7 12 3.16-1.26 7-6.45 7-12V5l-7-3zm-2 13l-4-4 1.41-1.41L10 12.17l6.59-6.59L18 7l-8 8z"/></svg>
+        <span>Deterministic Verification Guarantee • Zero Missing Government Records</span>
+      </div>
+
+      <div class="footer-pitch">
+        Karnataka-First <span class="orange">•</span> Bilingual Kannada-English AI <span class="orange">•</span> Sub-Meter PostGIS Cadastral Engine
+      </div>
+
+      <div class="footer-contact">
+        <span>www.ojix.com</span>
+        <span>•</span>
+        <span>info@ojix.in</span>
+      </div>
+    </footer>
+
+  </div>
+
+</body>
+</html>

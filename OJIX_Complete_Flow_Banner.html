@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OJIX — Buyer Document Intake → Government Portals → 10 Roles Process → Final Result & Rejection Criteria</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #020408;
+      display: flex; justify-content: center; align-items: center;
+      min-height: 100vh; padding: 20px;
+      font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased; color: #FFF;
+    }
+
+    .banner {
+      width: 1600px; height: 1040px;
+      border-radius: 16px; overflow: hidden;
+      display: flex; flex-direction: column;
+      background: #060A14;
+      box-shadow: 0 40px 140px rgba(0,0,0,0.95), 0 0 0 1px rgba(255,84,38,0.3);
+      position: relative;
+    }
+
+    .banner::before {
+      content:''; position:absolute; inset:0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
+      background-size: 40px 40px; pointer-events:none; z-index:1;
+    }
+
+    /* ═══ HEADER ═══ */
+    .hdr {
+      height: 70px; background: rgba(12,16,26,0.96);
+      border-bottom: 1px solid rgba(255,255,255,0.09);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px; z-index:10; position:relative;
+    }
+    .hdr-left { display:flex; align-items:center; gap:12px; }
+    .logo-sq {
+      width:40px; height:40px; background:linear-gradient(135deg,#FF5426,#D83B10);
+      border-radius:10px; display:flex; align-items:center; justify-content:center;
+      box-shadow:0 4px 16px rgba(255,84,38,0.45);
+    }
+    .logo-sq svg { width:22px; height:22px; }
+    .hdr h1 { font-size:18px; font-weight:900; letter-spacing:0.02em; }
+    .hdr h1 .badge {
+      font-size:8.5px; font-weight:800; background:rgba(255,84,38,0.16);
+      color:#FF5426; border:1px solid rgba(255,84,38,0.4);
+      padding:2.5px 7px; border-radius:4px; letter-spacing:0.1em; margin-left:8px;
+    }
+    .hdr-sub { font-size:10px; color:#8FA0B8; font-weight:500; margin-top:1px; }
+
+    /* Flow breadcrumb in header */
+    .hdr-flow {
+      display:flex; align-items:center; gap:6px;
+      font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:700;
+      background:rgba(18,24,38,0.85); border:1px solid rgba(255,255,255,0.1);
+      padding:5px 16px; border-radius:30px;
+    }
+    .hdr-flow .step { padding:3px 8px; border-radius:14px; color:#64748B; }
+    .hdr-flow .step.s1 { color:#38BDF8; background:rgba(56,189,248,0.12); }
+    .hdr-flow .step.s2 { color:#F59E0B; background:rgba(245,158,11,0.12); }
+    .hdr-flow .step.s3 { color:#FF5426; background:rgba(255,84,38,0.12); }
+    .hdr-flow .step.s4 { color:#10B981; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.3); }
+    .hdr-flow .arr { color:#475569; font-size:10px; }
+
+    .hdr-right { display:flex; gap:20px; text-align:right; }
+    .hdr-right .v { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:800; }
+    .hdr-right .l { font-size:8.5px; color:#70829B; text-transform:uppercase; font-weight:700; letter-spacing:0.05em; }
+
+    /* ═══ MAIN 4-COLUMN PIPELINE ═══ */
+    .body {
+      flex:1; display:grid;
+      grid-template-columns: 260px 320px 530px 490px;
+      z-index:5; position:relative; overflow:hidden;
+    }
+
+    /* ─── COLUMN 1: BUYER DOCUMENT INTAKE ─── */
+    .col-intake {
+      background: linear-gradient(180deg, #090E1C 0%, #060914 100%);
+      border-right:1px solid rgba(255,255,255,0.08);
+      padding:14px 12px; display:flex; flex-direction:column; gap:7px;
+    }
+
+    .col-label {
+      display:flex; align-items:center; justify-content:space-between;
+      border-bottom:1px solid rgba(255,255,255,0.07); padding-bottom:5px;
+    }
+    .pill {
+      font-family:'JetBrains Mono',monospace; font-size:7.5px; font-weight:800;
+      padding:2px 6px; border-radius:3px; letter-spacing:0.06em;
+    }
+    .pill-blue { color:#38BDF8; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.3); }
+    .pill-amber { color:#F59E0B; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3); }
+    .pill-orange { color:#FF5426; background:rgba(255,84,38,0.12); border:1px solid rgba(255,84,38,0.3); }
+    .pill-green { color:#10B981; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.35); }
+
+    .col-heading { font-size:11.5px; font-weight:900; color:#FFF; text-transform:uppercase; letter-spacing:0.03em; }
+    .col-sub { font-size:8.5px; color:#8E9BAE; line-height:1.3; }
+
+    /* Buyer Person Avatar Card */
+    .buyer-card {
+      background:#111828; border:1px solid rgba(56,189,248,0.3);
+      border-radius:8px; padding:8px 9px; display:flex; align-items:center; gap:8px;
+    }
+    .buyer-avatar {
+      width:34px; height:34px; border-radius:50%; background:linear-gradient(135deg,#38BDF8,#0EA5E9);
+      display:flex; align-items:center; justify-content:center;
+      font-size:14px; font-weight:900; color:#020408;
+      box-shadow:0 4px 12px rgba(56,189,248,0.3);
+    }
+    .buyer-info .buyer-name { font-size:10.5px; font-weight:800; color:#F1F5F9; }
+    .buyer-info .buyer-type { font-size:7.5px; color:#7DD3FC; font-weight:600; }
+
+    /* Document Intake Papers */
+    .intake-docs { display:flex; flex-direction:column; gap:6px; flex:1; }
+
+    .intake-paper {
+      background:#F8FAFC; border-radius:5px; padding:6px 7px;
+      display:flex; flex-direction:column; gap:3px;
+      box-shadow:0 4px 14px rgba(0,0,0,0.4); position:relative; overflow:hidden;
+      border:1px solid rgba(255,255,255,0.06);
+    }
+    .paper-watermark {
+      position:absolute; right:5px; bottom:2px;
+      font-family:'JetBrains Mono',monospace; font-size:5.5px; font-weight:900;
+      color:rgba(15,23,42,0.1); text-transform:uppercase; letter-spacing:0.1em;
+    }
+    .paper-top {
+      display:flex; align-items:center; justify-content:space-between;
+      border-bottom:0.8px solid #CBD5E1; padding-bottom:2px;
+    }
+    .paper-govt {
+      font-family:'JetBrains Mono',monospace; font-size:6.5px; font-weight:800;
+      color:#1E293B; display:flex; align-items:center; gap:3px;
+    }
+    .paper-seal {
+      font-family:'JetBrains Mono',monospace; font-size:5.5px; font-weight:800;
+      padding:1px 3.5px; border-radius:2px;
+    }
+    .seal-green { background:#D1FAE5; color:#047857; }
+    .seal-amber { background:#FEF3C7; color:#B45309; }
+    .seal-blue { background:#E0F2FE; color:#0369A1; }
+    .paper-fields {
+      display:flex; flex-direction:column; gap:1px;
+      font-size:7px; color:#334155; line-height:1.2;
+    }
+    .paper-fields .kn-line {
+      font-size:7.5px; color:#0F172A; font-weight:700;
+      background:#F1F5F9; padding:1.5px 3.5px; border-left:2px solid #FF5426;
+      border-radius:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .paper-bar {
+      display:flex; align-items:center; justify-content:space-between;
+      margin-top:1px;
+    }
+    .paper-bar svg { height:8px; width:50px; opacity:0.6; }
+    .paper-bar .ref {
+      font-family:'JetBrains Mono',monospace; font-size:5.5px; color:#64748B;
+    }
+
+    .intake-arrow-label {
+      background:rgba(56,189,248,0.08); border:1px dashed rgba(56,189,248,0.35);
+      border-radius:5px; padding:5px 6px; text-align:center;
+      font-family:'JetBrains Mono',monospace; font-size:7.5px;
+      color:#38BDF8; font-weight:700;
+    }
+
+    /* ─── COLUMN 2: GOVERNMENT PORTAL SCREENS ─── */
+    .col-portals {
+      background:#070B16; border-right:1px solid rgba(255,255,255,0.08);
+      padding:14px 12px; display:flex; flex-direction:column; gap:7px;
+    }
+
+    .portal-screen {
+      background:#0F1526; border:1px solid rgba(255,255,255,0.1);
+      border-radius:7px; overflow:hidden; display:flex; flex-direction:column;
+      flex:1; box-shadow:0 6px 20px rgba(0,0,0,0.5);
+    }
+
+    .portal-chrome {
+      height:25px; background:#1A2038; border-bottom:1px solid rgba(255,255,255,0.08);
+      display:flex; align-items:center; justify-content:space-between; padding:0 8px;
+    }
+    .chrome-dots { display:flex; gap:4px; }
+    .cdot { width:6.5px; height:6.5px; border-radius:50%; }
+    .cdot.r { background:#EF4444; } .cdot.y { background:#F59E0B; } .cdot.g { background:#10B981; }
+    .chrome-url {
+      font-family:'JetBrains Mono',monospace; font-size:7px; font-weight:700;
+      color:#94A3B8; display:flex; align-items:center; gap:3px;
+    }
+    .chrome-url .lock { color:#10B981; font-size:7px; }
+    .portal-status-badge {
+      font-family:'JetBrains Mono',monospace; font-size:6.5px; font-weight:800;
+      padding:1.5px 4.5px; border-radius:3px;
+    }
+
+    .portal-body {
+      flex:1; padding:6px 8px; display:flex; flex-direction:column;
+      gap:4px; justify-content:center;
+    }
+
+    .portal-name {
+      font-size:10px; font-weight:900; display:flex; align-items:center; gap:5px;
+    }
+    .portal-desc { font-size:7px; color:#94A3B8; line-height:1.2; }
+
+    .portal-data-grid {
+      display:grid; grid-template-columns:1fr 1fr; gap:3px;
+    }
+    .pd-cell {
+      background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.06);
+      border-radius:3.5px; padding:3px 5px;
+    }
+    .pd-cell .pd-label {
+      font-family:'JetBrains Mono',monospace; font-size:5.5px; font-weight:800;
+      color:#64748B; text-transform:uppercase;
+    }
+    .pd-cell .pd-value { font-size:7.5px; font-weight:700; color:#E2E8F0; }
+
+    .portal-extracted-badge {
+      font-family:'JetBrains Mono',monospace; font-size:6.5px; font-weight:800;
+      text-align:center; padding:2px 4px; border-radius:3px;
+    }
+
+    /* ─── COLUMN 3: WHAT THE 10 ROLES DID (THE MULTI-DISCIPLINARY CONSENSUS) ─── */
+    .col-roles {
+      background:#060812; border-right:1px solid rgba(255,255,255,0.08);
+      padding:14px 13px; display:flex; flex-direction:column; gap:7px;
+    }
+
+    .roles-master-card {
+      background:#0B101E; border:1px solid rgba(255,84,38,0.4);
+      border-radius:10px; overflow:hidden; flex:1;
+      display:flex; flex-direction:column;
+      box-shadow:0 16px 50px rgba(0,0,0,0.6);
+      padding:9px 11px;
+      gap:6px;
+    }
+
+    .roles-header-bar {
+      display:flex; align-items:center; justify-content:space-between;
+      border-bottom:1px solid rgba(255,255,255,0.08);
+      padding-bottom:5px;
+    }
+    .rh-title {
+      font-size:10.5px; font-weight:900; color:#FFFFFF;
+      display:flex; align-items:center; gap:5px;
+    }
+    .rh-status {
+      font-family:'JetBrains Mono',monospace; font-size:7px; font-weight:800;
+      color:#10B981; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.35);
+      padding:1.5px 6px; border-radius:3px;
+    }
+
+    /* 10 Roles Detailed Compact Cards Grid (2 cols x 5 rows) */
+    .ten-roles-grid {
+      display:grid; grid-template-columns: 1fr 1fr;
+      grid-template-rows: repeat(5, 1fr);
+      gap:5.5px; flex:1;
+    }
+
+    .role-action-box {
+      background:#111626; border:1px solid rgba(255,255,255,0.08);
+      border-radius:6px; padding:5px 7px;
+      display:flex; flex-direction:column; justify-content:space-between;
+      position:relative;
+    }
+    .role-action-box.signed {
+      border-color:rgba(16,185,129,0.35);
+      background:linear-gradient(135deg, rgba(16,185,129,0.08) 0%, #111626 100%);
+    }
+
+    .rab-top {
+      display:flex; align-items:center; justify-content:space-between;
+    }
+    .rab-num {
+      font-family:'JetBrains Mono',monospace; font-size:6.8px; font-weight:800;
+      color:#FF5426; background:rgba(255,84,38,0.12); padding:1px 4px; border-radius:2px;
+    }
+    .rab-name {
+      font-size:8.5px; font-weight:800; color:#FFFFFF;
+    }
+    .rab-status {
+      font-family:'JetBrains Mono',monospace; font-size:6px; font-weight:800;
+      color:#10B981;
+    }
+
+    .rab-duty {
+      font-size:7.2px; color:#CBD5E1; line-height:1.25; margin-top:1px;
+    }
+    .rab-duty strong { color:#F8FAFC; }
+
+    .rab-handoff {
+      font-family:'JetBrains Mono',monospace; font-size:6px; color:#7DD3FC;
+      background:rgba(56,189,248,0.08); padding:1px 4px; border-radius:2px;
+      margin-top:2px; display:inline-block;
+    }
+
+    /* ─── COLUMN 4: FINAL RESULT & REJECTION CRITERIA ─── */
+    .col-result {
+      background: linear-gradient(180deg, #09131C 0%, #060D14 100%);
+      padding:14px 14px; display:flex; flex-direction:column; gap:7px;
+    }
+
+    .deliverable-wrapper {
+      flex:1; display:flex; flex-direction:column; gap:7px;
+    }
+
+    /* Sub-Panel 4A: WHAT THE BUYER GETS (CLEARED TITLE) */
+    .cleared-title-card {
+      background:#0F182A; border:2px solid #10B981;
+      border-radius:10px; padding:10px 12px;
+      display:flex; flex-direction:column; gap:6px;
+      box-shadow:0 14px 40px rgba(16,185,129,0.18);
+      position:relative;
+    }
+    .cleared-title-card::before {
+      content:''; position:absolute; top:0; left:0; right:0; height:3.5px;
+      background:linear-gradient(90deg,#10B981,#38BDF8);
+    }
+
+    .ctc-verdict-row {
+      display:flex; align-items:center; justify-content:space-between;
+    }
+    .ctc-verdict-title {
+      font-size:11px; font-weight:900; color:#FFFFFF; letter-spacing:0.03em;
+      display:flex; align-items:center; gap:6px;
+    }
+    .ctc-shield {
+      width:20px; height:20px; background:#10B981; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      color:#020408; font-size:11px; font-weight:900;
+    }
+    .ctc-score {
+      font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:900; color:#10B981;
+    }
+
+    .ctc-prop-desc {
+      font-size:8px; color:#CBD5E1; line-height:1.25;
+    }
+    .ctc-prop-desc strong { color:#FFFFFF; }
+
+    /* 4 Green Clearances */
+    .ctc-pillars {
+      display:grid; grid-template-columns: 1fr 1fr; gap:4px;
+    }
+    .ctc-pill-box {
+      background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.3);
+      border-radius:4px; padding:4px 6px; font-size:7.2px; line-height:1.25;
+    }
+    .ctc-pill-box .t { font-weight:800; color:#10B981; font-family:'JetBrains Mono',monospace; font-size:6.5px; }
+    .ctc-pill-box .d { color:#E2E8F0; font-weight:600; }
+
+    /* Mini Dossier & QR */
+    .ctc-dossier-row {
+      background:#0A0E18; border:1px solid rgba(255,255,255,0.08);
+      border-radius:5px; padding:5px 8px; display:flex; align-items:center; justify-content:space-between;
+    }
+    .ctc-dossier-info .title { font-size:8.5px; font-weight:800; color:#FFFFFF; }
+    .ctc-dossier-info .sub { font-family:'JetBrains Mono',monospace; font-size:6.5px; color:#38BDF8; }
+    .ctc-qr-wrap { display:flex; flex-direction:column; align-items:center; gap:1px; }
+    .ctc-qr-svg { width:28px; height:28px; background:#FFFFFF; border-radius:2px; padding:1.5px; }
+
+    /* Action Accept Button */
+    .accept-title-cta {
+      background:linear-gradient(135deg,#10B981 0%, #059669 100%);
+      color:#020408; font-size:9.5px; font-weight:900; padding:7px;
+      border-radius:5px; text-align:center; text-decoration:none;
+      display:flex; align-items:center; justify-content:center; gap:5px;
+      box-shadow:0 3px 12px rgba(16,185,129,0.4);
+    }
+
+    /* Sub-Panel 4B: WHY WE CANNOT TAKE THIS PROPERTY (CRITICAL REJECTION CRITERIA) */
+    .rejection-criteria-card {
+      background:#160E14; border:1.5px solid #EF4444;
+      border-radius:8px; padding:8px 10px;
+      display:flex; flex-direction:column; gap:4.5px;
+    }
+
+    .rcc-header {
+      display:flex; align-items:center; justify-content:space-between;
+      border-bottom:1px solid rgba(239,68,68,0.25); padding-bottom:3px;
+    }
+    .rcc-title {
+      font-size:9px; font-weight:900; color:#EF4444; letter-spacing:0.04em;
+      display:flex; align-items:center; gap:5px;
+    }
+    .rcc-badge {
+      font-family:'JetBrains Mono',monospace; font-size:6.5px; font-weight:800;
+      color:#FCA5A5; background:rgba(239,68,68,0.2); padding:1px 5px; border-radius:2px;
+    }
+
+    .error-item {
+      display:flex; align-items:flex-start; gap:5px;
+      font-size:7.2px; line-height:1.25; color:#FCA5A5;
+    }
+    .error-item .cross { color:#EF4444; font-weight:900; font-size:8px; line-height:1; }
+    .error-item strong { color:#FFFFFF; }
+
+    .rcc-verdict-pass {
+      background:rgba(16,185,129,0.12); border:1px dashed #10B981;
+      border-radius:4px; padding:3px 6px; text-align:center;
+      font-family:'JetBrains Mono',monospace; font-size:7px;
+      color:#10B981; font-weight:800;
+    }
+
+    /* ═══ FOOTER ═══ */
+    .ftr {
+      height:46px; background:#050710;
+      border-top:1px solid rgba(255,255,255,0.08);
+      display:flex; align-items:center; justify-content:space-between;
+      padding:0 32px; font-size:9.5px; z-index:10; position:relative;
+    }
+    .ftr-left { color:#CBD5E1; display:flex; align-items:center; gap:7px; font-weight:600; }
+    .ftr-left svg { width:13px; height:13px; fill:#10B981; }
+    .ftr-mid { font-family:'JetBrains Mono',monospace; font-size:9px; color:#8E9BAE; }
+    .ftr-mid .o { color:#FF5426; font-weight:800; }
+    .ftr-right { font-family:'JetBrains Mono',monospace; font-size:9.5px; color:#CBD5E1; display:flex; gap:12px; }
+  </style>
+</head>
+<body>
+<div class="banner">
+
+  <!-- HEADER -->
+  <header class="hdr">
+    <div class="hdr-left">
+      <div class="logo-sq"><svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#FFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></div>
+      <div>
+        <h1>OJIX PROPERTY INTELLIGENCE<span class="badge">COMPLETE WORKFLOW</span></h1>
+        <div class="hdr-sub">Buyer Intake ➔ Live Govt Portals ➔ What the 10 Roles Did ➔ Final Result &amp; Critical Rejection Criteria</div>
+      </div>
+    </div>
+    <div class="hdr-flow">
+      <div class="step s1">01 BUYER INTAKE</div><span class="arr">➔</span>
+      <div class="step s2">02 GOVT PORTALS</div><span class="arr">➔</span>
+      <div class="step s3">03 10-ROLE PROCESS</div><span class="arr">➔</span>
+      <div class="step s4">04 RESULT &amp; ERRORS</div>
+    </div>
+    <div class="hdr-right">
+      <div><div class="v">48 Hours</div><div class="l">Turnaround SLA</div></div>
+      <div><div class="v" style="color:#10B981;">SAFE TO BUY</div><div class="l">Zero Blindspots</div></div>
+    </div>
+  </header>
+
+  <!-- MAIN 4-COLUMN FLOW -->
+  <main class="body">
+
+    <!-- ══ COL 1: BUYER DOCUMENT INTAKE ══ -->
+    <section class="col-intake">
+      <div class="col-label">
+        <span class="pill pill-blue">STEP 01 • INTAKE</span>
+        <span style="font-family:'JetBrains Mono',monospace; font-size:7px; color:#64748B;">BUYER'S INPUT</span>
+      </div>
+      <div class="col-heading">Buyer Gives Property Info</div>
+      <p class="col-sub">Outside buyer/investor arrives and submits property identity & deed papers.</p>
+
+      <!-- Buyer Person -->
+      <div class="buyer-card">
+        <div class="buyer-avatar">B</div>
+        <div class="buyer-info">
+          <div class="buyer-name">Outside Buyer / Investor</div>
+          <div class="buyer-type">Submits Sy No. 45/3A & 4 Raw Deeds</div>
+        </div>
+      </div>
+
+      <!-- 4 Documents -->
+      <div class="intake-docs">
+        <!-- Doc 1: Sale Deed -->
+        <div class="intake-paper">
+          <div class="paper-watermark">KAVERI DEED</div>
+          <div class="paper-top">
+            <span class="paper-govt">🏛️ STAMPS DEPT • E-STAMP</span>
+            <span class="paper-seal seal-green">VERIFIED</span>
+          </div>
+          <div class="paper-fields">
+            <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:6px; color:#475569;">
+              <span>📜 Sale Deed #4582/2023</span><span>K.R. Puram SRO</span>
+            </div>
+            <div class="kn-line">"ಕ್ರಮಬದ್ಧ ಶುದ್ಧ ಕ್ರಯಪತ್ರ: ಕೃಷ್ಣರಾಜಪುರಂ..."</div>
+          </div>
+          <div class="paper-bar">
+            <svg viewBox="0 0 80 10"><rect x="0" width="2.5" height="10" fill="#0F172A"/><rect x="4" width="1" height="10" fill="#0F172A"/><rect x="7" width="3" height="10" fill="#0F172A"/><rect x="12" width="1.5" height="10" fill="#0F172A"/><rect x="16" width="4" height="10" fill="#0F172A"/><rect x="22" width="2" height="10" fill="#0F172A"/><rect x="26" width="3" height="10" fill="#0F172A"/><rect x="31" width="1" height="10" fill="#0F172A"/><rect x="34" width="4" height="10" fill="#0F172A"/><rect x="40" width="2" height="10" fill="#0F172A"/><rect x="44" width="3" height="10" fill="#0F172A"/><rect x="49" width="5" height="10" fill="#0F172A"/><rect x="56" width="2" height="10" fill="#0F172A"/><rect x="60" width="3" height="10" fill="#0F172A"/><rect x="65" width="4" height="10" fill="#0F172A"/><rect x="71" width="2" height="10" fill="#0F172A"/><rect x="75" width="3" height="10" fill="#0F172A"/></svg>
+            <span class="ref">IN-KA910284U</span>
+          </div>
+        </div>
+
+        <!-- Doc 2: RTC -->
+        <div class="intake-paper">
+          <div class="paper-watermark">BHOOMI RTC</div>
+          <div class="paper-top">
+            <span class="paper-govt">🌾 REVENUE DEPT • FORM 16</span>
+            <span class="paper-seal seal-green">DIGITAL</span>
+          </div>
+          <div class="paper-fields">
+            <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:6px; color:#475569;">
+              <span>📄 RTC Pahani • Sy 45/3A</span><span>2A 14G (0 Kharab)</span>
+            </div>
+            <div class="kn-line">"ಕಾಲಂ 9/10: ರಮೇಶ್ ರಾವ್ ಬಿನ್ ಆನಂದ ರಾವ್"</div>
+          </div>
+        </div>
+
+        <!-- Doc 3: Mutation -->
+        <div class="intake-paper">
+          <div class="paper-watermark">MUTATION REG</div>
+          <div class="paper-top">
+            <span class="paper-govt">⚖️ M.R. REGISTER • SEC 79A</span>
+            <span class="paper-seal seal-amber">M.R. PASS</span>
+          </div>
+          <div class="paper-fields">
+            <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:6px; color:#475569;">
+              <span>📑 Mutation • M.R. T14/2012-13</span><span>Hissa Podi OK</span>
+            </div>
+            <div class="kn-line">"ವಾರಸುದಾರಿಕೆ ಖಾತೆ ವರ್ಗಾವಣೆ ಮಂಜೂರು..."</div>
+          </div>
+        </div>
+
+        <!-- Doc 4: Village Map -->
+        <div class="intake-paper">
+          <div class="paper-watermark">MOJINI MAP</div>
+          <div class="paper-top">
+            <span class="paper-govt">📐 SURVEY DEPT • TIPPANI</span>
+            <span class="paper-seal seal-blue">FMB OK</span>
+          </div>
+          <div class="paper-fields">
+            <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:6px; color:#475569;">
+              <span>🗺️ Village Tippan • Kadugodi</span><span>Sheet #12</span>
+            </div>
+            <div class="kn-line">"ಅಕಾರಬಂಧ & ಟಿಪ್ಪಣಿ ದಾಖಲೆ ತಾಳೆ ಆಗಿದೆ"</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="intake-arrow-label">📤 4 INTAKE PAPERS HANDED OFF ➔</div>
+    </section>
+
+    <!-- ══ COL 2: LIVE GOVERNMENT PORTALS ══ -->
+    <section class="col-portals">
+      <div class="col-label">
+        <span class="pill pill-amber">STEP 02 • LIVE SYNC</span>
+        <span style="font-family:'JetBrains Mono',monospace; font-size:7px; color:#64748B;">4 GOVT SITES</span>
+      </div>
+      <div class="col-heading">Live Govt Verification</div>
+      <p class="col-sub">Team queries and cross-checks buyer documents with official state portals.</p>
+
+      <!-- Portal 1: Kaveri 2.0 -->
+      <div class="portal-screen">
+        <div class="portal-chrome">
+          <div class="chrome-dots"><div class="cdot r"></div><div class="cdot y"></div><div class="cdot g"></div></div>
+          <div class="chrome-url"><span class="lock">🔒</span> kaveri.karnataka.gov.in</div>
+          <span class="portal-status-badge" style="background:rgba(255,84,38,0.15); color:#FF5426;">KAVERI 2.0</span>
+        </div>
+        <div class="portal-body">
+          <div class="portal-name" style="color:#FF5426;">🏛️ Kaveri Online Registration</div>
+          <div class="portal-desc">Sub-Registrar Portal — Deed Registry & 30-Year EC</div>
+          <div class="portal-data-grid">
+            <div class="pd-cell"><div class="pd-label">Deed Verified</div><div class="pd-value">#4582/2023</div></div>
+            <div class="pd-cell"><div class="pd-label">EC Form 15</div><div class="pd-value" style="color:#10B981;">Nil Encumbrance</div></div>
+            <div class="pd-cell"><div class="pd-label">SRO Office</div><div class="pd-value">K.R. Puram</div></div>
+            <div class="pd-cell"><div class="pd-label">Search Period</div><div class="pd-value">1994 — 2024</div></div>
+          </div>
+          <div class="portal-extracted-badge" style="background:rgba(255,84,38,0.1); color:#FF5426;">✓ LIVE DEED & EC SYNCED</div>
+        </div>
+      </div>
+
+      <!-- Portal 2: Bhoomi -->
+      <div class="portal-screen">
+        <div class="portal-chrome">
+          <div class="chrome-dots"><div class="cdot r"></div><div class="cdot y"></div><div class="cdot g"></div></div>
+          <div class="chrome-url"><span class="lock">🔒</span> landrecords.karnataka.gov.in</div>
+          <span class="portal-status-badge" style="background:rgba(16,185,129,0.15); color:#10B981;">BHOOMI</span>
+        </div>
+        <div class="portal-body">
+          <div class="portal-name" style="color:#10B981;">🌾 Bhoomi Land Records</div>
+          <div class="portal-desc">Revenue Portal — RTC/Pahani & Mutation Extracts</div>
+          <div class="portal-data-grid">
+            <div class="pd-cell"><div class="pd-label">Col 9/10 Owner</div><div class="pd-value">Ramesh Rao</div></div>
+            <div class="pd-cell"><div class="pd-label">Extent Match</div><div class="pd-value">2A 14G (0 Kh)</div></div>
+            <div class="pd-cell"><div class="pd-label">Mutation MR</div><div class="pd-value">T14/2012-13</div></div>
+            <div class="pd-cell"><div class="pd-label">Podi Status</div><div class="pd-value" style="color:#10B981;">Certified OK</div></div>
+          </div>
+          <div class="portal-extracted-badge" style="background:rgba(16,185,129,0.1); color:#10B981;">✓ REVENUE OWNERSHIP CONFIRMED</div>
+        </div>
+      </div>
+
+      <!-- Portal 3: Mojini 3.0 -->
+      <div class="portal-screen">
+        <div class="portal-chrome">
+          <div class="chrome-dots"><div class="cdot r"></div><div class="cdot y"></div><div class="cdot g"></div></div>
+          <div class="chrome-url"><span class="lock">🔒</span> mojini.karnataka.gov.in</div>
+          <span class="portal-status-badge" style="background:rgba(56,189,248,0.15); color:#38BDF8;">MOJINI 3.0</span>
+        </div>
+        <div class="portal-body">
+          <div class="portal-name" style="color:#38BDF8;">📐 Mojini Survey & Settlement</div>
+          <div class="portal-desc">Cadastral Portal — Village Map & FMB Tippani</div>
+          <div class="portal-data-grid">
+            <div class="pd-cell"><div class="pd-label">Cadastral Sheet</div><div class="pd-value">Kadugodi #12</div></div>
+            <div class="pd-cell"><div class="pd-label">FMB Tie-Lines</div><div class="pd-value" style="color:#10B981;">Coordinates OK</div></div>
+            <div class="pd-cell"><div class="pd-label">Akarbandh</div><div class="pd-value">Sy 45/3 Match</div></div>
+            <div class="pd-cell"><div class="pd-label">SWD River Dist</div><div class="pd-value" style="color:#10B981;">72.4m Beyond</div></div>
+          </div>
+          <div class="portal-extracted-badge" style="background:rgba(56,189,248,0.1); color:#38BDF8;">✓ BOUNDARIES & TIPPANI LOCKED</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ COL 3: WHAT THE 10 ROLES DID (THE PROCESS EXPLAINED) ══ -->
+    <section class="col-roles">
+      <div class="col-label">
+        <span class="pill pill-orange">STEP 03 • 10 ROLES</span>
+        <span style="font-family:'JetBrains Mono',monospace; font-size:7px; color:#64748B;">INTERNAL PROCESS</span>
+      </div>
+      <div class="col-heading">What the 10 Roles Did</div>
+      <p class="col-sub">Strict multi-disciplinary consensus workflow resolving the legal title.</p>
+
+      <div class="roles-master-card">
+        <div class="roles-header-bar">
+          <span class="rh-title">👥 Sequential 10-Role Cross-Verification</span>
+          <span class="rh-status">10/10 SIGNED OFF</span>
+        </div>
+
+        <div class="ten-roles-grid">
+          <!-- Role 01: Client -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">01</span>
+              <span class="rab-name">Client / Buyer</span>
+              <span class="rab-status">✓ INTAKE</span>
+            </div>
+            <div class="rab-duty"><strong>Provided details:</strong> Submits Sy No. 45/3A, initial deed copy, KYC & 48-hr SLA mandate.</div>
+            <div class="rab-handoff">➔ Token #842 handed to Admin</div>
+          </div>
+
+          <!-- Role 02: Admin -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">02</span>
+              <span class="rab-name">Tenant Admin</span>
+              <span class="rab-status">✓ PROVISION</span>
+            </div>
+            <div class="rab-duty"><strong>Sets up matter:</strong> Provisions isolated sandbox, applies KA Land Revenue rules & assigns team.</div>
+            <div class="rab-handoff">➔ Workspace handed to Owner</div>
+          </div>
+
+          <!-- Role 03: Owner -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">03</span>
+              <span class="rab-name">Workspace Owner</span>
+              <span class="rab-status">✓ MANDATE</span>
+            </div>
+            <div class="rab-duty"><strong>Commercial scope:</strong> Signs legal mandate, approves govt query fees & sets PTCL risk thresholds.</div>
+            <div class="rab-handoff">➔ Search order handed to Ops</div>
+          </div>
+
+          <!-- Role 04: Ops -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">04</span>
+              <span class="rab-name">Operations Lead</span>
+              <span class="rab-status">✓ RETRIEVE</span>
+            </div>
+            <div class="rab-duty"><strong>Live registry query:</strong> Fetches Kaveri-2 deeds, Bhoomi RTCs, Mojini map & Nadakacheri certs.</div>
+            <div class="rab-handoff">➔ Raw bundle handed to Data</div>
+          </div>
+
+          <!-- Role 05: Data Steward -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">05</span>
+              <span class="rab-name">Data Steward</span>
+              <span class="rab-status">✓ PARSED</span>
+            </div>
+            <div class="rab-duty"><strong>AI OCR & Normalizer:</strong> Extracts Kannada/English entities (Owner, 2A 14G) & tags SHA-256 hash.</div>
+            <div class="rab-handoff">➔ Entities handed to Analyst</div>
+          </div>
+
+          <!-- Role 06: Legal Analyst -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">06</span>
+              <span class="rab-name">Title Analyst</span>
+              <span class="rab-status">✓ 0 GAPS</span>
+            </div>
+            <div class="rab-duty"><strong>30-Year DAG Engine:</strong> Traces unbroken chain: 1994 Grant ➔ 2003 Sale ➔ 2014 Hissa ➔ 2024 Title.</div>
+            <div class="rab-handoff">➔ Title graph handed to Lawyer</div>
+          </div>
+
+          <!-- Role 07: Lawyer -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">07</span>
+              <span class="rab-name">Lead Lawyer</span>
+              <span class="rab-status">✓ OPINION</span>
+            </div>
+            <div class="rab-duty"><strong>Statutory vetting:</strong> Evaluates PTCL Act, Sec 79A/B Land Reforms, court litigation & family rights.</div>
+            <div class="rab-handoff">➔ Legal opinion handed to GIS</div>
+          </div>
+
+          <!-- Role 08: GIS Specialist -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">08</span>
+              <span class="rab-name">GIS Specialist</span>
+              <span class="rab-status">✓ 72.4M CLEAR</span>
+            </div>
+            <div class="rab-duty"><strong>PostGIS vector screener:</strong> Enforces 50m Rajakaluve SWD buffer & checks lake boundary overlap.</div>
+            <div class="rab-handoff">➔ Spatial cert handed to Support</div>
+          </div>
+
+          <!-- Role 09: Support / QA -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">09</span>
+              <span class="rab-name">Support & QA</span>
+              <span class="rab-status">✓ QA PASS</span>
+            </div>
+            <div class="rab-duty"><strong>Completeness audit:</strong> Reconciles all role approvals, checks 0 missing docs & compiles dossier.</div>
+            <div class="rab-handoff">➔ 52-page dossier to Super Admin</div>
+          </div>
+
+          <!-- Role 10: Super Admin -->
+          <div class="role-action-box signed">
+            <div class="rab-top">
+              <span class="rab-num">10</span>
+              <span class="rab-name">Super Admin</span>
+              <span class="rab-status">✓ RELEASE</span>
+            </div>
+            <div class="rab-duty"><strong>Final executive audit:</strong> Cryptographic SHA-256 seal, assigns Grade A+ & releases clearance report.</div>
+            <div class="rab-handoff" style="color:#10B981; font-weight:800;">🎉 DELIVERED BACK TO CLIENT</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ══ COL 4: FINAL RESULT & REJECTION CRITERIA ══ -->
+    <section class="col-result">
+      <div class="col-label">
+        <span class="pill pill-green">STEP 04 • RESULT &amp; ERRORS</span>
+        <span style="font-family:'JetBrains Mono',monospace; font-size:7px; color:#10B981;">DECISION MATRIX</span>
+      </div>
+      <div class="col-heading">Final Result &amp; Risk Criteria</div>
+      <p class="col-sub">What the buyer gets when cleared — plus the fatal errors that cause rejection.</p>
+
+      <div class="deliverable-wrapper">
+
+        <!-- 4A: WHAT THE BUYER GETS (CLEARED TITLE) -->
+        <div class="cleared-title-card">
+          <div class="ctc-verdict-row">
+            <div class="ctc-verdict-title">
+              <div class="ctc-shield">✓</div>
+              <span>VERDICT: SAFE TO PURCHASE</span>
+            </div>
+            <div class="ctc-score">98<span style="font-size:10px; color:#94A3B8;">/100</span> <span style="font-size:8px; color:#10B981;">(GRADE A+)</span></div>
+          </div>
+
+          <div class="ctc-prop-desc">
+            <strong>Sy 45/3A (2A 14G) • Kadugodi, Bengaluru East</strong> | Bank Mortgage Pre-Approved
+          </div>
+
+          <div class="ctc-pillars">
+            <div class="ctc-pill-box">
+              <div class="t">✓ 30-YR UNBROKEN CHAIN</div>
+              <div class="d">1994 Grant to 2024 with zero missing links.</div>
+            </div>
+            <div class="ctc-pill-box">
+              <div class="t">✓ NIL ENCUMBRANCE</div>
+              <div class="d">Form 15 clean, 0 registered bank charges.</div>
+            </div>
+            <div class="ctc-pill-box">
+              <div class="t">✓ 72.4M BUFFER CLEARANCE</div>
+              <div class="d">Zero encroachment on 50m Rajakaluve.</div>
+            </div>
+            <div class="ctc-pill-box">
+              <div class="t">✓ STATUTORY CLEARANCE</div>
+              <div class="d">PTCL Act & Sec 79A/B fully compliant.</div>
+            </div>
+          </div>
+
+          <div class="ctc-dossier-row">
+            <div class="ctc-dossier-info">
+              <div class="title">📑 Court-Admissible 52-Page Dossier</div>
+              <div class="sub">#SHA256:8f3c7a2b9e1d440f90ab84e5c6d7...</div>
+            </div>
+            <div class="ctc-qr-wrap">
+              <svg class="ctc-qr-svg" viewBox="0 0 32 32">
+                <rect width="32" height="32" fill="#FFFFFF"/>
+                <rect x="2" y="2" width="7" height="7" fill="#000000"/><rect x="3.5" y="3.5" width="4" height="4" fill="#FFFFFF"/>
+                <rect x="23" y="2" width="7" height="7" fill="#000000"/><rect x="24.5" y="3.5" width="4" height="4" fill="#FFFFFF"/>
+                <rect x="2" y="23" width="7" height="7" fill="#000000"/><rect x="3.5" y="24.5" width="4" height="4" fill="#FFFFFF"/>
+                <rect x="11" y="3" width="2" height="4" fill="#000000"/><rect x="15" y="2" width="4" height="2" fill="#000000"/>
+                <rect x="11" y="11" width="10" height="10" fill="#000000"/><rect x="13" y="13" width="6" height="6" fill="#FFFFFF"/>
+                <rect x="23" y="12" width="3" height="4" fill="#000000"/><rect x="27" y="15" width="3" height="3" fill="#000000"/>
+                <rect x="12" y="23" width="5" height="4" fill="#000000"/><rect x="19" y="24" width="4" height="3" fill="#000000"/>
+              </svg>
+              <span style="font-family:'JetBrains Mono',monospace; font-size:5px; color:#10B981; font-weight:800;">VERIFY QR</span>
+            </div>
+          </div>
+
+          <a href="#" class="accept-title-cta">
+            ✓ ACCEPT TITLE &amp; PROCEED WITH PURCHASE (DOWNLOAD DOSSIER) ➔
+          </a>
+        </div>
+
+        <!-- 4B: WHY WE CANNOT TAKE A PROPERTY (CRITICAL REJECTION CRITERIA) -->
+        <div class="rejection-criteria-card">
+          <div class="rcc-header">
+            <span class="rcc-title">⚠ CRITICAL REJECTION CRITERIA (WHY A PROPERTY IS REJECTED)</span>
+            <span class="rcc-badge">FATAL ERRORS</span>
+          </div>
+
+          <div class="error-item">
+            <span class="cross">✕</span>
+            <div><strong>Broken Title Lineage:</strong> Missing parent deed or unregistered partition ➔ <em>Defective title, unenforceable in court.</em></div>
+          </div>
+          <div class="error-item">
+            <span class="cross">✕</span>
+            <div><strong>Rajakaluve / Lake Encroachment:</strong> Sits within 50m SWD / 30m lake buffer ➔ <em>Subject to demolition by BBMP/Govt!</em></div>
+          </div>
+          <div class="error-item">
+            <span class="cross">✕</span>
+            <div><strong>PTCL Act (SC/ST Land Grant) Violation:</strong> Sold without prior DC permission ➔ <em>Null &amp; void; Govt repossesses land!</em></div>
+          </div>
+          <div class="error-item">
+            <span class="cross">✕</span>
+            <div><strong>Active Lien or Civil Court Stay:</strong> Undisclosed bank charge or OS injunction ➔ <em>High risk of financial loss &amp; litigation!</em></div>
+          </div>
+
+          <div class="rcc-verdict-pass">
+            ✓ THIS PROPERTY (SY 45/3A) PASSED ALL 4 FATAL CHECKS • ZERO RED FLAGS
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="ftr">
+    <div class="ftr-left">
+      <svg viewBox="0 0 20 20"><path d="M10 2L3 5v6c0 5.55 3.84 10.74 7 12 3.16-1.26 7-6.45 7-12V5l-7-3zm-2 13l-4-4 1.41-1.41L10 12.17l6.59-6.59L18 7l-8 8z"/></svg>
+      <span>Deterministic Legal Assurance • 4 Govt Registries • 10-Role Complete Audit Trail • Court-Admissible Guarantee</span>
+    </div>
+    <div class="ftr-mid">Karnataka-First <span class="o">•</span> Bilingual Kannada-English AI <span class="o">•</span> Sub-Meter PostGIS Cadastral Screener</div>
+    <div class="ftr-right"><span>www.ojix.com</span><span>•</span><span>info@ojix.in</span></div>
+  </footer>
+
+</div>
+</body>
+</html>

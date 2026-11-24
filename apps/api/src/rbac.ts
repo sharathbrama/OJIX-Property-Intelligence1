@@ -47,7 +47,7 @@ export function permissionForRequest(method: string, pathname: string, body?: an
   // Unknown routes fail closed; add an explicit mapping when a new API surface is introduced.
   let resource='api';
   if(/^\/api\/(?:overview|owner\/dashboard)(?:\/|$)/.test(path)) resource='dashboard';
-  if (/^\/api\/properties(?:\/|$)/.test(path)) resource='properties';
+  if (/^\/api\/(?:properties|matters)(?:\/|$)/.test(path)) resource='properties';
   if (/^\/api\/(?:documents|properties\/[^/]+\/documents)(?:\/|$)/.test(path)) resource='documents';
   if (/^\/api\/(?:findings|consultant\/issues)(?:\/|$)/.test(path)) resource='findings';
   if (/^\/api\/(?:legal-research|properties\/[^/]+\/(?:title-chain|title-events|workflow|discrepancies))(?:\/|$)/.test(path)) resource='legal';

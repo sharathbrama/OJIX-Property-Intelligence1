@@ -22,6 +22,7 @@ export function GlobalRiskView({ apiUrl, onOpenProperty }: { apiUrl: string; onO
   const [severityCounts, setSeverityCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [filterSeverity, setFilterSeverity] = useState('all');
+  const [filterCategory, setFilterCategory] = useState('all');
   const [query, setQuery] = useState('');
 
   useEffect(() => {
@@ -41,6 +42,10 @@ export function GlobalRiskView({ apiUrl, onOpenProperty }: { apiUrl: string; onO
 
   const filtered = findings.filter(f => {
     if (filterSeverity !== 'all' && f.severity !== filterSeverity) return false;
+    if (filterCategory !== 'all') {
+      const codeOrTitle = (f.code || f.title || '').toUpperCase();
+      if (!codeOrTitle.includes(filterCategory)) return false;
+    }
     if (query) {
       const q = query.toLowerCase();
       return (
@@ -107,11 +112,27 @@ export function GlobalRiskView({ apiUrl, onOpenProperty }: { apiUrl: string; onO
             onChange={e => setFilterSeverity(e.target.value)}
             style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
           >
-            <option value="all">All Severities</option>
-            <option value="critical">Critical</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
+            <option value="all">All Severities (FRD §12.2)</option>
+            <option value="critical">Critical Review Required</option>
+            <option value="high">High Review Required</option>
+            <option value="medium">Moderate Review</option>
+            <option value="low">Informational / Cleared</option>
+          </select>
+
+          <select
+            value={filterCategory}
+            onChange={e => setFilterCategory(e.target.value)}
+            style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '11px', color: '#1e293b' }}
+          >
+            <option value="all">All Categories (FRD §12.1)</option>
+            <option value="TITLE">Title / Chain Gap</option>
+            <option value="IDENTITY">Identity / Party</option>
+            <option value="EXTENT">Extent / Boundary</option>
+            <option value="ENCUMBRANCE">Encumbrance / Charge</option>
+            <option value="GEO">Geo / Rajakaluve / Lake</option>
+            <option value="PLANNING">Planning / Master Plan</option>
+            <option value="DOCUMENT">Document / Scan</option>
+            <option value="RESEARCH">Legal Precedent / PTCL</option>
           </select>
 
           <span className="result-count">{filtered.length} findings</span>

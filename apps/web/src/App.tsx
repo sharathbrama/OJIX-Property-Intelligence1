@@ -78,6 +78,9 @@ import { LawyerWorkbench } from "./components/LawyerWorkbench";
 import { ConsultantWorkspace, SharedConsultantReport } from "./components/ConsultantWorkspace";
 import { OwnerAnalytics, OwnerPortfolioMap } from "./components/OwnerDashboardVisuals";
 import OwnerInactivityGuard from "./components/OwnerInactivityGuard";
+import { MattersView } from "./components/MattersView";
+import { IntakeChecklist } from "./components/IntakeChecklist";
+import { AdvocateSignOffModal } from "./components/AdvocateSignOffModal";
 import { authFetch } from "./authFetch";
 import { API_BASE_URL } from "./apiConfig";
 import { validatePropertyForm } from "./propertyFormValidation";
@@ -275,6 +278,7 @@ const initials = (name: string) =>
     .toUpperCase();
 type AppPage =
   | "overview"
+  | "matters"
   | "properties"
   | "property"
   | "all-documents"
@@ -294,6 +298,7 @@ type AppPage =
   | AdminSection;
 const PAGE_PATHS: Record<Exclude<AppPage, "property">, string> = {
   overview: "/dashboard",
+  matters: "/matters",
   properties: "/properties",
   "all-documents": "/documents",
   "all-findings": "/risk-reviews",
@@ -914,7 +919,14 @@ export default function App() {
         documents = d.documents || [];
         findings = d.findings || [];
       } catch (openErr) {
-        console.warn("[openProperty] Remote load failed, loading from demo persistence:", openErr);
+        // Browser persistence can restore properties created in demo mode, but
+        // it cannot prove that a server-backed matter still exists. Keep the
+        // local fallback only for locally-created demo properties.
+        const isLocallyStoredDemoProperty = getStoredDemoProperties().some(
+          (stored) => stored.id === property.id,
+        );
+        if (!isLocallyStoredDemoProperty) throw openErr;
+        console.warn("[openProperty] Loading locally stored demo property:", openErr);
       }
       const mergedItem = applyDemoPersistence([item])[0] || item;
       const storedDocs = getStoredDemoDocuments(property.id);
@@ -960,6 +972,11 @@ export default function App() {
         await openProperty(stored, updateUrl);
       } else {
         setError((e as Error).message);
+        setSelected(null);
+        setDocs([]);
+        setFindings([]);
+        setPage("properties");
+        if (updateUrl) updateBrowserUrl("properties", undefined, true);
       }
     } finally {
       setBusy(false);
@@ -1704,6 +1721,13 @@ export default function App() {
                               : currentUser.role === "owner" ? "Dashboard" : "Overview"}
             </span>
           </button>
+          <button
+            className={`nav-item ${page === "matters" ? "active" : ""}`}
+            onClick={() => navigate("matters")}
+          >
+            <BriefcaseBusiness size={18} />
+            <span>Client Matters</span>
+          </button>
           {!["admin", "support"].includes(currentUser.role) && (
             <button
               className={`nav-item ${page === "properties" || page === "property" ? "active" : ""}`}
@@ -2197,6 +2221,14 @@ export default function App() {
                 currentUser={currentUser}
               />
             ))}
+          {page === "matters" && (
+            <MattersView
+              apiUrl={API}
+              currentUser={currentUser}
+              onOpenProperty={openPropertyById}
+              onNavigate={navigate}
+            />
+          )}
           {page === "properties" && (
             <PropertiesPage
               properties={filtered}
@@ -6533,12 +6565,14 @@ function PropertyPage({
     | "summary"
     | "parcels"
     | "documents"
+    | "checklist"
     | "title-chain"
     | "map"
     | "discrepancies"
     | "report"
     | "findings"
   >("summary");
+  const [showSignOffModal, setShowSignOffModal] = useState(false);
   const [reviewingDoc, setReviewingDoc] = useState<Doc | null>(null);
   const [showDocumentUpload, setShowDocumentUpload] = useState(false);
   const [showWorkflow, setShowWorkflow] = useState(false);
@@ -7077,6 +7111,16 @@ function PropertyPage({
               <Building2 size={16} /> Edit details
             </button>
           )}
+          {['lawyer', 'owner', 'super_admin'].includes(currentUser.role) && (
+            <button
+              className="primary-btn advocate-signoff-btn"
+              onClick={() => setShowSignOffModal(true)}
+              style={{ background: '#059669', borderColor: '#059669', color: '#fff' }}
+              title="Record advocate opinion and formal sign-off"
+            >
+              <Scale size={16} /> Advocate Sign-Off
+            </button>
+          )}
           {!isOperations && !isConsultant && !isDataSteward && (
             <>
               <button
@@ -7164,6 +7208,14 @@ function PropertyPage({
             <FileText size={17} /> Documents <span>{docs.length}</span>
           </button>
         )}
+        {!isViewer && (
+          <button
+            className={tab === "checklist" ? "selected" : ""}
+            onClick={() => setTab("checklist")}
+          >
+            <ClipboardCheck size={17} /> Checklist
+          </button>
+        )}
         {!isOperations && !isViewer && !isConsultant && !isDataSteward && (
           <>
             <button
@@ -7210,6 +7262,23 @@ function PropertyPage({
         <ParcelReferences
           property={property}
           readOnly={isViewer || isOperations || isConsultant || isDataSteward}
+        />
+      )}
+      {tab === "checklist" && (
+        <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', marginTop: 16 }}>
+          <IntakeChecklist propertyId={property.id} canEdit={canUploadDocuments} />
+        </div>
+      )}
+      {showSignOffModal && (
+        <AdvocateSignOffModal
+          propertyId={property.id}
+          propertyTitle={property.name}
+          currentUserName={currentUser.name}
+          onClose={() => setShowSignOffModal(false)}
+          onSuccess={(signOff) => {
+            setShowSignOffModal(false);
+            onWorkflowUpdated({ ...property, status: 'approved' });
+          }}
         />
       )}
       {tab === "summary" && (
@@ -7984,7 +8053,8 @@ function PropertyWorkflowModal({
         if (result?.history) setHistory(result.history);
       })
       .catch((err) => {
-        console.warn("[PropertyWorkflowModal] Workflow metadata load:", err);
+        if (!active) return;
+        console.warn("[PropertyWorkflowModal] Workflow metadata load (using fallback):", err);
       })
       .finally(() => active && setLoading(false));
     return () => {

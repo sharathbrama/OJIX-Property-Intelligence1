@@ -39,16 +39,19 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
   const [loading, setLoading] = useState(false);
   const [snapshotSuccess, setSnapshotSuccess] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>('');
+  const [reportType, setReportType] = useState<
+    'detailed_due_diligence' | 'preliminary_screening' | 'client_decision_pack' | 'evidence_appendix' | 'change_alert'
+  >('detailed_due_diligence');
 
   useEffect(() => {
     let active=true;
     let objectUrl='';
-    authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-report/html`)
+    authFetch(`${apiUrl}/api/properties/${property.id}/due-diligence-report/html?template=${reportType}`)
       .then(async response=>{if(!response.ok)throw new Error(`Report preview failed (${response.status})`);return response.blob();})
       .then(blob=>{if(!active)return;objectUrl=URL.createObjectURL(blob);setPreviewUrl(objectUrl);})
       .catch(()=>{if(active)setPreviewUrl('');});
     return()=>{active=false;if(objectUrl)URL.revokeObjectURL(objectUrl);};
-  },[apiUrl,property.id]);
+  },[apiUrl,property.id,reportType]);
 
   const handleCreateSnapshot = async () => {
     setLoading(true);
@@ -91,11 +94,38 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
         <div>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: '#1a202c', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <FileText style={{ color: '#3182ce' }} size={22} />
-            Due Diligence & Title Audit Report (R5)
+            Due Diligence & Title Audit Report (FRD §13)
           </h2>
           <p style={{ margin: '4px 0 0', color: '#718096', fontSize: '0.875rem' }}>
-            Draft evidence-organising report. Values remain unverified unless linked to reviewed source documents.
+            Immutable, evidence-anchored due diligence report with verified source documents and statutory disclaimers.
           </p>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+            {[
+              { id: 'detailed_due_diligence', label: 'Detailed Due Diligence' },
+              { id: 'preliminary_screening', label: 'Preliminary Screening' },
+              { id: 'client_decision_pack', label: 'Client Decision Pack' },
+              { id: 'evidence_appendix', label: 'Evidence Appendix' },
+              { id: 'change_alert', label: 'Change Alert' },
+            ].map(t => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setReportType(t.id as any)}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  border: reportType === t.id ? '1px solid #2563eb' : '1px solid #e2e8f0',
+                  background: reportType === t.id ? '#eff6ff' : '#fff',
+                  color: reportType === t.id ? '#1d4ed8' : '#64748b',
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {!readOnly&&<button

@@ -151,6 +151,30 @@ export interface DemoTask {
   updated_at: string;
 }
 
+export interface DemoMatter {
+  id: string;
+  tenant_id: string;
+  matter_number: string;
+  title: string;
+  client_name: string;
+  client_email: string | null;
+  client_phone: string | null;
+  review_purpose: string;
+  status: 'open' | 'in_review' | 'ready_for_signoff' | 'closed' | 'archived';
+  priority: 'normal' | 'high' | 'urgent' | 'critical';
+  created_by_uid: string;
+  assigned_lawyer_uid: string | null;
+  assigned_analyst_uid: string | null;
+  assigned_operations_uid: string | null;
+  assigned_consultant_uid: string | null;
+  property_count: number;
+  due_date: string | null;
+  notes: string;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DemoReport {
   id: string;
   tenant_id: string;
@@ -168,6 +192,7 @@ export interface DemoSessionWorkspace {
   sessionId: string;
   token: string;
   user: DemoSessionUser;
+  matters: DemoMatter[];
   properties: DemoProperty[];
   documents: DemoStoredDocument[];
   findings: DemoFinding[];
@@ -176,6 +201,9 @@ export interface DemoSessionWorkspace {
   reports: DemoReport[];
   titleEvents: any[];
   workspaceSettings: any;
+  intakeChecklists: Record<string, any[]>;
+  legalSignOffs: Record<string, any>;
+  clientShares: Record<string, any[]>;
   createdAt: number;
   lastActivityAt: number;
   expiresAt: number;
@@ -618,6 +646,127 @@ function createBaselineReports(properties: DemoProperty[]): DemoReport[] {
   ];
 }
 
+/**
+ * Creates seed matters that group baseline properties into client matters.
+ * Each matter represents one client engagement / due-diligence file.
+ */
+function createBaselineMatters(properties: DemoProperty[]): DemoMatter[] {
+  const t = nowStr();
+  const tenantId = properties[0]?.tenant_id || 'demo-tenant';
+  return [
+    {
+      id: 'matter-001',
+      tenant_id: tenantId,
+      matter_number: 'OJIX-M-2026-001',
+      title: 'Whitefield Residential Site — Purchase Due Diligence',
+      client_name: 'Mr. Ramesh B. Nair',
+      client_email: 'ramesh.nair@example.com',
+      client_phone: '+91 98765 43210',
+      review_purpose: 'purchase_due_diligence',
+      status: 'in_review',
+      priority: 'high',
+      created_by_uid: 'demo-user-admin',
+      assigned_lawyer_uid: 'demo-user-lawyer',
+      assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations',
+      assigned_consultant_uid: 'demo-user-consultant',
+      property_count: 1,
+      due_date: '2026-12-05',
+      notes: 'Client has deposited token advance. Title clearance required before final registration.',
+      archived_at: null,
+      created_at: t, updated_at: t,
+    },
+    {
+      id: 'matter-002',
+      tenant_id: tenantId,
+      matter_number: 'OJIX-M-2026-002',
+      title: 'Jayanagar Agricultural Land — Title Verification',
+      client_name: 'Mrs. Sudha Ramanujan',
+      client_email: 'sudha.r@example.com',
+      client_phone: '+91 99988 77665',
+      review_purpose: 'title_verification',
+      status: 'in_review',
+      priority: 'critical',
+      created_by_uid: 'demo-user-admin',
+      assigned_lawyer_uid: 'demo-user-lawyer',
+      assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations',
+      assigned_consultant_uid: 'demo-user-consultant',
+      property_count: 1,
+      due_date: '2026-11-30',
+      notes: 'Extent mismatch and disputed identity state flagged. Urgent resolution required.',
+      archived_at: null,
+      created_at: t, updated_at: t,
+    },
+    {
+      id: 'matter-003',
+      tenant_id: tenantId,
+      matter_number: 'OJIX-M-2026-003',
+      title: 'Hebbal Commercial Plot — Investment Analysis',
+      client_name: 'Shri Capital Investments Pvt. Ltd.',
+      client_email: 'legal@shricapital.com',
+      client_phone: '+91 80 4567 8901',
+      review_purpose: 'investment_analysis',
+      status: 'closed',
+      priority: 'normal',
+      created_by_uid: 'demo-user-owner',
+      assigned_lawyer_uid: 'demo-user-lawyer',
+      assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations',
+      assigned_consultant_uid: 'demo-user-consultant',
+      property_count: 1,
+      due_date: null,
+      notes: 'Report delivered. Title cleared. Matter closed.',
+      archived_at: null,
+      created_at: t, updated_at: t,
+    },
+    {
+      id: 'matter-004',
+      tenant_id: tenantId,
+      matter_number: 'OJIX-M-2026-004',
+      title: 'Mangaluru Waterfront Commercial — CRZ Compliance Review',
+      client_name: 'Mr. Ajay Shetty & Associates',
+      client_email: 'ajay.shetty@example.com',
+      client_phone: '+91 97400 00123',
+      review_purpose: 'commercial_lease',
+      status: 'ready_for_signoff',
+      priority: 'high',
+      created_by_uid: 'demo-user-admin',
+      assigned_lawyer_uid: 'demo-user-lawyer',
+      assigned_analyst_uid: 'demo-user-analyst',
+      assigned_operations_uid: 'demo-user-operations',
+      assigned_consultant_uid: 'demo-user-consultant',
+      property_count: 1,
+      due_date: '2026-12-15',
+      notes: 'CRZ clearance documents attached. Final sign-off pending from Lead Advocate.',
+      archived_at: null,
+      created_at: t, updated_at: t,
+    },
+    {
+      id: 'matter-005',
+      tenant_id: tenantId,
+      matter_number: 'OJIX-M-2026-005',
+      title: 'Mandya Farmland — New Client Intake',
+      client_name: 'Mr. Girish Gowda',
+      client_email: 'girish.gowda@example.com',
+      client_phone: '+91 94480 00456',
+      review_purpose: 'title_verification',
+      status: 'open',
+      priority: 'normal',
+      created_by_uid: 'demo-user-admin',
+      assigned_lawyer_uid: null,
+      assigned_analyst_uid: null,
+      assigned_operations_uid: null,
+      assigned_consultant_uid: null,
+      property_count: 1,
+      due_date: null,
+      notes: 'New matter created. Awaiting Owner assignment to specialist team.',
+      archived_at: null,
+      created_at: t, updated_at: t,
+    },
+  ];
+}
+
 const DISK_PROPERTIES_PATH = '/tmp/ojix_demo_properties.json';
 const DISK_OVERRIDES_PATH = '/tmp/ojix_demo_overrides.json';
 const DISK_DOCUMENTS_PATH = '/tmp/ojix_demo_documents.json';
@@ -659,7 +808,17 @@ export function saveDiskDemoOverride(propertyId: string, override: Partial<DemoP
 export function getDiskDemoDocuments(): DemoStoredDocument[] {
   try {
     if (fs.existsSync(DISK_DOCUMENTS_PATH)) {
-      return JSON.parse(fs.readFileSync(DISK_DOCUMENTS_PATH, 'utf-8'));
+      const parsed = JSON.parse(fs.readFileSync(DISK_DOCUMENTS_PATH, 'utf-8'));
+      if (Array.isArray(parsed)) {
+        return parsed.map((item: any) => {
+          if (item.fileBufferBase64) {
+            item.fileBuffer = Buffer.from(item.fileBufferBase64, 'base64');
+          } else if (item.fileBuffer?.data) {
+            item.fileBuffer = Buffer.from(item.fileBuffer.data);
+          }
+          return item as DemoStoredDocument;
+        });
+      }
     }
   } catch {}
   return [];
@@ -668,7 +827,16 @@ export function getDiskDemoDocuments(): DemoStoredDocument[] {
 export function saveDiskDemoDocument(doc: DemoStoredDocument): void {
   try {
     const list = getDiskDemoDocuments().filter((d) => d.id !== doc.id);
-    list.unshift(doc);
+    const toSave: any = { ...doc };
+    if (doc.fileBuffer) {
+      toSave.fileBufferBase64 = Buffer.isBuffer(doc.fileBuffer)
+        ? doc.fileBuffer.toString('base64')
+        : (doc.fileBuffer as any).data
+          ? Buffer.from((doc.fileBuffer as any).data).toString('base64')
+          : Buffer.from(doc.fileBuffer as any).toString('base64');
+      delete toSave.fileBuffer;
+    }
+    list.unshift(toSave);
     fs.writeFileSync(DISK_DOCUMENTS_PATH, JSON.stringify(list));
   } catch {}
 }
@@ -676,7 +844,7 @@ export function saveDiskDemoDocument(doc: DemoStoredDocument): void {
 /**
  * Demo Session Repository managing all active demo workspaces with stateless rehydration.
  */
-class DemoSessionRepository {
+export class DemoSessionRepository {
   private sessions = new Map<string, DemoSessionWorkspace>();
   private tokenToSessionId = new Map<string, string>();
 
@@ -723,11 +891,13 @@ class DemoSessionRepository {
     const findings = createBaselineFindings(properties);
     const tasks = createBaselineTasks(properties);
     const reports = createBaselineReports(properties);
+    const matters = createBaselineMatters(properties);
 
     const workspace: DemoSessionWorkspace = {
       sessionId,
       token,
       user,
+      matters,
       properties,
       documents,
       findings,
@@ -760,6 +930,9 @@ class DemoSessionRepository {
         default_report_template: 'standard',
         legal_disclaimer: 'Demonstration report generated for trial preview. Not a government certification or legal opinion.',
       },
+      intakeChecklists: {},
+      legalSignOffs: {},
+      clientShares: {},
       createdAt: now,
       lastActivityAt: now,
       expiresAt,
@@ -806,11 +979,13 @@ class DemoSessionRepository {
     const findings = createBaselineFindings(properties);
     const tasks = createBaselineTasks(properties);
     const reports = createBaselineReports(properties);
+    const matters = createBaselineMatters(properties);
 
     const workspace: DemoSessionWorkspace = {
       sessionId: payload.sid,
       token,
       user,
+      matters,
       properties,
       documents,
       findings,
@@ -843,6 +1018,9 @@ class DemoSessionRepository {
         default_report_template: 'standard',
         legal_disclaimer: 'Demonstration report generated for trial preview. Not a government certification or legal opinion.',
       },
+      intakeChecklists: {},
+      legalSignOffs: {},
+      clientShares: {},
       createdAt: Date.now() - 60000,
       lastActivityAt: Date.now(),
       expiresAt: payload.exp,

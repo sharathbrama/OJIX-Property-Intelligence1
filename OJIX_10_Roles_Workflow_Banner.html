@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OJIX Property Intelligence — 10-Role End-to-End Information Handoff Workflow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #030509;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      color: #FFFFFF;
+    }
+
+    .banner-wrapper {
+      position: relative;
+      width: 1600px;
+      height: 1040px;
+      box-shadow: 0 40px 140px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 84, 38, 0.3);
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background: #070A12;
+      position: relative;
+    }
+
+    /* Ambient Technical Grid */
+    .banner-wrapper::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: 
+        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* Radial Backlight */
+    .banner-wrapper::after {
+      content: '';
+      position: absolute;
+      top: -100px;
+      left: 20%;
+      width: 800px;
+      height: 300px;
+      background: radial-gradient(circle, rgba(255, 84, 38, 0.12) 0%, rgba(56, 189, 248, 0.06) 50%, transparent 80%);
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    /* ═════════════════════════════════════════════════════════════════
+       HEADER: MISSION, OUTSIDE ENTRY & EXECUTIVE METRICS
+       ═════════════════════════════════════════════════════════════════ */
+    .banner-header {
+      height: 94px;
+      background: rgba(13, 17, 28, 0.96);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 36px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+
+    .brand-logo-icon {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #FF5426 0%, #D83B10 100%);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 20px rgba(255, 84, 38, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .brand-logo-icon svg {
+      width: 24px;
+      height: 24px;
+      fill: #FFFFFF;
+    }
+
+    .brand-title-wrap h1 {
+      font-size: 20px;
+      font-weight: 900;
+      letter-spacing: 0.03em;
+      color: #FFFFFF;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-title-wrap h1 span.badge {
+      font-size: 9.5px;
+      font-weight: 800;
+      background: rgba(255, 84, 38, 0.16);
+      color: #FF5426;
+      border: 1px solid rgba(255, 84, 38, 0.4);
+      padding: 2.5px 8px;
+      border-radius: 4px;
+      letter-spacing: 0.1em;
+    }
+
+    .brand-title-wrap p {
+      font-size: 11px;
+      color: #8FA0B8;
+      font-weight: 500;
+      margin-top: 1px;
+    }
+
+    /* Outside Person Entry Callout */
+    .outside-entry-pill {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      padding: 6px 14px;
+      border-radius: 30px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px;
+      font-weight: 700;
+      color: #E0F2FE;
+    }
+
+    .outside-dot {
+      width: 8px;
+      height: 8px;
+      background: #38BDF8;
+      border-radius: 50%;
+      box-shadow: 0 0 10px #38BDF8;
+    }
+
+    .outside-entry-pill strong {
+      color: #38BDF8;
+    }
+
+    .header-metrics-group {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .header-stat {
+      text-align: right;
+    }
+
+    .header-stat .val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 15px;
+      font-weight: 800;
+      color: #FFFFFF;
+    }
+
+    .header-stat .lbl {
+      font-size: 9px;
+      color: #70829B;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+
+    /* ═════════════════════════════════════════════════════════════════
+       MAIN 10-ROLE PIPELINE GRID (2 ROWS OF 5 CARDS)
+       ═════════════════════════════════════════════════════════════════ */
+    .banner-body {
+      flex: 1;
+      padding: 18px 24px 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+      z-index: 5;
+    }
+
+    /* Row Tracks */
+    .roles-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+      position: relative;
+    }
+
+    /* Row Connection Conduits */
+    .row-transition-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 16px;
+      background: rgba(14, 19, 31, 0.7);
+      border-radius: 6px;
+      border: 1px dashed rgba(255, 255, 255, 0.1);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      color: #94A3B8;
+      margin: 2px 0;
+    }
+
+    .transition-step {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .transition-step span.arrow {
+      color: #FF5426;
+      font-weight: 900;
+    }
+
+    /* INDIVIDUAL ROLE CARD */
+    .role-card {
+      background: #0E1322;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 12px 13px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      transition: all 0.2s ease;
+      min-height: 410px;
+    }
+
+    .role-card:hover {
+      border-color: rgba(255, 84, 38, 0.5);
+      background: #12182B;
+      transform: translateY(-2px);
+    }
+
+    .role-card.outside-intake {
+      border-top: 3.5px solid #38BDF8;
+      background: linear-gradient(180deg, rgba(56, 189, 248, 0.08) 0%, #0E1322 35%);
+    }
+
+    .role-card.management {
+      border-top: 3.5px solid #F59E0B;
+    }
+
+    .role-card.ops-data {
+      border-top: 3.5px solid #6366F1;
+    }
+
+    .role-card.legal-core {
+      border-top: 3.5px solid #FF5426;
+    }
+
+    .role-card.gis-core {
+      border-top: 3.5px solid #06B6D4;
+    }
+
+    .role-card.final-seal {
+      border-top: 3.5px solid #10B981;
+      background: linear-gradient(180deg, rgba(16, 185, 129, 0.08) 0%, #0E1322 35%);
+    }
+
+    /* Card Top Header */
+    .card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .role-number {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      font-weight: 900;
+      color: #FFFFFF;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .role-badge-tag {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.5px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 2.5px 6px;
+      border-radius: 4px;
+    }
+
+    .tag-blue { background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.35); }
+    .tag-amber { background: rgba(245, 158, 11, 0.15); color: #F59E0B; border: 1px solid rgba(245, 158, 11, 0.35); }
+    .tag-indigo { background: rgba(99, 102, 241, 0.15); color: #818CF8; border: 1px solid rgba(99, 102, 241, 0.35); }
+    .tag-orange { background: rgba(255, 84, 38, 0.15); color: #FF5426; border: 1px solid rgba(255, 84, 38, 0.35); }
+    .tag-cyan { background: rgba(6, 182, 212, 0.15); color: #22D3EE; border: 1px solid rgba(6, 182, 212, 0.35); }
+    .tag-green { background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.35); }
+
+    .role-title {
+      font-size: 13.5px;
+      font-weight: 900;
+      color: #F8FAFC;
+      letter-spacing: 0.01em;
+      margin-bottom: 2px;
+    }
+
+    .role-persona {
+      font-size: 9.5px;
+      font-weight: 600;
+      color: #94A3B8;
+      margin-bottom: 8px;
+    }
+
+    /* Role Information Box 1: INCOMING DATA */
+    .info-box-incoming {
+      background: rgba(0, 0, 0, 0.35);
+      border-left: 2px solid #38BDF8;
+      border-radius: 4px;
+      padding: 6px 8px;
+      margin-bottom: 8px;
+    }
+
+    .info-box-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.2px;
+      font-weight: 800;
+      color: #7DD3FC;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .info-box-text {
+      font-size: 8.8px;
+      line-height: 1.35;
+      color: #E2E8F0;
+    }
+
+    /* Role Information Box 2: WHAT WE DO (ACTIONS) */
+    .info-box-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 8px;
+      flex: 1;
+    }
+
+    .action-header {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.2px;
+      font-weight: 800;
+      color: #94A3B8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .action-bullet {
+      font-size: 8.5px;
+      line-height: 1.35;
+      color: #CBD5E1;
+      display: flex;
+      align-items: flex-start;
+      gap: 5px;
+    }
+
+    .action-bullet .bullet-dot {
+      color: #FF5426;
+      font-size: 9px;
+      line-height: 1;
+      margin-top: 1px;
+    }
+
+    /* Role Information Box 3: OUTPUT & HANDOFF TO NEXT ROLE */
+    .info-box-handoff {
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-radius: 4px;
+      padding: 6px 8px;
+      margin-top: auto;
+    }
+
+    .handoff-header {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7.2px;
+      font-weight: 800;
+      color: #10B981;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 2px;
+    }
+
+    .handoff-target {
+      font-size: 8.8px;
+      font-weight: 700;
+      color: #F1F5F9;
+      line-height: 1.3;
+    }
+
+    .handoff-next-pill {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7px;
+      font-weight: 800;
+      color: #FF5426;
+      background: rgba(255, 84, 38, 0.15);
+      padding: 1px 5px;
+      border-radius: 2px;
+    }
+
+    /* ═════════════════════════════════════════════════════════════════
+       FOOTER BAR: GUARANTEE & STATUTORY STANDARDS
+       ═════════════════════════════════════════════════════════════════ */
+    .banner-footer {
+      height: 52px;
+      background: #06080E;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 36px;
+      font-size: 11px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .footer-guarantee {
+      color: #CBD5E1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .footer-guarantee svg {
+      width: 15px;
+      height: 15px;
+      fill: #10B981;
+    }
+
+    .footer-pitch {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: #8E9BAE;
+    }
+
+    .footer-pitch span.orange {
+      color: #FF5426;
+      font-weight: 800;
+    }
+
+    .footer-contact {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px;
+      color: #CBD5E1;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="banner-wrapper">
+
+    <!-- ═════════════════════════════════════════════════════════════════
+         HEADER: OUTSIDE PERSON INTAKE & 10-ROLE GOVERNANCE
+         ═════════════════════════════════════════════════════════════════ -->
+    <header class="banner-header">
+      <div class="brand-group">
+        <div class="brand-logo-icon">
+          <svg viewBox="0 0 24 24">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+        </div>
+        <div class="brand-title-wrap">
+          <h1>OJIX PROPERTY INTELLIGENCE <span class="badge">10-ROLE WORKFLOW</span></h1>
+          <p>End-to-End Client & Document Journey: How Information Flows Across All 10 Roles</p>
+        </div>
+      </div>
+
+      <!-- Outside Person Entry Status Pill -->
+      <div class="outside-entry-pill">
+        <div class="outside-dot"></div>
+        <span>OUTSIDE PERSON ARRIVAL ➔ <strong>CLIENT / EXTERNAL APPLICANT</strong></span>
+      </div>
+
+      <div class="header-metrics-group">
+        <div class="header-stat">
+          <div class="val">10 Roles</div>
+          <div class="lbl">Zero Cross-Pollution</div>
+        </div>
+        <div class="header-stat">
+          <div class="val" style="color:#10B981;">48 Hours</div>
+          <div class="lbl">Turnaround SLA</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ═════════════════════════════════════════════════════════════════
+         MAIN 10-ROLE LIFECYCLE GRID
+         ═════════════════════════════════════════════════════════════════ -->
+    <main class="banner-body">
+
+      <!-- ── ROW 1: ROLES 01 TO 05 (INTAKE, ADMIN, GOVERNANCE & DATA) ── -->
+      <section class="roles-row">
+
+        <!-- ROLE 01: CLIENT / OUTSIDE PERSON -->
+        <div class="role-card outside-intake">
+          <div>
+            <div class="card-top">
+              <span class="role-number">01 • INTAKE</span>
+              <span class="role-badge-tag tag-blue">CLIENT / VIEWER</span>
+            </div>
+            <div class="role-title">Client / Buyer Intake</div>
+            <div class="role-persona">Outside Person (Buyer, Bank, Developer)</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Incoming From Outside:</div>
+            <div class="info-box-text">Survey Number, Village/Taluk, initial deed copy, RTC pahani & acquisition objective.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Captures primary property identity & coordinates.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Signs non-disclosure & 48-hr SLA mandate.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Registers initial client inquiry in OJIX engine.</div>
+          </div>
+
+          <div class="info-box-handoff">
+            <div class="handoff-header">
+              <span>📤 Output Generated</span>
+              <span class="handoff-next-pill">➔ TO ROLE 02</span>
+            </div>
+            <div class="handoff-target">Matter Token & Inquiry Dossier handed off to Tenant Admin.</div>
+          </div>
+        </div>
+
+        <!-- ROLE 02: TENANT ADMIN -->
+        <div class="role-card management">
+          <div>
+            <div class="card-top">
+              <span class="role-number">02 • SETUP</span>
+              <span class="role-badge-tag tag-amber">TENANT ADMIN</span>
+            </div>
+            <div class="role-title">Workspace Onboarding</div>
+            <div class="role-persona">System & Tenant Administrator</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Received From Role 01:</div>
+            <div class="info-box-text">Matter Token, property jurisdiction (Bengaluru East), SLA timeline.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Provisions isolated matter sandbox (`#842`).</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Configures legal rules (KA Land Revenue Act).</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Assigns team members (Lawyer, GIS, Analyst).</div>
+          </div>
+
+          <div class="info-box-handoff">
+            <div class="handoff-header">
+              <span>📤 Output Generated</span>
+              <span class="handoff-next-pill">➔ TO ROLE 03</span>
+            </div>
+            <div class="handoff-target">Active Matter Workspace & Team Matrix handed off to Workspace Owner.</div>
+          </div>
+        </div>
+
+        <!-- ROLE 03: WORKSPACE OWNER -->
+        <div class="role-card management">
+          <div>
+            <div class="card-top">
+              <span class="role-number">03 • MANDATE</span>
+              <span class="role-badge-tag tag-amber">WORKSPACE OWNER</span>
+            </div>
+            <div class="role-title">Commercial Mandate</div>
+            <div class="role-persona">Managing Partner / Diligence Head</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Received From Role 02:</div>
+            <div class="info-box-text">Matter workspace allocation, commercial scope & risk tier.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Signs commercial authorization & fee scope.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Approves government query budget (Kaveri/Bhoomi).</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Sets statutory risk triggers (PTCL / Inam laws).</div>
+          </div>
+
+          <div class="info-box-handoff">
+            <div class="handoff-header">
+              <span>📤 Output Generated</span>
+              <span class="handoff-next-pill">➔ TO ROLE 04</span>
+            </div>
+            <div class="handoff-target">Authorized Search Mandate handed off to Operations Lead.</div>
+          </div>
+        </div>
+
+        <!-- ROLE 04: OPERATIONS LEAD -->
+        <div class="role-card ops-data">
+          <div>
+            <div class="card-top">
+              <span class="role-number">04 • INTAKE</span>
+              <span class="role-badge-tag tag-indigo">OPERATIONS</span>
+            </div>
+            <div class="role-title">Govt Registry Fetch</div>
+            <div class="role-persona">Operations Lead & Registry Officer</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Received From Role 03:</div>
+            <div class="info-box-text">Search mandate, Survey No. 45/3A, SRO K.R. Puram jurisdiction.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Queries Kaveri 2.0 (Deeds & 30-Yr EC Form 15).</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Fetches Bhoomi RTC & Mutation Extracts (M.R.).</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Pulls Mojini 3.0 Tippan & Nadakacheri certs.</div>
+          </div>
+
+          <div class="info-box-handoff">
+            <div class="handoff-header">
+              <span>📤 Output Generated</span>
+              <span class="handoff-next-pill">➔ TO ROLE 05</span>
+            </div>
+            <div class="handoff-target">Raw Multi-Registry PDF & XML Bundle handed off to Data Steward.</div>
+          </div>
+        </div>
+
+        <!-- ROLE 05: DATA STEWARD & OCR -->
+        <div class="role-card ops-data">
+          <div>
+            <div class="card-top">
+              <span class="role-number">05 • NORMALIZE</span>
+              <span class="role-badge-tag tag-indigo">DATA STEWARD</span>
+            </div>
+            <div class="role-title">Bilingual OCR Extraction</div>
+            <div class="role-persona">Data Pipeline & OCR Specialist</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Received From Role 04:</div>
+            <div class="info-box-text">Multi-registry raw document scans, Kannada extracts & survey maps.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> De-skews, cleans & normalizes Kannada scripts.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Extracts entities: Owners, Extent, Boundaries.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Tags cryptographic SHA-256 scan provenance.</div>
+          </div>
+
+          <div class="info-box-handoff">
+            <div class="handoff-header">
+              <span>📤 Output Generated</span>
+              <span class="handoff-next-pill">➔ TO ROLE 06</span>
+            </div>
+            <div class="handoff-target">Normalized Bilingual Legal Entity Graph handed off to Title Analyst.</div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ── MIDDLE TRANSITION CONDUIT ── -->
+      <div class="row-transition-banner">
+        <div class="transition-step">
+          <span class="arrow">▼</span>
+          <span>DATA NORMALIZATION COMPLETE</span>
+        </div>
+        <div style="font-weight:700; color:#CBD5E1;">
+          AUTOMATED HANDOFF TO SPECIALIZED LEGAL & SPATIAL VERIFICATION CORE
+        </div>
+        <div class="transition-step">
+          <span>ENTERING DEEP VERIFICATION</span>
+          <span class="arrow">▼</span>
+        </div>
+      </div>
+
+      <!-- ── ROW 2: ROLES 06 TO 10 (LEGAL, GIS, AUDIT, SUPER ADMIN & CLIENT DELIVERY) ── -->
+      <section class="roles-row">
+
+        <!-- ROLE 06: LEGAL ANALYST -->
+        <div class="role-card legal-core">
+          <div>
+            <div class="card-top">
+              <span class="role-number">06 • LINEAGE</span>
+              <span class="role-badge-tag tag-orange">LEGAL ANALYST</span>
+            </div>
+            <div class="role-title">30-Year Title DAG</div>
+            <div class="role-persona">Senior Property Title Analyst</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Received From Role 05:</div>
+            <div class="info-box-text">Normalized bilingual entities, SRO deed logs, Mutation records.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Builds 30-year unbroken Directed Acyclic Graph.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Reconciles Mutation MR entries with deeds.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Detects transaction gaps, minor shares or splits.</div>
+          </div>
+
+          <div class="info-box-handoff">
+            <div class="handoff-header">
+              <span>📤 Output Generated</span>
+              <span class="handoff-next-pill">➔ TO ROLE 07</span>
+            </div>
+            <div class="handoff-target">Verified Title Lineage DAG & Issue Matrix handed off to Lead Lawyer.</div>
+          </div>
+        </div>
+
+        <!-- ROLE 07: LEAD LAWYER / ADVOCATE -->
+        <div class="role-card legal-core">
+          <div>
+            <div class="card-top">
+              <span class="role-number">07 • STATUTES</span>
+              <span class="role-badge-tag tag-orange">LEAD LAWYER</span>
+            </div>
+            <div class="role-title">Statutory Legal Audit</div>
+            <div class="role-persona">High Court Empanelled Advocate</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Received From Role 06:</div>
+            <div class="info-box-text">30-year DAG title chain, Form 15 EC, family genealogy chart.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Evaluates PTCL Act (SC/ST non-alienation).</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Verifies Sec 79A/B Land Reforms clearance.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Audits civil litigation & draft legal opinion.</div>
+          </div>
+
+          <div class="info-box-handoff">
+            <div class="handoff-header">
+              <span>📤 Output Generated</span>
+              <span class="handoff-next-pill">➔ TO ROLE 08</span>
+            </div>
+            <div class="handoff-target">Statutory Clearance Opinion & Title Finding handed off to GIS Specialist.</div>
+          </div>
+        </div>
+
+        <!-- ROLE 08: GIS SPECIALIST -->
+        <div class="role-card gis-core">
+          <div>
+            <div class="card-top">
+              <span class="role-number">08 • SPATIAL</span>
+              <span class="role-badge-tag tag-cyan">GIS SPECIALIST</span>
+            </div>
+            <div class="role-title">Cadastral Buffer Screener</div>
+            <div class="role-persona">Geospatial Cartographer & GIS Lead</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Received From Role 07:</div>
+            <div class="info-box-text">Approved survey boundaries, Mojini FMB tippani, cadastral sheets.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Sub-meter vector overlay against Rajakaluve.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Enforces 50m SWD buffer (Pass: 72.4m setback).</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Audits lake 30m buffer & CDP master plan roads.</div>
+          </div>
+
+          <div class="info-box-handoff">
+            <div class="handoff-header">
+              <span>📤 Output Generated</span>
+              <span class="handoff-next-pill">➔ TO ROLE 09</span>
+            </div>
+            <div class="handoff-target">Cadastral Spatial Buffer Certificate handed off to Support & QA.</div>
+          </div>
+        </div>
+
+        <!-- ROLE 09: SUPPORT & QA EXECUTIVE -->
+        <div class="role-card management">
+          <div>
+            <div class="card-top">
+              <span class="role-number">09 • AUDIT QA</span>
+              <span class="role-badge-tag tag-amber">SUPPORT / QA</span>
+            </div>
+            <div class="role-title">Quality Assurance & SLA</div>
+            <div class="role-persona">Support Lead & SLA Coordinator</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Received From Role 08:</div>
+            <div class="info-box-text">Legal findings, GIS spatial cert, DAG chain & 48-hr clock.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Verifies zero missing government records.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Reconciles all 8 role sign-offs in matrix.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Prepares institutional 52-page dossier draft.</div>
+          </div>
+
+          <div class="info-box-handoff">
+            <div class="handoff-header">
+              <span>📤 Output Generated</span>
+              <span class="handoff-next-pill">➔ TO ROLE 10</span>
+            </div>
+            <div class="handoff-target">Verified Dossier Package handed off to Super Admin.</div>
+          </div>
+        </div>
+
+        <!-- ROLE 10: SUPER ADMIN & FINAL CLIENT DELIVERY -->
+        <div class="role-card final-seal">
+          <div>
+            <div class="card-top">
+              <span class="role-number">10 • RELEASE</span>
+              <span class="role-badge-tag tag-green">SUPER ADMIN</span>
+            </div>
+            <div class="role-title">Cryptographic Seal</div>
+            <div class="role-persona">Principal Legal Auditor & Compliance Head</div>
+          </div>
+
+          <div class="info-box-incoming">
+            <div class="info-box-label">📥 Received From Role 09:</div>
+            <div class="info-box-text">Verified 52-page dossier, 10-role audit trail, final legal opinions.</div>
+          </div>
+
+          <div class="info-box-actions">
+            <div class="action-header">What We Do in This Role:</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Final executive compliance verification.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Cryptographic SHA-256 seal & digital signature.</div>
+            <div class="action-bullet"><span class="bullet-dot">•</span> Grants Grade-A Title Clearance Certificate.</div>
+          </div>
+
+          <div class="info-box-handoff" style="border-color:#10B981; background:rgba(16,185,129,0.15);">
+            <div class="handoff-header">
+              <span style="color:#10B981;">🎉 FINAL DELIVERY</span>
+              <span class="handoff-next-pill" style="background:#10B981; color:#030509; font-weight:900;">➔ TO CLIENT</span>
+            </div>
+            <div class="handoff-target" style="color:#FFFFFF; font-weight:800;">
+              Court-Admissible 52-Page Dossier delivered back to Outside Person in 48 Hours!
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+    </main>
+
+    <!-- ═════════════════════════════════════════════════════════════════
+         FOOTER: COMMITMENT & REACH
+         ═════════════════════════════════════════════════════════════════ -->
+    <footer class="banner-footer">
+      <div class="footer-guarantee">
+        <svg viewBox="0 0 20 20"><path d="M10 2L3 5v6c0 5.55 3.84 10.74 7 12 3.16-1.26 7-6.45 7-12V5l-7-3zm-2 13l-4-4 1.41-1.41L10 12.17l6.59-6.59L18 7l-8 8z"/></svg>
+        <span>10-Role Complete Audit Traceability • Deterministic Legal Assurance • Zero Missing Govt Records</span>
+      </div>
+
+      <div class="footer-pitch">
+        Karnataka-First <span class="orange">•</span> Strict RBAC Separation of Duties <span class="orange">•</span> Sub-Meter PostGIS Cadastral Screener
+      </div>
+
+      <div class="footer-contact">
+        <span>www.ojix.com</span>
+        <span>•</span>
+        <span>info@ojix.in</span>
+      </div>
+    </footer>
+
+  </div>
+
+</body>
+</html>

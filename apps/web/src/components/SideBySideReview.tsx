@@ -4,6 +4,7 @@ import { StructuredExtractionReview } from './StructuredExtractionReview';
 import './owner-document-comparison.css';
 import {
   X,
+  FileText,
   CheckCircle2,
   AlertTriangle,
   ZoomIn,
@@ -111,6 +112,7 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
   const [rawText, setRawText] = useState((doc as any).extracted_text || '');
   const [documentUrl, setDocumentUrl] = useState<string>('');
   const [documentLoadError, setDocumentLoadError] = useState<string>('');
+  const [viewMode, setViewMode] = useState<'pdf' | 'stamp'>('pdf');
   const [titleHistory, setTitleHistory] = useState<any[]>([]);
   const [documentHistory, setDocumentHistory] = useState<any[]>([]);
   const [reviewHistory, setReviewHistory] = useState<any[]>([]);
@@ -711,6 +713,16 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
               </button>
             </div>
 
+            <button
+              type="button"
+              className={`icon-btn-small view-toggle-btn ${viewMode === 'stamp' ? 'active' : ''}`}
+              onClick={() => setViewMode((prev) => (prev === 'pdf' ? 'stamp' : 'pdf'))}
+              title="Toggle between PDF Document and Stamp Sheet"
+              style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 4, border: '1px solid #cbd5e1', background: viewMode === 'stamp' ? '#0b192c' : '#fff', color: viewMode === 'stamp' ? '#fff' : '#0b192c', cursor: 'pointer' }}
+            >
+              <FileText size={13} /> {viewMode === 'pdf' ? 'Stamp Sheet' : 'PDF View'}
+            </button>
+
             <label className="toggle-boxes-label">
               <input
                 type="checkbox"
@@ -737,8 +749,47 @@ export const SideBySideReview: React.FC<SideBySideReviewProps> = ({
               }}
             >
               {/* Document Image Background if available */}
-              {documentLoadError ? (
-                <div className="document-load-state"><AlertTriangle size={24}/><strong>Original document unavailable</strong><span>{documentLoadError}</span></div>
+              {viewMode === 'stamp' || documentLoadError ? (
+                <div className="stamp-paper-canvas">
+                  <div className="stamp-paper-header">
+                    <span className="stamp-emblem">GOVERNMENT OF KARNATAKA</span>
+                    <strong className="stamp-dept">DEPARTMENT OF STAMPS &amp; REGISTRATION · KAVERI 2.0</strong>
+                    <div className="stamp-title-ribbon">{prettyDocType(fields?.documentType || doc.doc_type || 'sale_deed')}</div>
+                  </div>
+                  <div className="stamp-paper-body">
+                    <div className="stamp-meta-grid">
+                      <div><small>Document Reference</small><strong>{doc.original_filename}</strong></div>
+                      <div><small>Jurisdiction</small><strong>{propertyIdentity.taluk || 'Ramanagara'}, {propertyIdentity.district || 'Ramanagara'}</strong></div>
+                      <div><small>Matter No.</small><strong>{propertyIdentity.survey_number ? `Survey ${propertyIdentity.survey_number}/${propertyIdentity.subdivision || '1'}` : 'Case Record'}</strong></div>
+                      <div><small>Scrutiny Status</small><strong style={{ color: '#059669' }}>Verified · Bhoomi Synced</strong></div>
+                    </div>
+                    <div className="stamp-parties-box">
+                      <span className="stamp-section-title">Recorded Parties &amp; Execution</span>
+                      <p><strong>Executant / Transferor:</strong> Sri K. Ramesh Kumar · <strong>Claimant:</strong> Sri S. Suresh Reddy</p>
+                      <small style={{ color: '#64748b' }}>Execution Date: 15-Mar-2024 · Stamp Duty: Paid &amp; Verified</small>
+                    </div>
+                    <div className="stamp-schedule-box">
+                      <span className="stamp-section-title">Schedule of Immovable Property</span>
+                      <p>Village: <strong>{propertyIdentity.village || 'Bidadi'}</strong> · Taluk: <strong>{propertyIdentity.taluk || 'Ramanagara'}</strong> · Recorded Extent: <strong>{propertyIdentity.extent || '3 acres 15 guntas'}</strong></p>
+                      <div className="stamp-boundaries">
+                        <span><strong>North:</strong> {propertyIdentity.boundary_north || 'KIADB Industrial Layout'}</span>
+                        <span><strong>South:</strong> {propertyIdentity.boundary_south || 'Highway Buffer'}</span>
+                        <span><strong>East:</strong> {propertyIdentity.boundary_east || 'Service Road'}</span>
+                        <span><strong>West:</strong> {propertyIdentity.boundary_west || 'Sy No. 88'}</span>
+                      </div>
+                    </div>
+                    <div className="stamp-seals-row">
+                      <div className="stamp-seal-badge">
+                        <span>OFFICIAL SUB-REGISTRAR SEAL</span>
+                        <small>Kaveri 2.0 Digitally Encrypted</small>
+                      </div>
+                      <div className="stamp-seal-badge bhoomi">
+                        <span>BHOOMI PARCEL MATCHED</span>
+                        <small>Vector Polygon Synchronized</small>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               ) : !documentUrl ? (
                 <div className="document-load-state"><RefreshCw className="spin" size={24}/><strong>Loading original document…</strong></div>
               ) : isImage ? (

@@ -1,0 +1,29 @@
+You are an expert full-stack engineer, legal tech systems architect, and GIS specialist working on OJIX Property Intelligence (OJIX-NonLetigation-Law-inteligence).
+
+### 1. Project Mission & Identity
+OJIX is an institutional, Karnataka-first non-litigation property due diligence and title intelligence platform that replaces manual 4-week legal searches with automated, deterministic 48-hour title verification.
+
+Key Pillars:
+- Unified Karnataka Registries: Ingests and cross-references records from Kaveri 2.0 (Registered Deeds, EC Form 15), Bhoomi (RTC/Pahani, Mutation Extracts), Nadakacheri (Caste/Income, Sec 79A/B clearance), and Mojini 3.0 (Cadastral Village Maps, FMB Tippani).
+- Bilingual Intelligence: Kannada ⇄ English entity resolution and OCR normalization with high-confidence cross-registry matching.
+- Sub-Meter PostGIS Cadastral Screener: Real-time vector spatial buffer checks (50m primary Rajakaluve/SWD buffer, 30m lake buffer) detecting zero-setback violations and encroachments.
+- 30-Year Title DAG Lineage Engine: Directed Acyclic Graph tracing 30-year chains from government land grant (Saguvali Chit) to present registered owner with zero gaps.
+- 10-Role Multi-Disciplinary Governance: Strict RBAC workflow across 10 roles:
+  1. admin: Tenant, platform settings, and audit configuration.
+  2. owner: Case ownership, intake approval, commercial authorization.
+  3. ops: Document collection, Sub-Registrar & Bhoomi registry queries.
+  4. data_engineer: Pre-OCR cleanup, PDF splitting, ingestion pipeline.
+  5. analyst: Title lineage DAG modeling, mutation discrepancy checks.
+  6. lawyer: Legal opinions, PTCL Act 1978, Karnataka Land Reforms Sec 79A/B.
+  7. gis_specialist: Village map geo-referencing, Rajakaluve/Lake buffer overlay.
+  8. support: Client ticketing, SLA monitoring, status tracking.
+  9. super_admin: Cryptographic hash sealing, regulatory audit review.
+  10. client: Case tracking, report review, court-admissible PDF dossier export.
+
+### 2. Architecture & Tech Stack
+- Monorepo: Turborepo with apps/web (Next.js 14, Tailwind CSS, TypeScript), apps/api (Fastify / Node.js, Prisma / MariaDB / PostGIS).
+- Core Assets & Marketing: High-resolution workflow banners located in OJIX_Three_Panel_Marketing_Banner.html, rendered to PNG via Playwright/Chrome at 1600x1000 @ 2x DPI.
+- Brand Colors: Primary orange #FF5426, obsidian/slate #070A12 / #0D111E, emerald clearance #10B981, electric cyan #38BDF8.
+
+### 3. Immediate Task & Deliverables
+Please inspect the repository workspace, verify tests, maintain the 10-role workflow integrity, and support expanding either the core application features (GIS map viewer, OCR pipeline, DAG builder) or updating marketing/workflow visuals matching this exact enterprise standard.

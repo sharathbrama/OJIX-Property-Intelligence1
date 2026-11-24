@@ -1,6 +1,6 @@
 # OJIX Property Intelligence — Project Progress & Handover Documentation
 
-> **Last Updated:** 2026-11-05 09:56 IST  
+> **Last Updated:** 2026-11-23 12:25 IST  
 > **Repository Root:** `c:\Users\KEERTHANA\OneDrive\Desktop\Developing project\OJIX-Property-Intelligence`  
 > **Status:** Active Development / MVP Stabilization
 
@@ -111,42 +111,112 @@ OJIX Property Intelligence is an evidence-first legal due diligence and land tra
 
 ---
 
+### Task 7: Cross-Role Workflow Handover Verification (FDD §3 / XROLE-01)
+* **Status:** Completed
+* **Work Completed:**
+  * Implemented opaque-box integration test verifying complete 6-stage cross-role workflow handover:
+    1. **Admin:** Creates client matter and assigns specialist team (lawyer, analyst, operations, consultant).
+    2. **Operations:** Intakes land documents (Sale Deed, RTC Pahani), generates SHA-256 checksums, and isolates tenant access.
+    3. **Analyst:** Reviews bilingual OCR extractions, checks confidence thresholds (≥ 0.60), logs bounding-box anchors, flags title gap finding, and tasks review.
+    4. **Lawyer:** Cross-examines title chain, records formal adverse title risk disposition, and moves matter forward.
+    5. **Consultant:** Generates client issue recommendations from confirmed findings without modifying legal conclusions.
+    6. **Owner:** Inspects full audit trail, verifies document evidence coverage, and executes final release sign-off.
+  * Validated 10 core system invariants (token verification, 6-step audit coverage, role segregation, final approvals, sole owner governance, and token expiry).
+* **Files Modified / Created:**
+  * `apps/api/test/cross-role-workflow.test.ts` (60 test cases)
+* **Testing:** 60/60 passing in `cross-role-workflow.test.ts`.
+
+---
+
+### Task 8: Matter Workspace & Multi-Property Lifecycle (FRD §5 / §7)
+* **Status:** Completed
+* **Work Completed:**
+  * Structured top-level Matter engagement data model (`matters` table) grouping multiple property applications per client file.
+  * Implemented database migration `040_matters_workspace_lifecycle.sql` introducing `matters`, `matter_id` foreign key on `properties`, `matter_audit_events`, and computed `matter_summary` view.
+  * Added RESTful matter lifecycle endpoints in `apps/api/src/server.ts`:
+    * `GET /api/matters`: Tenant matter directory with query search (`q`), status, and priority filters.
+    * `POST /api/matters`: Matter intake with auto-generated sequential identifiers (`OJIX-M-2026-XXX`) restricted to Owner/Admin.
+    * `GET /api/matters/:matterId`: Detailed matter file with linked properties and access control.
+    * `PATCH /api/matters/:matterId`: Metadata and assignment updates with audit trail logging.
+    * `PATCH /api/matters/:matterId/assign-property`: Links property dossiers to client matters.
+    * `DELETE /api/matters/:matterId`: Soft archival restricted exclusively to Workspace Owner.
+    * `GET /api/matters/:matterId/audit`: Comprehensive matter lifecycle audit history.
+  * Wired full session-scoped demo support in `session-repository.ts` with 5 seed matters across Karnataka jurisdictions.
+  * Updated RBAC route mappings in `apps/api/src/rbac.ts` so `/api/matters` requests inherit proper permission scoping.
+* **Files Modified / Created:**
+  * `database/migrations/040_matters_workspace_lifecycle.sql`
+  * `apps/api/src/server.ts` (Matters API routes)
+  * `apps/api/src/session-repository.ts` (`DemoMatter` interface, seed baseline, workspace rehydration)
+  * `apps/api/src/rbac.ts` (Route permission mapping)
+  * `apps/api/test/matters-lifecycle.test.ts` (12 test cases)
+* **Testing:** 12/12 passing in `matters-lifecycle.test.ts`.
+
+---
+
+### Task 9: Matter Workspace UI Component & Navigation (FRD §5 / §6.2 MAT-01 / §7 / §35 Screen 03)
+* **Status:** Completed
+* **Work Completed:**
+  * Implemented `MattersView.tsx` matching FRD Screen 03 (Matter Workspace):
+    * Top KPI cards: Total Active Matters, High/Critical Priority, Ready for Advocate Sign-Off, Completed & Released.
+    * Real-time search and filter toolbar (status, priority, client keyword search).
+    * Comprehensive client engagements table with status pills, priority badges, due date indicators with overdue detection, and property counts.
+    * Detailed Matter File Drawer with multi-tab layout: Linked Properties, Lifecycle Audit Trail (`/api/matters/:id/audit`), and Engagement Metadata.
+    * "New Client Matter" intake modal (MAT-01) supporting title, client contact, review purpose, priority, target completion date, and notes.
+    * Status transition workflow (Open → In Review → Ready for Sign-Off → Closed).
+  * Wired `"matters"` route into `App.tsx` and sidebar navigation with `BriefcaseBusiness` icon.
+* **Files Modified / Created:**
+  * `apps/web/src/components/MattersView.tsx`
+  * `apps/web/src/App.tsx`
+
+---
+
+### Task 10: Statutory Intake Checklist & Lead Advocate Legal Sign-Off (Migration 039 / FRD §6.2, §6.3, §12)
+* **Status:** Completed
+* **Work Completed:**
+  * Backend API endpoints implemented for Migration 039:
+    * `GET /api/properties/:id/intake-checklist`: Retrieves 10 statutory Karnataka land records checklist (Sale Deed, RTC Pahani, Mutation Extract, EC Form 15, e-Khata, Property Tax, Survey Sketch, Conversion Order, Layout Plan, PTCL Clearance), auto-linked from uploaded evidence documents.
+    * `PATCH /api/properties/:id/intake-checklist/:itemCode`: Updates intake status (uploaded, pending, missing, not_applicable) and reviewer notes.
+    * `GET /api/properties/:id/legal-sign-off`: Retrieves existing advocate sign-off certificate.
+    * `POST /api/properties/:id/legal-sign-off`: Submits formal advocate title opinion with Bar Council enrollment number, opinion verdict, notes, and cryptographic SHA-256 snapshot hash. Blocks sign-off if mandatory documents are marked missing. Promotes property to `'approved'` status.
+    * `GET/POST /api/properties/:id/client-share`: Securely manages client/viewer access sharing.
+  * Connected `IntakeChecklist.tsx` and `AdvocateSignOffModal.tsx` in `App.tsx` / `PropertyPage.tsx` with authenticated API calls (`authFetch`).
+* **Files Modified / Created:**
+  * `apps/api/src/server.ts`
+  * `apps/api/src/session-repository.ts`
+  * `apps/web/src/components/IntakeChecklist.tsx`
+  * `apps/web/src/components/AdvocateSignOffModal.tsx`
+  * `apps/web/src/App.tsx`
+
+---
+
+### Task 11: FRD §12.2 Neutral Severity Taxonomy & §13.1 Multi-Template Report Generation
+* **Status:** Completed
+* **Work Completed:**
+  * Enhanced `GlobalRiskView.tsx` to align with FRD §12.2 neutral operational severity labels (*Critical Review Required*, *High Review Required*, *Moderate Review*, *Informational / Cleared*) and 8 FRD §12.1 risk categories (*TITLE*, *IDENTITY*, *EXTENT*, *ENCUMBRANCE*, *GEO*, *PLANNING*, *DOCUMENT*, *RESEARCH*).
+  * Enhanced `ReportViewer.tsx` to support the 5 FRD §13.1 report types (*Detailed Due Diligence*, *Preliminary Screening*, *Client Decision Pack*, *Evidence Appendix*, *Change Alert*).
+* **Files Modified / Created:**
+  * `apps/web/src/components/GlobalRiskView.tsx`
+  * `apps/web/src/components/ReportViewer.tsx`
+
+---
+
 ## 3. Current Project State & Working Services
 
-* **API Server:** Port `4000` (`http://localhost:4000`)
-* **Web Frontend:** Port `5173` or served via local stack (`http://localhost:4000` / `http://localhost:5173`)
-* **Database:** MariaDB on `127.0.0.1:3308` (`ojix_property_mysql`)
-* **Build Status:** TypeScript build (`tsc -b apps/api apps/web`) exits with 0 errors. Vite production build completes cleanly.
+* **API Server:** Port `4002` (`http://localhost:4002`)
+* **Web Frontend:** Port `5173` or served via local stack (`http://localhost:4002` / `http://localhost:5173`)
+* **Database:** MariaDB on `127.0.0.1:3308` (`ojix_property_mysql`) + Session-Scoped Demo Engine
+* **Build Status:** TypeScript check and monorepo production build (`npm run build`) complete with 0 errors across API and Web packages (`dist/assets/index-*.js`, `dist/assets/index-*.css`).
+* **Automated Test Suite:** 72/72 test cases passing across `cross-role-workflow.test.ts` (60/60) and `matters-lifecycle.test.ts` (12/12).
 
 ---
 
 ## 4. Pending Tasks & Roadmap
 
-### Priority 1: Matter Workspace & Multi-Property Lifecycle (FRD §5 / §7)
-* **Status:** Pending / Next Logical Task
-* **Scope:**
-  * Connect top-level Matters (`matters` table) to individual properties (`properties` table) per FRD §5.
-  * Currently properties are scoped directly to tenant without explicit matter folder grouping.
-* **Dependencies:** Database migration for `matters` schema and navigation tabs in `App.tsx`.
-
-### Priority 2: Real-time RTC (Bhoomi) Government Connector Hardening (FRD §8.3 / §14)
-* **Status:** Pending
+### Priority 1: Real-time RTC (Bhoomi) Government Connector Hardening (FRD §8.3 / §14)
+* **Status:** Pending / Next Phase
 * **Scope:**
   * Hardening automated Bhoomi/Kaveri scraper and API connector when government service is degraded or returns CAPTCHA.
   * Connect Source Health monitor dashboard (`/admin/sources`) to reflect live connector latency.
-* **Dependencies:** Authorization and mock fixture mode for CI.
-
-### Priority 3: Cross-Role Workflow Handover Verification (FDD §3 / XROLE-01)
-* **Status:** In Progress
-* **Scope:**
-  * End-to-end integration test verifying complete handoff:
-    1. Admin invites / assigns matter.
-    2. Operations uploads intake documents.
-    3. Analyst reviews OCR extractions and tags evidence anchors.
-    4. Lawyer verifies title chain and disputes/approves events.
-    5. Consultant prepares client issue list.
-    6. Owner signs off report release.
-* **Dependencies:** Synthetic test fixture in `apps/api/test/cross-role-workflow.test.ts`.
 
 ---
 
