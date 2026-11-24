@@ -32,6 +32,7 @@ import {
   Gauge,
   Layers3,
   LayoutDashboard,
+  Landmark,
   MapPin,
   Menu,
   MoreHorizontal,
@@ -79,6 +80,7 @@ import { ConsultantWorkspace, SharedConsultantReport } from "./components/Consul
 import { OwnerAnalytics, OwnerPortfolioMap } from "./components/OwnerDashboardVisuals";
 import OwnerInactivityGuard from "./components/OwnerInactivityGuard";
 import { MattersView } from "./components/MattersView";
+import { KaveriDashboardView } from "./components/KaveriDashboardView";
 import { IntakeChecklist } from "./components/IntakeChecklist";
 import { AdvocateSignOffModal } from "./components/AdvocateSignOffModal";
 import { authFetch } from "./authFetch";
@@ -278,6 +280,7 @@ const initials = (name: string) =>
     .toUpperCase();
 type AppPage =
   | "overview"
+  | "kaveri"
   | "matters"
   | "properties"
   | "property"
@@ -298,6 +301,7 @@ type AppPage =
   | AdminSection;
 const PAGE_PATHS: Record<Exclude<AppPage, "property">, string> = {
   overview: "/dashboard",
+  kaveri: "/kaveri",
   matters: "/matters",
   properties: "/properties",
   "all-documents": "/documents",
@@ -1728,6 +1732,13 @@ export default function App() {
             <BriefcaseBusiness size={18} />
             <span>Client Matters</span>
           </button>
+          <button
+            className={`nav-item ${page === "kaveri" ? "active" : ""}`}
+            onClick={() => navigate("kaveri")}
+          >
+            <Landmark size={18} />
+            <span>Kaveri 2.0 Services</span>
+          </button>
           {!["admin", "support"].includes(currentUser.role) && (
             <button
               className={`nav-item ${page === "properties" || page === "property" ? "active" : ""}`}
@@ -2223,6 +2234,14 @@ export default function App() {
             ))}
           {page === "matters" && (
             <MattersView
+              apiUrl={API}
+              currentUser={currentUser}
+              onOpenProperty={openPropertyById}
+              onNavigate={navigate}
+            />
+          )}
+          {page === "kaveri" && (
+            <KaveriDashboardView
               apiUrl={API}
               currentUser={currentUser}
               onOpenProperty={openPropertyById}
