@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { ShieldCheck, ShieldAlert, UserCheck, Key, Lock, ArrowRight, Building2, CheckCircle2, AlertCircle, Eye, EyeOff, MapPinned, FileSearch, Landmark, X, RotateCcw, Crown, Settings2, Scale, SearchCheck, Files, BriefcaseBusiness, Headphones, Database, Mail, Smartphone, Zap } from 'lucide-react';
 import { PropertyIntelligenceHero } from './PropertyIntelligenceHero';
-import { KaveriLandingPortal } from './KaveriLandingPortal';
-import { PropertyIntelligenceLanding } from './PropertyIntelligenceLanding';
+import { PropertyWorkspaceLanding } from './PropertyWorkspaceLanding';
 import type { UserAccount, UserRole } from '../types';
 
 interface LoginPageProps {
@@ -588,7 +587,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const SelectedLoginRoleIcon = loginRoleIcons[selectedRole as keyof typeof loginRoleIcons] || UserCheck;
 
   if (mode === 'landing') return <>
-    <KaveriLandingPortal onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')} onExploreDemo={()=>{ void startDemoSession('owner'); }}/>
+    <PropertyWorkspaceLanding onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')} onExploreDemo={()=>{ void startDemoSession('owner'); }}/>
     {loginCardOpen&&<div className={`landing-login-backdrop${loginModalClosing?' is-closing':''}`} onMouseDown={event=>{if(event.target===event.currentTarget)closeLandingLogin();}}>
       <section className="landing-login-modal" role="dialog" aria-modal="true" aria-labelledby="landing-login-title">
         <header className="landing-login-header"><span>Secure OJIX workspace access</span><button ref={loginModalCloseRef} type="button" aria-label="Close login" onClick={closeLandingLogin}><X size={20}/></button></header>
