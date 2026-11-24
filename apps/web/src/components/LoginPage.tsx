@@ -314,6 +314,21 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
       .catch(() => setDemoAccessMode('disabled'));
   }, [apiUrl]);
 
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const path = window.location.pathname.replace(/\/$/, '');
+    const isGuestOrDemo = searchParams.get('guest') === 'true' ||
+      searchParams.get('demo') === 'true' ||
+      path === '/guest' ||
+      path === '/demo' ||
+      window.location.hash === '#guest' ||
+      window.location.hash === '#demo';
+
+    if (isGuestOrDemo) {
+      void startDemoSession('owner');
+    }
+  }, []);
+
   const selectAccount = (acc: UserAccount) => {
     setSelectedUid(acc.uid);
     setSelectedRole(acc.isSuperAdmin ? 'super-admin' : acc.role);
@@ -572,7 +587,7 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
   const SelectedLoginRoleIcon = loginRoleIcons[selectedRole as keyof typeof loginRoleIcons] || UserCheck;
 
   if (mode === 'landing') return <>
-    <PropertyIntelligenceLanding onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')} onExploreDemo={()=>{window.location.assign('/demo');}}/>
+    <PropertyIntelligenceLanding onLogin={()=>navigateAuth('login')} onRegister={()=>navigateAuth('register')} onExploreDemo={()=>{ void startDemoSession('owner'); }}/>
     {loginCardOpen&&<div className={`landing-login-backdrop${loginModalClosing?' is-closing':''}`} onMouseDown={event=>{if(event.target===event.currentTarget)closeLandingLogin();}}>
       <section className="landing-login-modal" role="dialog" aria-modal="true" aria-labelledby="landing-login-title">
         <header className="landing-login-header"><span>Secure OJIX workspace access</span><button ref={loginModalCloseRef} type="button" aria-label="Close login" onClick={closeLandingLogin}><X size={20}/></button></header>
@@ -587,6 +602,54 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
           </div>
           <div className="landing-login-form-panel">
             <div className="landing-login-tabs" role="tablist" aria-label="Account access"><button className="active" type="button" role="tab" aria-selected="true">Login</button><button type="button" role="tab" aria-selected="false" onClick={()=>navigateAuth('register')}>Register</button></div>
+
+            {!recoveryStep && (
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(16, 185, 129, 0.08))',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                borderRadius: '8px',
+                padding: '12px 14px',
+                marginBottom: '14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#2563eb', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Zap size={14} style={{ color: '#2563eb' }} /> Instant Guest / Demo Mode
+                  </span>
+                  <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '12px', background: 'rgba(16, 185, 129, 0.15)', color: '#059669', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
+                    No login required
+                  </span>
+                </div>
+                <p style={{ margin: 0, fontSize: '11.5px', color: '#475569', lineHeight: 1.4 }}>
+                  Visiting from outside? Explore Karnataka property due diligence with pre-loaded dummy titles, RTCs, OCR extractions, and statutory checklists.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void startDemoSession('owner')}
+                  disabled={loading}
+                  style={{
+                    background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '8px 12px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    boxShadow: '0 2px 8px rgba(37, 99, 235, 0.25)'
+                  }}
+                >
+                  {loading ? <><span className="executive-spinner" /> Launching workspace…</> : <><Zap size={14} /> Enter Instant Guest Workspace</>}
+                </button>
+              </div>
+            )}
+
             <span className="executive-secure-pill"><ShieldCheck size={13}/> {recoveryStep?'Account recovery':'Secure access'}</span>
             <h1 id="landing-login-title">{recoveryStep==='request'?'Reset your password':recoveryStep==='reset'?'Enter recovery code':recoveryStep==='success'?'Password updated':'Sign in to OJIX'}</h1>
             <p className="landing-login-intro">{recoveryStep==='request'?'Select your assigned role and enter the account email. We will send a one-time recovery code.':recoveryStep==='reset'?`Enter the six-digit code sent for ${email} and choose a new password.`:recoveryStep==='success'?'Your password was changed and existing sessions were securely revoked.':demoAccessMode!=='disabled'?'Explore the synthetic workspace in read-only demo mode, or sign in with your assigned role.':'Choose your assigned role, then continue with email verification.'}</p>
@@ -1016,6 +1079,41 @@ export function LoginPage({ apiUrl, onLoginSuccess, expectedRole }: LoginPagePro
               <ArrowRight size={16} />
             </button>
           </form>
+
+          <div style={{
+            marginTop: '20px',
+            padding: '12px 14px',
+            borderRadius: '8px',
+            border: '1px dashed #cbd5e1',
+            background: '#f8fafc',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px'
+          }}>
+            <div style={{ fontSize: '12px', color: '#475569' }}>
+              <strong style={{ color: '#0f172a', display: 'block', marginBottom: '2px' }}>Visiting as a Guest or Evaluator?</strong>
+              Explore pre-loaded dummy Karnataka property records instantly.
+            </div>
+            <button
+              type="button"
+              onClick={() => void startDemoSession(currentAccount?.role || 'owner')}
+              disabled={loading}
+              style={{
+                background: '#0f172a',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '8px 12px',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              Guest Workspace &rarr;
+            </button>
+          </div>
         </div>
       </div>
     </div>

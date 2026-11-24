@@ -79,8 +79,25 @@ export function PropertyIntelligenceLanding({ onLogin, onRegister, onExploreDemo
           >
             <Globe size={13}/> Showcase Page
           </a>
-          <button type="button" className="story-demo-pill" onClick={handleDemo}>
-            <Sparkles size={14}/> Live Demo
+          <button
+            type="button"
+            className="story-demo-pill"
+            style={{
+              background: 'linear-gradient(135deg, #10b981, #059669)',
+              color: '#fff',
+              border: 'none',
+              boxShadow: '0 2px 10px rgba(16, 185, 129, 0.4)',
+              fontWeight: 800,
+              padding: '8px 16px',
+              borderRadius: '24px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+            onClick={handleDemo}
+          >
+            <Sparkles size={16}/> Instant Guest Demo
           </button>
           <button className="story-login-link" onClick={onLogin}>Client Login</button>
           <button className="story-secondary" onClick={onRegister}>Register</button>
@@ -96,7 +113,19 @@ export function PropertyIntelligenceLanding({ onLogin, onRegister, onExploreDemo
         <article className="sales-panel sales-solution">
           <span className="sales-overline">LESS FRICTION. MORE CLARITY. <ArrowUpRight size={13}/></span>
           <div className="sales-solution-core"><h2>Bring<br/>it all<br/>together.</h2><div className="sales-swoosh" aria-hidden="true"><svg viewBox="0 0 360 82"><path d="M4 64H133C190 64 200 25 252 25h69"/><path d="m304 8 19 17-19 17"/></svg></div><p>Discover a more connected way to conduct property due diligence in Karnataka.</p>
-          <button className="sales-panel-cta" onClick={handleDemo}>Book a guided product demo <ArrowUpRight size={16}/></button>
+          <button
+            className="sales-panel-cta"
+            onClick={handleDemo}
+            style={{
+              background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+              color: '#fff',
+              boxShadow: '0 4px 16px rgba(37, 99, 235, 0.4)',
+              cursor: 'pointer',
+              fontWeight: 700,
+            }}
+          >
+            ⚡ Launch Live Guest Workspace (Dummy Data) <ArrowUpRight size={16}/>
+          </button>
           <div className="sales-contact"><span className="sales-qr-mark" aria-label="OJIX demo mark"><i>OJIX<br/>DEMO</i></span><span><b>WWW.OJIX.COM</b><small>info@ojix.in</small></span></div><small className="sales-company">OJIX Property Intelligence · OJIX Engineering &amp; Technology LLP</small></div>
         </article>
         <article className="sales-panel sales-product">
